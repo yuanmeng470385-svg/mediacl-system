@@ -1,0 +1,81 @@
+# ============================================
+# MedAgent 合规规则库
+# 规则类型: keyword(关键词) / regex(正则) / semantic(语义LLM)
+# 严重程度: high / medium / low
+# 拦截动作: reject(拒绝) / warn(警告) / log(仅记录)
+# ============================================
+
+rules:
+  - id: "R001"
+    name: "禁止承诺疗效"
+    type: "keyword"
+    patterns:
+      - "保证治好"
+      - "100%有效"
+      - "100% 有效"
+      - "吃了就好"
+      - "一定能治好"
+      - "包治百病"
+      - "绝对有效"
+      - "肯定能好"
+      - "百分之百"
+      - "药到病除"
+    severity: "high"
+    action: "reject"
+    description: "禁止对产品疗效做出绝对化承诺或保证"
+    enabled: true
+
+  - id: "R002"
+    name: "禁止回扣暗示"
+    type: "regex"
+    patterns:
+      - "返[点红]"
+      - "提成费"
+      - "好处费"
+      - "私下给"
+      - "给回[扣]"
+      - "酬[劳谢]"
+    severity: "high"
+    action: "reject"
+    description: "禁止暗示或讨论回扣、返点等利益输送行为"
+    enabled: true
+
+  - id: "R003"
+    name: "禁止统方"
+    type: "semantic"
+    description: "禁止询问或讨论医生处方量、处方数据"
+    severity: "high"
+    action: "reject"
+    enabled: true
+
+  - id: "R004"
+    name: "禁止超适应症推广"
+    type: "semantic"
+    description: "禁止推广超出国家药监局批准药品说明书范围的适应症"
+    severity: "high"
+    action: "reject"
+    enabled: true
+
+  - id: "R005"
+    name: "禁止贬低竞品"
+    type: "semantic"
+    description: "禁止恶意贬低或诋毁竞品产品"
+    severity: "medium"
+    action: "warn"
+    enabled: true
+
+  - id: "R006"
+    name: "禁止泄露患者信息"
+    type: "semantic"
+    description: "禁止在对话中提及可识别的患者个人信息"
+    severity: "high"
+    action: "reject"
+    enabled: true
+
+  - id: "R007"
+    name: "禁止讨论未公开数据"
+    type: "semantic"
+    description: "禁止讨论公司内部未公开的临床试验数据或商业信息"
+    severity: "high"
+    action: "warn"
+    enabled: true

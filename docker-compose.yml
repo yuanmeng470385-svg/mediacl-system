@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # ==================== 基础设施 ====================
+  postgres:
+    image: postgres:15
+    container_name: medagent-postgres
+    environment:
+      POSTGRES_DB: medagent
+      POSTGRES_USER: medagent
+      POSTGRES_PASSWORD: medagent123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: medagent-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== 网关 ====================
+  gateway:
+    build: ./services/gateway
+    container_name: medagent-gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ==================== 微服务 ====================
+  specialist-service:
+    build: ./services/specialist-service
+    container_name: medagent-specialist
+    ports:
+      - "8001:8001"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  visit-service:
+    build: ./services/visit-service
+    container_name: medagent-visit
+    ports:
+      - "8002:8002"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  knowledge-service:
+    build: ./services/knowledge-service
+    container_name: medagent-knowledge
+    ports:
+      - "8003:8003"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  compliance-service:
+    build: ./services/compliance-service
+    container_name: medagent-compliance
+    ports:
+      - "8004:8004"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  audit-service:
+    build: ./services/audit-service
+    container_name: medagent-audit
+    ports:
+      - "8005:8005"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  hcp-service:
+    build: ./services/hcp-service
+    container_name: medagent-hcp
+    ports:
+      - "8006:8006"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
