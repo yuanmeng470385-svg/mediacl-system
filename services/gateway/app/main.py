@@ -8,6 +8,9 @@
     /api/v1/audit/*        → audit-service (8005)
     /api/v1/hcps/*         → hcp-service (8006)
     /health                → 健康检查聚合
+
+中间件顺序（先注册的先执行）:
+    CORS → Auth → RateLimiter → Proxy
 """
 import sys
 import os
@@ -19,6 +22,7 @@ from fastapi.responses import JSONResponse
 import httpx
 import logging
 import time
+import os as _os
 
 from app.config import settings
 from app.core.auth_middleware import AuthMiddleware
@@ -36,6 +40,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# ==================== 中间件（按顺序注册） ====================
+
+# 1. CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,7 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 路由映射表
+# 2. 限流（先于认证，防止暴力攻击）
+rate_limit = int(_os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
+
+# 3. JWT 认证（白名单路径自动跳过）
+app.add_middleware(AuthMiddleware)
+
+# ==================== 路由映射 ====================
+
 ROUTE_MAP = {
     "/api/v1/specialists": settings.SPECIALIST_SERVICE_URL,
     "/api/v1/conversations": settings.SPECIALIST_SERVICE_URL,
@@ -53,7 +68,7 @@ ROUTE_MAP = {
     "/api/v1/compliance": settings.COMPLIANCE_SERVICE_URL,
     "/api/v1/audit": settings.AUDIT_SERVICE_URL,
     "/api/v1/hcps": settings.HCP_SERVICE_URL,
-    "/api/v1/auth": settings.SPECIALIST_SERVICE_URL,  # 认证临时走 specialist
+    "/api/v1/auth": settings.SPECIALIST_SERVICE_URL,
 }
 
 
@@ -70,18 +85,22 @@ def get_backend_url(path: str) -> str:
 @app.get("/health")
 async def health():
     """聚合所有服务的健康检查"""
-    services = {
-        "specialist": settings.SPECIALIST_SERVICE_URL,
-        "visit": settings.VISIT_SERVICE_URL,
-        "knowledge": settings.KNOWLEDGE_SERVICE_URL,
-        "compliance": settings.COMPLIANCE_SERVICE_URL,
-        "audit": settings.AUDIT_SERVICE_URL,
-        "hcp": settings.HCP_SERVICE_URL,
+    return {
+        "status": "ok",
+        "service": settings.SERVICE_NAME,
+        "version": "1.0.0",
+        "backends": {
+            "specialist": settings.SPECIALIST_SERVICE_URL,
+            "visit": settings.VISIT_SERVICE_URL,
+            "knowledge": settings.KNOWLEDGE_SERVICE_URL,
+            "compliance": settings.COMPLIANCE_SERVICE_URL,
+            "audit": settings.AUDIT_SERVICE_URL,
+            "hcp": settings.HCP_SERVICE_URL,
+        }
     }
-    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0", "backends": services}
 
 
-# ==================== 通配代理路由（兜底，所有 API 请求转发到后端微服务） ====================
+# ==================== 代理路由（兜底） ====================
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, path: str):
@@ -93,12 +112,10 @@ async def proxy(request: Request, path: str):
 
     target_url = f"{backend_url}/{path}"
 
-    # 转发请求
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             body = await request.body()
             headers = dict(request.headers)
-            # 移除 hop-by-hop headers
             headers.pop("host", None)
             headers.pop("content-length", None)
 
@@ -121,31 +138,10 @@ async def proxy(request: Request, path: str):
             )
         except httpx.ConnectError:
             logger.error(f"无法连接到后端服务: {target_url}")
-            raise HTTPException(
-                status_code=503,
-                detail={"code": 5001, "message": "后端服务不可用"}
-            )
+            raise HTTPException(status_code=503, detail={"code": 5001, "message": "后端服务不可用"})
         except httpx.TimeoutException:
             logger.error(f"后端服务超时: {target_url}")
-            raise HTTPException(
-                status_code=504,
-                detail={"code": 5002, "message": "后端服务超时"}
-            )
-
-
-@app.get("/health")
-async def health():
-    """聚合所有服务的健康检查"""
-    services = {
-        "gateway": settings.SERVICE_URL if hasattr(settings, 'SERVICE_URL') else "ok",
-        "specialist": settings.SPECIALIST_SERVICE_URL,
-        "visit": settings.VISIT_SERVICE_URL,
-        "knowledge": settings.KNOWLEDGE_SERVICE_URL,
-        "compliance": settings.COMPLIANCE_SERVICE_URL,
-        "audit": settings.AUDIT_SERVICE_URL,
-        "hcp": settings.HCP_SERVICE_URL,
-    }
-    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0", "backends": services}
+            raise HTTPException(status_code=504, detail={"code": 5002, "message": "后端服务超时"})
 
 
 if __name__ == "__main__":

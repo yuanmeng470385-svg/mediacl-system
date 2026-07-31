@@ -1,730 +1,703 @@
 # MedAgent 数字员工系统 · 5人任务分配清单
 
-> 版本：v1.0 · 2026-07-31
-> 基于《AI数字员工系统-完整方案 v4.0》
+> 版本：v2.0 · 2026-07-31
+> 状态：D（共享层+合规+审计+网关）✅ 已完成，A/B/C/E 待开发
 
 ---
 
 ## 人员总览
 
-| 代号 | 负责模块 | 端口 | 技术栈 |
-|------|---------|------|--------|
-| A | 数字专员服务 (specialist-service) | 8001 | Python FastAPI + 百炼 + 通义千问 |
-| B | 知识库服务 (knowledge-service) | 8003 | Python FastAPI + DashVector + 文档解析 |
-| C | 陪访助手 + 医生管理 (visit + hcp) | 8002/8006 | Python FastAPI + 通义听悟 |
-| D | 合规 + 审计 + 共享层 + 网关 | 8004/8005/8000 | Python FastAPI + 规则引擎 |
-| E | 移动端 + DevOps | — | React Native + Docker + CI/CD |
+| 代号 | 负责模块 | 端口 | 技术栈 | 状态 |
+|------|---------|------|--------|------|
+| D（组长） | 合规 + 审计 + 共享层 + 网关 | 8004/8005/8000 | Python FastAPI | ✅ 已完成 |
+| A | 数字专员服务 (specialist-service) | 8001 | FastAPI + 百炼 + 通义千问 | 🔴 待开发 |
+| B | 知识库服务 (knowledge-service) | 8003 | FastAPI + DashVector + 文档解析 | 🔴 待开发 |
+| C | 陪访助手 + 医生管理 (visit + hcp) | 8002/8006 | FastAPI + 通义听悟 | 🔴 待开发 |
+| E | 移动端 + DevOps | — | React Native + Docker + CI/CD | 🔴 待开发 |
 
 ---
 
-> **公共起步任务（全员第 1 天）**
->
-> - [ ] 1. 克隆仓库，搭建本地环境（Python 3.11+ / Node.js 18+ / Docker）
-> - [ ] 2. 配置 `.env` 文件（阿里云 AK、百炼 Key、数据库连接等）
-> - [ ] 3. `docker-compose up -d` 跑通 PostgreSQL + Redis
-> - [ ] 4. 跑通健康检查 `curl http://localhost:8001/health`
-> - [ ] 5. 跑通通义千问 API 测试脚本
+# D 已完成的工作（A/B/C/E 必读）
+
+以下模块已经实现并通过测试，可以直接使用。
+
+## 共享层 (`shared/`)
+
+**所有人 import 路径：**
+
+```python
+# 统一响应格式（重要！所有 API 都用这个返回）
+from shared.common.response import success, error, AppError, ParamError, AuthError, BusinessError
+
+# 用法1：成功响应
+return success(data={"name": "张三"})
+# → {"code": 0, "message": "success", "data": {"name": "张三"}}
+
+# 用法2：分页响应
+return success(paginate(items, total=100, page=1, page_size=20))
+
+# 用法3：抛出业务异常（会被全局异常处理器自动转换为错误响应）
+raise ParamError("question 不能为空")
+# → {"code": 1000, "message": "question 不能为空", "data": null}
+
+# JWT 认证（在路由上加 Depends 即可）
+from shared.common.auth import get_current_user, create_token
+
+@router.get("/api/v1/xxx")
+async def my_api(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]       # int
+    username = current_user["username"] # str
+    role = current_user["role"]         # str
+
+# 数据库连接
+from shared.common.db_session import get_db
+from sqlalchemy.orm import Session
+
+@router.get("/api/v1/xxx")
+async def my_api(db: Session = Depends(get_db)):
+    ...
+
+# 分页
+from shared.common.pagination import paginate, PaginationParams
+
+# 全局异常处理
+from shared.common.exception_handler import register_exception_handlers
+# 在 main.py 中：register_exception_handlers(app)
+```
+
+**重要提醒：** 所有 API 必须走网关（端口 8000），不要直连其他服务。服务间调用用 `http://gateway:8000/api/v1/xxx`。
+
+## 合规服务 (`compliance-service:8004`)
+
+**已实现的 API：**
+
+| 接口 | 用途 | 谁会调 |
+|------|------|--------|
+| `POST /api/v1/compliance/check` | 检查内容合规性 | A、C |
+| `GET/POST/PUT/DELETE /api/v1/compliance/rules` | 规则 CRUD | — |
+| `POST /api/v1/compliance/rules/reload` | 规则热更新 | — |
+| `POST /api/v1/compliance/rules/test` | 规则测试 | — |
+| `GET /api/v1/compliance/blocks` | 拦截记录 | — |
+| `GET /api/v1/compliance/stats` | 合规统计 | — |
+
+**调用示例（A 和 C 需要）：**
+
+```python
+import httpx
+
+# 合规检查
+async def check_compliance(content: str, user_id: int, check_type: str):
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "http://gateway:8000/api/v1/compliance/check",
+            json={
+                "content": content,
+                "context": {"user_id": user_id, "type": check_type}
+            }
+        )
+        return resp.json()["data"]
+# 返回: {"blocked": false, "violations": [], "risk_level": "none"}
+```
+
+**7 条合规规则已内置：**
+- R001 禁止承诺疗效（关键词）→ reject
+- R002 禁止回扣暗示（正则）→ reject
+- R003 禁止统方（语义LLM）→ reject
+- R004 禁止超适应症推广（语义LLM）→ reject
+- R005 禁止贬低竞品（语义LLM）→ warn
+- R006 禁止泄露患者信息（语义LLM）→ reject
+- R007 禁止讨论未公开数据（语义LLM）→ warn
+
+## 审计服务 (`audit-service:8005`)
+
+**已实现的 API：**
+
+| 接口 | 用途 | 谁会调 |
+|------|------|--------|
+| `POST /api/v1/audit/log` | 写入审计日志 | A、C |
+| `GET /api/v1/audit/logs` | 高级搜索 | — |
+| `GET /api/v1/audit/logs/{id}` | 日志详情 | — |
+| `POST /api/v1/audit/export` | 导出 Excel 报告 | — |
+| `GET /api/v1/audit/stats` | 审计统计 | — |
+
+**调用示例（A 和 C 需要）：**
+
+```python
+import httpx
+
+async def write_audit(**kwargs):
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "http://gateway:8000/api/v1/audit/log",
+            json={
+                "service_name": "specialist-service",  # 填自己的服务名
+                "user_id": kwargs.get("user_id"),
+                "action": kwargs.get("action"),
+                "resource_type": kwargs.get("resource_type"),
+                "resource_id": kwargs.get("resource_id"),
+                "ai_involved": kwargs.get("ai_involved", False),
+                "ai_model": kwargs.get("ai_model"),
+                "ai_prompt": kwargs.get("ai_prompt"),    # 自动存 hash
+                "ai_response": kwargs.get("ai_response"), # 自动存 hash
+                "compliance_result": kwargs.get("compliance_result"),
+                "request_id": kwargs.get("request_id"),
+            }
+        )
+```
+
+## 网关 (`gateway:8000`)
+
+**路由表（所有请求走网关）：**
+
+| 路径前缀 | 转发到 |
+|---------|--------|
+| `/api/v1/specialists`, `/api/v1/conversations` | specialist-service:8001 |
+| `/api/v1/visits` | visit-service:8002 |
+| `/api/v1/knowledge` | knowledge-service:8003 |
+| `/api/v1/compliance` | compliance-service:8004 |
+| `/api/v1/audit` | audit-service:8005 |
+| `/api/v1/hcps` | hcp-service:8006 |
+| `/api/v1/auth` | specialist-service:8001 |
+
+**中间件：** JWT 认证（白名单：`/health`, `/api/v1/auth/*`, `/docs`）+ 限流（每用户每分钟 60 次）
+
+## 数据库
+
+**10 张表已创建（Docker PostgreSQL 中）：**
+`users`, `products`, `digital_specialists`, `hcps`, `visit_records`, `conversations`, `knowledge_documents`, `audit_logs`, `compliance_rules`, `compliance_blocks`
+
+**种子数据：** 管理员账号 `admin`、示例产品 `ONC-001`、4 条初始合规规则
 
 ---
 
-# A · 数字专员服务（specialist-service）
+# 环境准备（全员公共）
+
+> **状态：✅ 已完成，每人 clone 后即可开始**
+
+1. `git clone https://codeup.aliyun.com/6a6c3e94e69c408bf87d8b1a/mediaclsystem.git`
+2. `cp .env.example .env`（填入阿里云 AK、百炼 Key 等，找组长要）
+3. 安装 Docker Desktop 并启动
+4. `docker compose up -d postgres redis`（数据库 10 张表自动初始化）
+5. 自己的服务目录下 `pip install -r requirements.txt`
+6. `python -m uvicorn app.main:app --host 127.0.0.1 --port 8xxx` 启动验证
+7. 浏览器访问 `http://127.0.0.1:8xxx/health`，看到 `{"status":"ok"}` 即成功
+
+---
+
+# A · 数字专员服务（specialist-service:8001）
 
 > 核心引擎。所有对 AI 的调用都从这里走。
+> **前置依赖：B的知识检索接口、D的合规检查和审计日志接口**
 
-## 1. 项目骨架（第 1 天）
+## AI 指导摘要（喂给 AI 用）
 
-- [ ] 1.1 创建 `services/specialist-service/` 目录结构（按文档 8.1.1）
-- [ ] 1.2 写 `app/main.py` FastAPI 入口（健康检查、CORS）
-- [ ] 1.3 写 `app/config.py`（读环境变量）
-- [ ] 1.4 写 `requirements.txt`（fastapi, uvicorn, openai, requests, pydantic 等）
-- [ ] 1.5 写 `Dockerfile`
-- [ ] 1.6 确保 `docker-compose up specialist-service` 能启动
+```
+你是 A，负责 specialist-service (端口 8001)。
+项目是药企数字员工系统 MedAgent。
 
-## 2. 外部服务客户端（第 2-3 天）
+你的服务是核心引擎，所有 AI 问答从这里走。
+答案生成流水线：知识检索 → 合规预检 → LLM生成答案 → 合规审核答案 → 审计日志。
 
-- [ ] 2.1 写 `app/services/bailian_client.py`（百炼 App 对话接口，含超时和异常处理）
-- [ ] 2.2 写 `app/services/qwen_client.py`（通义千问 OpenAI 兼容接口，含流式）
-- [ ] 2.3 写 `app/services/knowledge_client.py`（调 B 的知识检索接口）
-- [ ] 2.4 写 `app/services/compliance_client.py`（调 D 的合规检查接口）
-- [ ] 2.5 写 `app/services/audit_client.py`（调 D 的审计日志接口）
-- [ ] 2.6 每个 client 写一个测试脚本验证连通性
+已完工并有代码可参考：
+- shared/common/  统一响应/认证/分页/数据库连接 用 from shared.common.xxx import
+- shared/models/  ORM 模型
+- 路由骨架在 services/specialist-service/app/main.py（已写好）
+- 配置文件在 services/specialist-service/app/config.py（已写好）
 
-## 3. 核心业务逻辑（第 4-6 天）
+你要调的 3 个外部服务（都已部署）：
+1. 知识检索: POST http://gateway:8000/api/v1/knowledge/search
+   入参 {query, product_id?, top_k?}
+   出参 {results: [{title, content, evidence_level, score}]}
 
-- [ ] 3.1 写 `app/core/answer_generator.py`（答案生成流水线）：
-  - 步骤 1：调 knowledge_client 检索知识
-  - 步骤 2：调 compliance_client 做问题合规预检
-  - 步骤 3：调百炼生成答案，失败则降级到通义千问
-  - 步骤 4：调 compliance_client 审核 AI 答案
-  - 步骤 5：调 audit_client 记录审计日志
-  - 步骤 6：提取证据等级
-- [ ] 3.2 写降级方案 `_fallback_generate()`：百炼不可用时用通义千问 + 检索结果直接拼 prompt
-- [ ] 3.3 写证据等级提取 `_extract_evidence_level()`
-- [ ] 3.4 单元测试：正常流程、合规拦截、百炼超时降级
+2. 合规检查: POST http://gateway:8000/api/v1/compliance/check
+   入参 {content, context: {user_id, type}}
+   出参 {blocked, violations: [{rule_code, rule_name, severity, action, matched_text}], risk_level}
 
-## 4. 数据层（第 5-6 天）
+3. 审计日志: POST http://gateway:8000/api/v1/audit/log
+   入参 {service_name, user_id, action, resource_type, resource_id, ...}
 
-- [ ] 4.1 写 `app/db/session.py`（数据库连接、依赖注入）
-- [ ] 4.2 写 `app/models/specialist.py`（专员 ORM 模型）
-- [ ] 4.3 写 `app/models/conversation.py`（对话记录 ORM 模型）
-- [ ] 4.4 写 `app/db/repositories/specialist_repo.py`（专员 CRUD）
-- [ ] 4.5 写 `app/db/repositories/conversation_repo.py`（对话记录增删查）
+所有 API 返回统一格式: {code: 0, message: "success", data: {...}}
+用 shared.common.response 的 success() 和 error() 函数返回。
+JWT 认证: from shared.common.auth import get_current_user
+```
 
-## 5. API 路由（第 7-8 天）
+## 任务清单
 
-- [ ] 5.1 `GET /api/v1/specialists` — 专员列表（按状态筛选）
-- [ ] 5.2 `GET /api/v1/specialists/{id}` — 专员详情
-- [ ] 5.3 `POST /api/v1/specialists/{id}/chat` — 与专员对话（核心接口）
-  - 入参：question, session_id
-  - 出参：answer, citations, evidence_level, blocked, violations, latency_ms
-- [ ] 5.4 `GET /api/v1/conversations/{session_id}` — 会话历史
-- [ ] 5.5 `GET /api/v1/specialists/{id}/stats` — 专员使用统计
-- [ ] 5.6 `POST /api/v1/specialists/{id}/feedback` — 点赞/点踩反馈
-- [ ] 5.7 `POST /api/v1/specialists/{id}/favorite` — 收藏/取消收藏问答
-- [ ] 5.8 每个接口加 JWT 认证中间件 `Depends(get_current_user)`
+### 1. 外部服务客户端（第 1-2 天）
 
-## 6. 话术模板（第 8 天）
+- [ ] 1.1 写 `app/services/bailian_client.py`（百炼 App 对话，参考完整方案 8.1.2）
+  - `chat(app_id, prompt, session_id, biz_params)` → Dict
+  - 超时 30s，含异常处理
+- [ ] 1.2 写 `app/services/qwen_client.py`（通义千问 OpenAI 兼容，参考完整方案 8.1.3）
+  - `chat(messages, model, temperature, max_tokens)` → Dict
+  - `chat_stream(messages, model)` → Generator
+  - model 默认 "qwen-max"，从环境变量 QWEN_MAX_MODEL 读取
+- [ ] 1.3 写 `app/services/knowledge_client.py`（调 B 的知识检索）
+  - `search(query, product_id, top_k)` → List[Dict]
+  - 地址：`http://gateway:8000/api/v1/knowledge/search`
+- [ ] 1.4 写 `app/services/compliance_client.py`（调 D 的合规检查）
+  - `check(content, context)` → Dict
+  - 地址：`http://gateway:8000/api/v1/compliance/check`
+- [ ] 1.5 写 `app/services/audit_client.py`（调 D 的审计日志）
+  - `log(**kwargs)` → Dict
+  - 地址：`http://gateway:8000/api/v1/audit/log`
+- [ ] 1.6 写 `app/services/__init__.py`，每个 client 用 httpx.AsyncClient
 
-- [ ] 6.1 写 `shared/prompts/oncology_specialist.yaml`（参考文档 9.3，按产品配置）
-- [ ] 6.2 写模板加载器：启动时读取 YAML，注入 system prompt
+### 2. 数据层（第 2 天）
 
-## 7. 评估与联调（第 9-10 天）
+- [ ] 2.1 写 `app/db/session.py`（直接用 `from shared.common.db_session import get_db`）
+- [ ] 2.2 写 `app/models/specialist.py` — ORM，映射 `digital_specialists` 表
+  - 字段：id, name, product_id, persona(JSONB), knowledge_scope(JSONB), compliance_level, bailian_app_id, prompt_version, status
+- [ ] 2.3 写 `app/models/conversation.py` — ORM，映射 `conversations` 表
+  - 字段：id, user_id, specialist_id, session_id, role, content, citations(JSONB), compliance_result(JSONB), tokens_used, latency_ms
+- [ ] 2.4 写 `app/db/repositories/specialist_repo.py` — CRUD
+- [ ] 2.5 写 `app/db/repositories/conversation_repo.py` — 增删查
 
-- [ ] 7.1 写 `tests/eval_specialist.py`（自动评估脚本，参考文档 9.4）
-- [ ] 7.2 准备评估用例 `tests/eval_sets/oncology_v1.json`（≥20 条问答）
-- [ ] 7.3 跑评估，目标通过率 ≥ 80%
-- [ ] 7.4 与 B 联调知识检索
-- [ ] 7.5 与 D 联调合规检查和审计日志
-- [ ] 7.6 与 E 联调移动端对话接口
+### 3. 核心业务逻辑（第 3-5 天）
 
-## 8. 文档（收尾）
+- [ ] 3.1 写 `app/core/answer_generator.py`（参考完整方案 8.1.4）：
+  ```
+  generate(question, specialist, user_id, session_id) 主流程：
+    step 1: knowledge_client.search(query, product_id, top_k=10) → 检索知识
+    step 2: compliance_client.check(question, context) → 问题合规预检
+            如果 blocked → 直接返回 "您的问题不合规"
+    step 3: bailian_client.chat(app_id, prompt, session_id, biz_params) → LLM生成答案
+            如果百炼失败 → 降级 _fallback_generate() 用通义千问
+    step 4: compliance_client.check(answer, context) → 审核AI答案
+            如果 blocked → 返回 "建议咨询医学顾问"
+    step 5: audit_client.log(...) → 记录审计日志
+    step 6: _extract_evidence_level(answer) → 提取证据等级
+    return {answer, citations, evidence_level, blocked, violations, latency_ms}
+  ```
+- [ ] 3.2 写 `_fallback_generate()` — 百炼不可用时，用通义千问 + 检索结果拼 prompt
+- [ ] 3.3 写 `_extract_evidence_level()` — 正则匹配【证据等级】
 
-- [ ] 8.1 写本服务的 README（启动方式、环境变量、API 文档）
+### 4. API 路由（第 5-6 天）
+
+- [ ] 4.1 `GET /api/v1/specialists` — 专员列表
+- [ ] 4.2 `GET /api/v1/specialists/{id}` — 专员详情
+- [ ] 4.3 `POST /api/v1/specialists/{id}/chat` — 核心接口
+  ```json
+  Request: {"question": "...", "session_id": "..."}
+  Response: {"code":0, "data":{"answer":"...", "citations":[...], "evidence_level":"B", "blocked":false, "latency_ms":1234}}
+  ```
+- [ ] 4.4 `GET /api/v1/conversations/{session_id}` — 会话历史
+- [ ] 4.5 `GET /api/v1/specialists/{id}/stats` — 使用统计
+- [ ] 4.6 `POST /api/v1/specialists/{id}/feedback` — 点赞/点踩
+- [ ] 4.7 `POST /api/v1/specialists/{id}/favorite` — 收藏
+- [ ] 4.8 每个路由加 `Depends(get_current_user)` 认证，加 `from shared.common.exception_handler import register_exception_handlers` 注册全局异常处理
+
+### 5. 话术模板（第 6 天）
+
+- [ ] 5.1 查看 `shared/prompts/oncology_specialist.yaml`（已写好模板）
+- [ ] 5.2 写模板加载器：启动时读取 YAML，注入 system prompt 到百炼/通义千问
+
+### 6. main.py 更新
+
+- [ ] 6.1 在 `app/main.py` 中挂载路由、注册异常处理器（参考 compliance-service 的 main.py 写法）
+- [ ] 6.2 `uvicorn app.main:app --port 8001` 能启动并通过 health 检查
+
+### 7. 测试（第 7 天）
+
+- [ ] 7.1 写 `tests/eval_specialist.py`（参考完整方案 9.4）
+- [ ] 7.2 准备 ≥20 条评估用例
+- [ ] 7.3 与 B 联调知识检索、与 D 联调合规+审计
 
 ---
 
-# B · 知识库服务（knowledge-service）
+# B · 知识库服务（knowledge-service:8003）
 
 > AI 能力底座。所有 AI 回答的知识来源。
+> **前置依赖：D的审计日志接口、阿里云 OSS/DashVector/通义千问 API Key**
 
-## 1. 项目骨架（第 1 天）
+## AI 指导摘要
 
-- [ ] 1.1 创建 `services/knowledge-service/` 目录结构
-- [ ] 1.2 写 `app/main.py` FastAPI 入口
-- [ ] 1.3 写 `app/config.py`
-- [ ] 1.4 写 `requirements.txt`（fastapi, pypdf, python-docx, dashscope, requests 等）
-- [ ] 1.5 写 `Dockerfile`
-- [ ] 1.6 `docker-compose up knowledge-service` 启动验证
+```
+你是 B，负责 knowledge-service (端口 8003)。
+项目是药企数字员工系统 MedAgent。
 
-## 2. OSS 客户端（第 2 天）
+你的服务是 AI 能力底座，提供文档上传→解析→向量化→检索的完整流水线。
 
-- [ ] 2.1 写 `app/services/oss_client.py`：
-  - 文件上传（支持本地路径和流式上传）
-  - 生成可访问 URL
-  - 文件下载
+已完工并有代码可参考：
+- shared/common/  统一响应/认证/分页/数据库连接
+- shared/models/  Product、User、AuditLog ORM
+- 路由骨架在 services/knowledge-service/app/main.py
 
-## 3. 文档处理流水线（第 3-5 天）
+你要调的外部服务：
+1. 审计日志: POST http://gateway:8000/api/v1/audit/log
 
-- [ ] 3.1 写 `app/services/document_processor.py`（参考文档 9.1）：
-  - `_download()` — 从 OSS 下载文件
-  - `_parse_pdf()` — 用 pypdf 解析 PDF
-  - `_parse_docx()` — 用 python-docx 解析 Word
-  - `_parse_ppt()` — 用 python-pptx 解析 PPT（附加题）
-  - `_parse_txt()` — 纯文本读取
-- [ ] 3.2 写 `_split()` — 按段落+语义切分（chunk_size=512 字），支持：
-  - 按章节标题切分
-  - 表格保留结构化
-  - 重叠窗口避免截断
-- [ ] 3.3 写 `_embed()` — 调通义千问 text-embedding-v3 向量化
-- [ ] 3.4 写入库逻辑：切分块逐条写入 DashVector + PostgreSQL 文档表
-- [ ] 3.5 写 `process_document()` 主流程串联
+阿里云服务（需要 Key）：
+- OSS: 文件存储，用 oss2 SDK
+- DashVector: 向量检索，用 dashvector SDK
+- 通义千问 Embedding: text-embedding-v3，用 dashscope SDK
 
-## 4. DashVector 客户端（第 4 天）
+核心检索接口要被 A 和 C 调用：
+POST /api/v1/knowledge/search
+入参 {query, product_id?, doc_type?, top_k?}
+出参 {results: [{title, content, evidence_level, score}]}
+```
 
-- [ ] 4.1 写 `app/services/dashvector_client.py`：
-  - 连接 DashVector 集群
-  - `create_collection()` — 创建集合
-  - `upsert()` — 插入/更新向量
-  - `query()` — 向量检索（支持 filter：product_id, doc_type, evidence_level）
-  - `delete()` — 删除向量
+## 任务清单
 
-## 5. 知识检索（第 6 天）
+### 1. OSS 客户端（第 1 天）
 
-- [ ] 5.1 写 `app/services/knowledge_retriever.py`（参考文档 9.2）：
-  - 向量化查询文本
-  - DashVector 混合检索（向量 + 关键词过滤）
-  - 重排（`_rerank()`）：向量相似度 × 0.7 + 关键词匹配 × 0.3
-- [ ] 5.2 支持按 product_id、doc_type、evidence_level 筛选
+- [ ] 1.1 写 `app/services/oss_client.py`
+  - `upload_local_file(local_path)` → 上传到 OSS，返回 URL
+  - `download_to_local(url, local_path)` → 下载文件
+  - 环境变量：OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET, OSS_ENDPOINT
 
-## 6. 数据层（第 5 天）
+### 2. 文档处理流水线（第 2-4 天）
 
-- [ ] 6.1 写 `app/models/knowledge_document.py`
-- [ ] 6.2 写 `app/db/repositories/knowledge_repo.py`（文档 CRUD + 状态流转）
+- [ ] 2.1 写 `app/services/document_processor.py`（参考完整方案 9.1）：
+  - `_parse_pdf(path)` — pypdf
+  - `_parse_docx(path)` — python-docx
+  - `_parse_ppt(path)` — python-pptx
+  - `_parse_txt(path)` — 直接读
+  - `_split(content, chunk_size=512)` — 按段落切分
+  - `_embed(text)` — 调 text-embedding-v3 向量化
+  - `process_document(file_url, doc_meta)` → doc_id — 主流程串联
 
-## 7. API 路由（第 7-8 天）
+### 3. DashVector 客户端（第 3 天）
 
-- [ ] 7.1 `POST /api/v1/knowledge/search` — 检索知识（给 A 和 C 调用的核心接口）
-  - 入参：query, product_id?, doc_type?, top_k?
-  - 出参：results[{title, content, doc_type, evidence_level, score}]
-- [ ] 7.2 `POST /api/v1/knowledge/upload` — 上传文档
-  - 接收文件 + 元信息（title, doc_type, product_id, evidence_level, source, publish_date）
-  - 上传到 OSS → 写 DB → 触发异步处理流水线
-- [ ] 7.3 `GET /api/v1/knowledge/documents` — 文档列表（分页、按类型/状态/产品筛选）
-- [ ] 7.4 `GET /api/v1/knowledge/documents/{id}` — 文档详情
-- [ ] 7.5 `POST /api/v1/knowledge/documents/{id}/review` — 文档审核（通过/驳回）
-- [ ] 7.6 `POST /api/v1/knowledge/feedback` — 检索质量反馈
-- [ ] 7.7 `GET /api/v1/knowledge/stats` — 知识库统计（文档数/chunk数/标签数）
+- [ ] 3.1 写 `app/services/dashvector_client.py`
+  - `upsert(collection, doc_id, vector, fields)` — 插入向量
+  - `query(collection, vector, topk, filter)` — 向量检索
+  - `delete(collection, doc_id)` — 删除向量
 
-## 8. 知识库构建脚本（第 9 天）
+### 4. 知识检索（第 4-5 天）
 
-- [ ] 8.1 写 `scripts/build_knowledge_base.py`（参考文档 12.2）：
+- [ ] 4.1 写 `app/services/knowledge_retriever.py`（参考完整方案 9.2）
+  - 查询文本向量化
+  - DashVector 检索 + 关键词重排（向量0.7 + 关键词0.3）
+  - 支持 filter：product_id, doc_type, evidence_level
+
+### 5. 数据层（第 3 天）
+
+- [ ] 5.1 写 `app/models/knowledge_document.py` — ORM，映射 `knowledge_documents` 表
+- [ ] 5.2 写 `app/db/repositories/knowledge_repo.py`
+
+### 6. API 路由（第 5-6 天）
+
+- [ ] 6.1 `POST /api/v1/knowledge/search` — 核心接口（给 A 和 C 用）
+  ```json
+  Request: {"query":"肺癌用药注意事项","product_id":1,"top_k":10}
+  Response: {"code":0,"data":{"results":[{"title":"...","content":"...","evidence_level":"B","score":0.95}]}}
+  ```
+- [ ] 6.2 `POST /api/v1/knowledge/upload` — 上传文档（接收文件 + 元信息，异步处理）
+- [ ] 6.3 `GET /api/v1/knowledge/documents` — 文档列表（分页、筛选）
+- [ ] 6.4 `GET /api/v1/knowledge/documents/{id}` — 文档详情
+- [ ] 6.5 `POST /api/v1/knowledge/documents/{id}/review` — 审核文档
+- [ ] 6.6 `POST /api/v1/knowledge/feedback` — 检索质量反馈
+- [ ] 6.7 `GET /api/v1/knowledge/stats` — 统计
+- [ ] 6.8 全局异常处理 + JWT 认证
+
+### 7. 知识库构建脚本（第 6 天）
+
+- [ ] 7.1 写 `scripts/build_knowledge_base.py`（参考完整方案 12.2）
   - 扫描 `knowledge-base/{product}/` 目录
-  - 自动推断文档类型（说明书→product，指南→guideline 等）
-  - 自动推断证据等级（meta分析→A，III期→B 等）
-  - 批量处理并入库
-- [ ] 8.2 准备示例知识库资料（≥5 篇不同类别文档）
+  - 自动推断文档类型和证据等级
+  - 批量处理入库
 
-## 9. 异步任务（第 8-9 天）
+### 8. main.py 更新
 
-- [ ] 9.1 文档上传后异步处理（用 FastAPI BackgroundTasks 或 Celery）
-- [ ] 9.2 处理状态追踪（draft → processing → ready / failed）
-- [ ] 9.3 处理失败重试机制
+- [ ] 8.1 挂载路由、注册异常处理器
 
-## 10. 测试与联调（第 9-10 天）
+### 9. 测试（第 7 天）
 
-- [ ] 10.1 单元测试：PDF 解析、切分、向量化
-- [ ] 10.2 集成测试：上传→处理→检索全流程
-- [ ] 10.3 检索效果测试（≥10 个查询用例，人工评估准确率）
-- [ ] 10.4 与 A 联调知识检索接口
-- [ ] 10.5 与 D 联调审计日志
+- [ ] 9.1 PDF解析、切分、向量化单元测试
+- [ ] 9.2 上传→处理→检索全流程集成测试
+- [ ] 9.3 与 A 联调知识检索接口
 
 ---
 
-# C · 陪访助手 + 医生管理（visit-service + hcp-service）
+# C · 陪访助手 + 医生管理（visit-service:8002 + hcp-service:8006）
 
-> 代表日常使用最频繁的两个模块。
+> 代表日常使用最频繁的两个模块，共两个服务。
+> **前置依赖：D的合规检查+审计日志接口、A的数字专员对话接口（用于生成准备包等）**
 
----
+## AI 指导摘要
 
-## 第一部分：陪访助手（visit-service:8002）
+```
+你是 C，负责 visit-service (8002) 和 hcp-service (8006)。
+项目是药企数字员工系统 MedAgent。
 
-### 1. 项目骨架（第 1 天）
+visit-service: 拜访前准备包 → 拜访中实时辅助（ASR转写+合规+异议识别） → 拜访后自动生成记录
+hcp-service: 医生档案管理、画像生成、批量导入
 
-- [ ] 1.1 创建 `services/visit-service/` 目录结构
-- [ ] 1.2 写 `app/main.py`、`config.py`、`requirements.txt`、`Dockerfile`
-- [ ] 1.3 `docker-compose up visit-service` 启动验证
+已完工并有代码可参考：
+- shared/common/  统一响应/认证/分页/数据库连接
+- shared/models/  User 模型
+- 路由骨架已写好
 
-### 2. 通义听悟客户端（第 2-3 天）
+你要调的 3 个外部服务：
+1. 合规检查: POST http://gateway:8000/api/v1/compliance/check
+  {content, context: {user_id, type: "live_conversation"}}
+  → {blocked, violations, risk_level}
 
-- [ ] 2.1 写 `app/services/tingwu_client.py`：
-  - 创建实时转写任务
-  - 上传音频流
-  - 获取转写结果（含说话人分离）
-  - 转写结果回调处理
-- [ ] 2.2 写 mock 版本供开发调试（不需要真实音频时用文本模拟）
-- [ ] 2.3 验证延迟 < 2 秒
+2. 审计日志: POST http://gateway:8000/api/v1/audit/log
 
-### 3. 外部服务客户端（第 2-3 天）
+3. 数字专员（A）: POST http://gateway:8000/api/v1/specialists/{id}/chat
+  用于生成准备包的推荐话题、开场白、红线提醒等
 
-- [ ] 3.1 写 `app/services/specialist_client.py`（调 A 的对话接口，用于生成准备包、拜访记录等）
-- [ ] 3.2 写 `app/services/compliance_client.py`（调 D 的合规检查）
-- [ ] 3.3 写 `app/services/audit_client.py`（调 D 的审计日志）
+通义听悟: 阿里云 ASR，创建实时转写任务 → 获取转写结果（含说话人分离），延迟 < 2s
+```
 
-### 4. 核心业务逻辑（第 4-7 天）
+## 任务清单
 
-- [ ] 4.1 写 `app/core/visit_manager.py`（参考文档 8.2）：
+### 第一部分：陪访助手（visit-service:8002）
 
-  **4.1.1 拜访前 `prepare_visit()`：**
-  - 获取医生画像（调 HCP 服务）
+### 1. 通义听悟客户端（第 1-2 天）
+
+- [ ] 1.1 写 `app/services/tingwu_client.py`
+  - `create_task(audio_url)` → task_id
+  - `get_result(task_id)` → 转写文本 + 说话人分离
+  - 环境变量：TINGWU_APP_KEY, TINGWU_ACCESS_TOKEN
+- [ ] 1.2 写 mock 版本（用文本模拟，不需要真实音频时开发用）
+
+### 2. 外部服务客户端（第 2 天）
+
+- [ ] 2.1 写 `app/services/specialist_client.py`（调 A 的对话接口）
+- [ ] 2.2 写 `app/services/compliance_client.py`（调 D 的合规检查，参考 A 任务里的写法）
+- [ ] 2.3 写 `app/services/audit_client.py`（调 D 的审计日志，参考 A 任务里的写法）
+
+### 3. 核心业务逻辑（第 3-5 天）
+
+- [ ] 3.1 写 `app/core/visit_manager.py`（参考完整方案 8.2）：
+  **`prepare_visit(hcp_id, user_id, product_id)`：**
+  - 获取医生画像
   - 获取最近 3 次互动历史
-  - 调 AI 生成：3-5 个推荐话题、1-2 条红线提醒、1 段开场白、上次跟进事项
-  - 组装准备包返回
+  - 调 A 的 specialist 对话生成：3-5 个推荐话题、1-2 条红线提醒、1 段开场白、上次跟进事项
 
-  **4.1.2 拜访中 `start_visit()` + `process_transcript()`：**
-  - 创建拜访记录（状态：in_progress）
-  - 接收通义听悟转写结果
-  - 合规实时检查（最近一段对话）
-  - 异议识别（正则匹配+AI）
+  **`start_visit(hcp_id, user_id, product_id)`：** 创建拜访记录（状态 in_progress）
+
+  **`process_transcript(visit_id, audio_url)`：**
+  - 通义听悟转写
+  - 合规实时检查
+  - 异议识别（正则 + LLM）
   - 话术建议生成
-  - 红线拦截
 
-  **4.1.3 拜访后 `end_visit()`：**
-  - 调 AI 生成结构化记录：摘要（≤100字）、关键点、医生兴趣点、异议、情感判断、下次拜访计划、跟进建议
-  - 自动生成后续任务（送资料、预约等）
-  - 触发生成医生画像更新
+  **`end_visit(visit_id, full_transcript)`：**
+  - 调 AI 生成结构化记录：摘要(≤100字)、关键点、兴趣点、异议、情感判断、下次拜访计划、跟进建议
+  - 自动生成后续任务
   - 记录审计日志
 
-### 5. 异议识别（第 5 天）
+- [ ] 3.2 写 `_detect_objections()` — 正则匹配异议：价格/疗效/安全性/竞品
 
-- [ ] 5.1 写 `_detect_objections()` — 正则匹配 + LLM 辅助
-- [ ] 5.2 异议类型分类：价格异议、疗效异议、安全性异议、竞品异议
-- [ ] 5.3 每种异议配话术建议模板
+### 4. 数据层（第 3 天）
 
-### 6. 数据层（第 4 天）
+- [ ] 4.1 写 `app/models/visit_record.py` — ORM，映射 `visit_records` 表
+- [ ] 4.2 写 `app/db/repositories/visit_repo.py`
 
-- [ ] 6.1 写 `app/models/visit_record.py`
-- [ ] 6.2 写 `app/db/repositories/visit_repo.py`
+### 5. API 路由（第 5-6 天）
 
-### 7. API 路由（第 7-8 天）
+- [ ] 5.1 `POST /api/v1/visits/pre-visit` — 拜访前准备包
+- [ ] 5.2 `POST /api/v1/visits/start` — 开始拜访
+- [ ] 5.3 `POST /api/v1/visits/{id}/transcript` — 上传转写
+- [ ] 5.4 `POST /api/v1/visits/{id}/end` — 结束拜访
+- [ ] 5.5 `GET /api/v1/visits/{id}` — 详情
+- [ ] 5.6 `GET /api/v1/visits` — 列表
+- [ ] 5.7 `PUT /api/v1/visits/{id}` — 编辑
+- [ ] 5.8 `POST /api/v1/visits/{id}/follow-up` — 跟进建议
+- [ ] 5.9 全局异常处理 + JWT 认证
 
-- [ ] 7.1 `POST /api/v1/visits/pre-visit` — 生成拜访前准备包
-  - 入参：hcp_id, product_id
-  - 出参：hcp_profile, history, recommendations{topics, red_lines, opening, follow_ups}
-- [ ] 7.2 `POST /api/v1/visits/start` — 开始拜访
-  - 入参：hcp_id, product_id
-  - 出参：visit_id, start_time, status
-- [ ] 7.3 `POST /api/v1/visits/{id}/transcript` — 上传实时转写片段
-  - 入参：transcript_text 或 audio_url
-  - 出参：compliance_result, objections, suggestions
-- [ ] 7.4 `POST /api/v1/visits/{id}/end` — 结束拜访，生成记录
-  - 入参：full_transcript
-  - 出参：完整拜访记录
-- [ ] 7.5 `GET /api/v1/visits/{id}` — 查看拜访记录详情
-- [ ] 7.6 `GET /api/v1/visits` — 拜访列表（按日期/医生筛选）
-- [ ] 7.7 `PUT /api/v1/visits/{id}` — 编辑拜访记录
-- [ ] 7.8 `POST /api/v1/visits/{id}/follow-up` — 获取跟进建议
+### 第二部分：医生管理（hcp-service:8006）
 
----
+### 6. 数据层（第 1-2 天）
 
-## 第二部分：医生管理（hcp-service:8006）
+- [ ] 6.1 写 `app/models/hcp.py` — ORM，映射 `hcps` 表
+- [ ] 6.2 写 `app/db/repositories/hcp_repo.py`
 
-### 8. 项目骨架（第 1 天，与 visit 并行）
+### 7. 业务逻辑（第 2-3 天）
 
-- [ ] 8.1 创建 `services/hcp-service/` 目录结构
-- [ ] 8.2 写 `app/main.py`、`config.py`、`requirements.txt`、`Dockerfile`
-- [ ] 8.3 `docker-compose up hcp-service` 启动验证
+- [ ] 7.1 医生画像生成/更新（聚合互动历史 + AI）
+- [ ] 7.2 医生搜索（姓名/医院/科室/标签）
+- [ ] 7.3 标签管理
+- [ ] 7.4 批量导入（Excel/CSV → openpyxl 解析）
 
-### 9. 数据层（第 2 天）
+### 8. API 路由（第 3-4 天）
 
-- [ ] 9.1 写 `app/models/hcp.py`（医生 ORM）
-- [ ] 9.2 写 `app/db/repositories/hcp_repo.py`
+- [ ] 8.1 `GET /api/v1/hcps` — 列表（分页+筛选）
+- [ ] 8.2 `GET /api/v1/hcps/{id}` — 详情
+- [ ] 8.3 `GET /api/v1/hcps/{id}/profile` — 画像
+- [ ] 8.4 `GET /api/v1/hcps/{id}/interactions` — 互动历史
+- [ ] 8.5 `POST /api/v1/hcps` — 新增
+- [ ] 8.6 `PUT /api/v1/hcps/{id}` — 编辑
+- [ ] 8.7 `POST /api/v1/hcps/batch-import` — 批量导入
+- [ ] 8.8 `POST/DELETE /api/v1/hcps/{id}/tags` — 标签管理
 
-### 10. 业务逻辑（第 3-4 天）
+### 9. main.py 更新
 
-- [ ] 10.1 医生画像生成/更新：聚合互动历史 + AI 分析 → 学术背景/处方偏好/沟通风格
-- [ ] 10.2 医生搜索：支持姓名、医院、科室、标签搜索
-- [ ] 10.3 标签管理：添加/删除标签
-- [ ] 10.4 批量导入：从 Excel/CSV 解析并写入
+- [ ] 9.1 两个服务的 main.py 都挂载路由、注册异常处理器
 
-### 11. API 路由（第 5-6 天）
+### 10. 测试（第 5-6 天）
 
-- [ ] 11.1 `GET /api/v1/hcps` — 医生列表（分页、筛选：医院/科室/区域/标签）
-- [ ] 11.2 `GET /api/v1/hcps/{id}` — 医生详情（完整档案）
-- [ ] 11.3 `GET /api/v1/hcps/{id}/profile` — 医生画像
-- [ ] 11.4 `GET /api/v1/hcps/{id}/interactions` — 互动历史
-- [ ] 11.5 `POST /api/v1/hcps` — 新增医生
-- [ ] 11.6 `PUT /api/v1/hcps/{id}` — 编辑医生
-- [ ] 11.7 `POST /api/v1/hcps/batch-import` — 批量导入
-- [ ] 11.8 `POST /api/v1/hcps/{id}/tags` — 添加标签
-- [ ] 11.9 `DELETE /api/v1/hcps/{id}/tags` — 删除标签
-
-### 12. 联调与测试（第 7-8 天）
-
-- [ ] 12.1 与 A 联调（拜访过程中调数字专员接口）
-- [ ] 12.2 与 D 联调（合规检查、审计日志）
-- [ ] 12.3 与 E 联调（移动端拜访页、医生页）
-- [ ] 12.4 集成测试：完整拜访流程（准备→开始→转写→结束）
-
----
-
-# D · 合规 + 审计 + 共享层 + 网关
-
-> 系统横切面，所有服务都依赖你。
-
----
-
-## 第一部分：共享层（第 1-2 天，优先做！）
-
-### 1. 共享代码（第 1 天）
-
-- [ ] 1.1 创建 `shared/` 目录结构：
-  - `shared/common/` — 通用工具（JWT 验证、分页、统一响应格式）
-  - `shared/models/` — 共享 ORM 基类、Pydantic schema
-  - `shared/compliance-rules/` — 合规规则 YAML
-  - `shared/prompts/` — 话术模板占位
-- [ ] 1.2 写 `shared/common/response.py` — 统一响应格式封装：
-  ```python
-  def success(data): return {"code": 0, "message": "success", "data": data}
-  def error(code, message, data=None): return {"code": code, "message": message, "data": data}
-  ```
-- [ ] 1.3 写 `shared/common/auth.py` — JWT 验证工具（生成 token、解析 token、依赖注入 `get_current_user`）
-- [ ] 1.4 写 `shared/common/pagination.py` — 分页工具
-- [ ] 1.5 写 `shared/models/base.py` — ORM 基类（id, created_at, updated_at）
-
-### 2. 数据库初始化（第 1-2 天）
-
-- [ ] 2.1 写 `scripts/init_db.sql` — 全部 10 张表的建表语句（参考文档 6.2）
-- [ ] 2.2 写 Alembic 配置，生成首次 migration
-- [ ] 2.3 审计日志表加 `REVOKE UPDATE, DELETE` 不可篡改约束
-- [ ] 2.4 写种子数据脚本（管理员账号、示例产品、示例合规规则）
-
-### 3. 合规规则文件（第 2 天）
-
-- [ ] 3.1 写 `shared/compliance-rules/rules.yaml`（参考文档 10.1，至少 4 条初始规则）：
-  - R001 禁止承诺疗效（关键词）
-  - R002 禁止回扣暗示（正则）
-  - R003 禁止统方（语义）
-  - R004 禁止超适应症推广（语义）
-- [ ] 3.2 后续可追加：禁止贬低竞品、禁止泄露患者信息、禁止讨论未公开数据等
-
----
-
-## 第二部分：合规审核服务（compliance-service:8004）
-
-### 4. 项目骨架（第 2 天）
-
-- [ ] 4.1 创建 `services/compliance-service/` 目录结构
-- [ ] 4.2 写 `app/main.py`、`config.py`、`requirements.txt`、`Dockerfile`
-
-### 5. 合规审核引擎（第 3-5 天）
-
-- [ ] 5.1 写 `app/core/checker.py`（参考文档 10.2）：
-
-  **三层审核流水线：**
-  - 第 1 关：关键词匹配（直接字符串包含判断）
-  - 第 2 关：正则匹配（预编译正则，批量扫描）
-  - 第 3 关：LLM 语义审核（通义千问 turbo，仅对"语义类"规则触发，降低成本）
-
-- [ ] 5.2 规则加载器：启动时从 YAML + DB 加载规则，合并去重
-- [ ] 5.3 规则编译器：预编译关键词和正则，缓存
-- [ ] 5.4 审核结果结构：
-  ```json
-  {
-    "blocked": true/false,
-    "violations": [{ "rule_code", "rule_name", "severity", "action", "matched_text" }],
-    "risk_level": "high/medium/low",
-    "checked_rules": ["R001", "R002", ...]
-  }
-  ```
-- [ ] 5.5 拦截动作实现：
-  - `reject`：拒绝，blocked=true
-  - `warn`：警告，blocked=false 但带 violations
-  - `log`：仅记录，blocked=false
-- [ ] 5.6 规则热更新：提供 reload 接口，重新加载 YAML + DB 规则，不重启服务
-
-### 6. 数据层（第 3 天）
-
-- [ ] 6.1 写 `app/models/compliance_rule.py`
-- [ ] 6.2 写 `app/models/compliance_block.py`
-- [ ] 6.3 写 `app/db/repositories/compliance_repo.py`
-
-### 7. API 路由（第 5-6 天）
-
-- [ ] 7.1 `POST /api/v1/compliance/check` — 合规检查（所有服务都调的接口）
-  - 入参：content, context{user_id, type, specialist_id?, visit_id?}
-  - 出参：审核结果（blocked, violations, risk_level）
-  - ⚠️ 这个接口要扛住所有服务的调用量，注意性能
-- [ ] 7.2 `GET /api/v1/compliance/rules` — 规则列表
-- [ ] 7.3 `POST /api/v1/compliance/rules` — 新增规则
-- [ ] 7.4 `PUT /api/v1/compliance/rules/{id}` — 编辑规则
-- [ ] 7.5 `DELETE /api/v1/compliance/rules/{id}` — 删除/禁用规则
-- [ ] 7.6 `POST /api/v1/compliance/rules/reload` — 热更新（重载规则缓存）
-- [ ] 7.7 `POST /api/v1/compliance/rules/test` — 规则测试（输入文本，查看命中哪些规则）
-- [ ] 7.8 `GET /api/v1/compliance/blocks` — 拦截记录查询
-- [ ] 7.9 `GET /api/v1/compliance/stats` — 合规统计（拦截次数、拦截率、Top 规则）
-
-### 8. 测试（第 6 天）
-
-- [ ] 8.1 写 `tests/test_compliance.py`（参考文档 14.1）：
-  - 关键词拦截测试
-  - 正则拦截测试
-  - 安全内容放行测试
-  - 空内容边界测试
-  - LLM 语义审核测试
-- [ ] 8.2 目标：拦截率 100%（已知违规），误拦率 < 5%（正常内容）
-
----
-
-## 第三部分：审计服务（audit-service:8005）
-
-### 9. 项目骨架（第 3 天）
-
-- [ ] 9.1 创建 `services/audit-service/` 目录结构
-- [ ] 9.2 写 `app/main.py`、`config.py`、`requirements.txt`、`Dockerfile`
-
-### 10. 审计日志引擎（第 4-5 天）
-
-- [ ] 10.1 写 `app/core/logger.py`（参考文档 10.3）：
-  - 记录字段：service_name, user_id, action, resource_type, resource_id, before/after_value, ai_involved, ai_model, ai_prompt_hash, ai_response_hash, compliance_result, risk_level, client_ip, user_agent, request_id
-  - Prompt/Response 存 hash 不存原文（安全+节省空间）
-  - 异步写入，不阻塞主业务
-- [ ] 10.2 不可篡改：数据库层面 REVOKE UPDATE/DELETE，代码层面无修改/删除接口
-- [ ] 10.3 数据保留策略：按配置的天数自动归档（默认 3 年）
-
-### 11. 数据层（第 4 天）
-
-- [ ] 11.1 写 `app/models/audit_log.py`
-- [ ] 11.2 写 `app/db/repositories/audit_repo.py`
-
-### 12. API 路由（第 6-7 天）
-
-- [ ] 12.1 `POST /api/v1/audit/log` — 写审计日志（内部接口，其他服务调）
-- [ ] 12.2 `GET /api/v1/audit/logs` — 高级搜索：
-  - 筛选条件：时间范围、用户、服务、操作类型、风险等级
-  - 支持分页
-- [ ] 12.3 `GET /api/v1/audit/logs/{id}` — 日志详情
-- [ ] 12.4 `POST /api/v1/audit/export` — 导出监管报告（Excel 格式）：
-  - 按筛选条件导出
-  - 包含所有字段
-  - 含 AI 决策日志、合规检查记录
-- [ ] 12.5 `GET /api/v1/audit/stats` — 审计统计：
-  - 总记录数
-  - 按服务/操作类型的分布
-  - 按风险等级的分布
-  - 按时间段的变化趋势
-
----
-
-## 第四部分：API 网关（gateway:8000）
-
-### 13. 网关（第 7-8 天）
-
-- [ ] 13.1 创建 `services/gateway/` 目录结构
-- [ ] 13.2 写路由配置：把 `/api/v1/specialists` → specialist-service:8001 等
-- [ ] 13.3 写 JWT 认证中间件（所有请求过网关时统一验证 token）
-- [ ] 13.4 写限流中间件（每用户每分钟 N 次请求）
-- [ ] 13.5 写 X-Request-ID 注入（链路追踪）
-- [ ] 13.6 写 CORS 配置
-- [ ] 13.7 写健康检查聚合 `/health`
-- [ ] 13.8 更新 `docker-compose.yml`：所有服务通过 gateway 对外暴露，内部服务不暴露端口
-
-### 14. 联调与文档（第 9-10 天）
-
-- [ ] 14.1 与 A、B、C 逐个验证网关路由
-- [ ] 14.2 写网关 README
-- [ ] 14.3 写 API 总文档（Swagger 聚合或手动整理）
+- [ ] 10.1 完整拜访流程集成测试（准备→开始→转写→结束）
+- [ ] 10.2 与 A 联调、与 D 联调、与 E 联调
 
 ---
 
 # E · 移动端 + DevOps
 
 > 代表每天打开的那个 App + 整个系统的部署运维。
+> **前置依赖：A/C 的后端 API（可以先用 mock 数据开发界面）**
+
+## AI 指导摘要
+
+```
+你是 E，负责 React Native 移动端 (mobile/) 和 DevOps。
+项目是药企数字员工系统 MedAgent。
+
+移动端 4 个 Tab：工作台 | 对话 | 医生 | 我的
+页面要求参考完整方案文档第 3.1 节。
+
+项目已有脚手架：
+- mobile/package.json, tsconfig.json 已写好
+- mobile/src/App.tsx 4 Tab 导航已配置
+- mobile/src/api/client.ts API 客户端已写好（Base URL + JWT + X-Request-ID）
+- mobile/src/screens/ 下有 Home/Specialists/HCPSearch/Profile 四个占位页面
+
+后端 API 全部通过网关 (gateway:8000) 访问。
+开发阶段可以先用 mock 数据，等 A 和 C 接口就绪后再联调。
+
+DevOps：docker-compose.yml 已写好，CI/CD 用阿里云云效。
+```
+
+## 任务清单
+
+### 第一部分：移动端
+
+### 1. 页面开发
+
+- [ ] 1.1 **登录页** `src/screens/Login/LoginScreen.tsx`
+  - 手机号输入、验证码（60s倒计时）、登录按钮、协议勾选
+- [ ] 1.2 **工作台** `src/screens/Home/HomeScreen.tsx`（改进现有占位页）
+  - 今日进度环、拜访列表卡片（待开始/进行中/已完成三种状态）、FAB 添加拜访、快捷功能区
+- [ ] 1.3 **专员对话** `src/screens/Chat/ChatScreen.tsx`
+  - 对话气泡（用户蓝色右对齐、AI白色左对齐）
+  - AI消息含：引用来源卡片、证据等级标注
+  - 反馈按钮（点赞/点踩）、收藏、分享
+  - 输入区（文本+语音+发送）、多轮对话、键盘自适应
+- [ ] 1.4 **专员列表** `src/screens/Specialists/SpecialistListScreen.tsx`（改进现有）
+- [ ] 1.5 **拜访前准备** `src/screens/VisitPrepare/VisitPrepareScreen.tsx`
+  - 医生信息、推荐话题（可勾选）、红线提醒（红色背景）、开场白建议、"开始拜访"按钮
+- [ ] 1.6 **拜访中** `src/screens/VisitInProgress/VisitInProgressScreen.tsx`
+  - 录音状态栏+计时、实时转写区（医/代分离）、异议识别弹窗、话术建议卡片、红线拦截弹窗、"结束拜访"按钮
+- [ ] 1.7 **拜访后** `src/screens/VisitEnd/VisitEndScreen.tsx`
+  - AI摘要、关键点、兴趣点、异议、情感判断、下次拜访推荐、跟进建议、"确认完成"按钮
+- [ ] 1.8 **医生搜索** `src/screens/HCPSearch/HCPSearchScreen.tsx`（改进现有）
+- [ ] 1.9 **医生详情** `src/screens/HCPDetail/HCPDetailScreen.tsx`
+- [ ] 1.10 **学术内容** `src/screens/Content/ContentScreen.tsx`
+- [ ] 1.11 **我的** `src/screens/Profile/ProfileScreen.tsx`（改进现有）
+- [ ] 1.12 **合规手册** `src/screens/Compliance/ComplianceScreen.tsx`
+
+### 2. API 对接
+
+- [ ] 2.1 在 `src/api/` 下补充 `auth.ts`, `specialist.ts`, `visit.ts`, `hcp.ts`, `compliance.ts`, `content.ts`
+- [ ] 2.2 参考已有的 `src/api/client.ts`，用 `apiClient.request<T>(method, path, data)` 封装所有接口调用
+
+### 3. 状态管理
+
+- [ ] 3.1 Token 持久化（已有 AsyncStorage）
+- [ ] 3.2 登录状态管理
+
+### 第二部分：DevOps
+
+### 4. Docker（第 1-2 天）
+
+- [ ] 4.1 `docker-compose.yml` 已写好，验证所有服务能启动
+- [ ] 4.2 `.env.example` 已写好
+
+### 5. CI/CD（第 8-9 天）
+
+- [ ] 5.1 在阿里云云效配置流水线：测试 → 构建镜像 → 推送 → 部署
+- [ ] 5.2 分 dev/staging/prod 三套环境
+
+### 6. 监控告警（第 9-10 天）
+
+- [ ] 6.1 配置阿里云 ARMS + 告警规则
+- [ ] 6.2 配置 SLS 日志采集
 
 ---
 
-## 第一部分：移动端（React Native）
+# 依赖关系速查
 
-### 1. 项目脚手架（第 1-2 天）
+```
+                    D (已完成 ✅)
+                    │
+          ┌─────────┼─────────┐
+          │         │         │
+    共享层+合规+审计+网关      │
+          │         │         │
+          ▼         ▼         ▼
+          A         C         B
+     (调B和D)   (调A和D)   (调D)
+          │         │         │
+          └─────────┼─────────┘
+                    │
+                    ▼
+                    E
+            (调A和C的API)
+```
 
-- [ ] 1.1 `npx react-native init MedAgentMobile --template react-native-template-typescript`
-- [ ] 1.2 创建 `mobile/src/` 目录结构（按文档 11.1）
-- [ ] 1.3 安装依赖：React Navigation、AsyncStorage、Axios/API 客户端
-- [ ] 1.4 配置底部 Tab 导航（4 个 Tab：工作台/对话/医生/我的）
-- [ ] 1.5 配置主题色、通用样式、字体
-
-### 2. API 客户端（第 2 天）
-
-- [ ] 2.1 写 `src/api/client.ts`（参考文档 11.3）：
-  - Base URL 配置（开发/生产环境切换）
-  - JWT Token 管理（存储到 AsyncStorage）
-  - 统一请求封装（header 注入、X-Request-ID 生成）
-  - 统一错误处理（按错误码分类提示）
-- [ ] 2.2 写各模块 API 封装：
-  - `src/api/auth.ts` — 登录/登出/获取用户信息
-  - `src/api/specialist.ts` — 专员列表/对话/反馈/收藏
-  - `src/api/visit.ts` — 拜访前/开始/转写/结束
-  - `src/api/hcp.ts` — 医生列表/详情/搜索
-  - `src/api/compliance.ts` — 合规检查
-  - `src/api/content.ts` — 学术内容
-
-### 3. 登录页（第 3 天）
-
-- [ ] 3.1 写 `src/screens/Login/LoginScreen.tsx`
-  - Logo 展示
-  - 手机号输入（自动校验格式）
-  - 验证码输入 + 获取按钮（60 秒倒计时）
-  - 登录按钮
-  - 协议勾选
-- [ ] 3.2 登录状态管理（token 持久化，自动登录）
-- [ ] 3.3 登录成功后导航到工作台
-
-### 4. 工作台（第 4-5 天）
-
-- [ ] 4.1 写 `src/screens/Home/HomeScreen.tsx`
-  - 顶部欢迎栏（日期、天气占位、通知图标、设置入口）
-  - 今日进度环（已完成 X/Y）
-  - 今日拜访列表（按时间排序的卡片）：
-    - 每张卡片：医生姓名、医院、时间、状态标签（待开始/进行中/已完成）
-    - 待开始卡片有"准备包"按钮 → 跳转拜访前准备页
-    - 进行中卡片有"继续"按钮 → 跳转拜访中页
-    - 已完成卡片显示完成时间
-  - FAB 按钮：手动添加临时拜访
-  - 快捷功能区：问答/内容/医生 3 个入口
-- [ ] 4.2 下拉刷新 + 上拉加载更多
-
-### 5. 数字专员对话（第 5-6 天）
-
-- [ ] 5.1 写 `src/screens/Specialists/SpecialistListScreen.tsx` — 专员列表
-  - 每个专员一张卡片（名称、产品图、状态、今日回答次数）
-  - 点击进入对话
-- [ ] 5.2 写 `src/screens/Chat/ChatScreen.tsx`（参考文档 11.2.1）
-  - 对话气泡（用户右对齐蓝色、AI 左对齐白色）
-  - 消息包含：引用来源卡片、证据等级标注
-  - 每条 AI 消息底部：反馈按钮（点赞/点踩）、收藏按钮、分享按钮
-  - 长按消息：复制文本/反馈
-  - 输入区：文本输入框 + 语音输入按钮 + 发送按钮
-  - 发送中显示 loading 状态
-- [ ] 5.3 多轮对话（session_id 维持上下文）
-- [ ] 5.4 键盘弹出时自动滚到最新消息
-
-### 6. 拜访流程（第 6-8 天）
-
-- [ ] 6.1 写 `src/screens/VisitPrepare/VisitPrepareScreen.tsx`（参考文档 11.2.2）
-  - 医生基本信息卡片
-  - 推荐话题卡片（可勾选/编辑）
-  - 红线提醒卡片（红色背景，醒目）
-  - 开场白建议卡片（斜体引用样式）
-  - 上次跟进卡片
-  - "开始拜访"按钮 → 调 API 创建拜访记录 → 跳转拜访中
-- [ ] 6.2 写 `src/screens/VisitInProgress/VisitInProgressScreen.tsx`
-  - 顶部状态栏：录音中动画 + 计时器
-  - 实时转写区（滚动，医生/代表分离显示，不同颜色）
-  - 实时提示区（核心功能）：
-    - 异议识别弹窗
-    - 话术建议卡片（可展开/收起）
-    - 红线拦截弹窗（红色警告样式）
-  - 关键节点标记（AI 自动 + 手动标记按钮）
-  - "结束拜访"按钮（需二次确认）
-- [ ] 6.3 写 `src/screens/VisitEnd/VisitEndScreen.tsx`
-  - AI 摘要（≤100 字，可编辑）
-  - 关键点列表（可编辑/删除）
-  - 医生兴趣点
-  - 医生异议
-  - 情感判断（积极/中性/消极，可修改）
-  - 下次拜访时间推荐
-  - 跟进建议 + 自动任务（一键执行）
-  - "确认完成"按钮 → 提交 → 返回工作台
-
-### 7. 医生模块（第 7-8 天）
-
-- [ ] 7.1 写 `src/screens/HCPSearch/HCPSearchScreen.tsx`
-  - 顶部搜索框（姓名/医院/科室）
-  - 快速筛选项（医院、科室、标签）
-  - 最近浏览
-  - 字母索引滚动
-- [ ] 7.2 写 `src/screens/HCPDetail/HCPDetailScreen.tsx`
-  - 基本信息（姓名、医院、科室、职称、电话）
-  - 快捷操作按钮（打电话、发消息、预约）
-  - 学术背景
-  - 处方偏好
-  - 标签列表
-  - 互动历史时间线（每次拜访简要信息）
-
-### 8. 其他页面（第 8-9 天）
-
-- [ ] 8.1 写 `src/screens/Content/ContentScreen.tsx` — 学术内容
-  - 分类 Tab（指南/文献/产品/病例/视频/合规）
-  - 推荐内容 + 最新内容
-  - 搜索
-- [ ] 8.2 写 `src/screens/Profile/ProfileScreen.tsx` — 我的
-  - 个人信息（头像、姓名、职位、区域）
-  - 统计概览（对话数/拜访数/收藏数）
-  - 功能列表（个人资料、团队、统计、通知、帮助、合规手册、退出登录）
-- [ ] 8.3 写 `src/screens/Compliance/ComplianceScreen.tsx` — 合规手册
-  - 红线清单
-  - 错误 vs 正确对比
-  - 联系方式
-
-### 9. 测试与联调（第 9-10 天）
-
-- [ ] 9.1 iOS 模拟器 + Android 模拟器验证所有页面
-- [ ] 9.2 与 A 联调对话接口
-- [ ] 9.3 与 C 联调拜访接口
-- [ ] 9.4 与 D 联调登录认证
-- [ ] 9.5 全流程走通：登录 → 工作台 → 准备包 → 拜访 → 生成记录 → 对话
-
----
-
-## 第二部分：DevOps
-
-### 10. Docker 编排（第 1-2 天）
-
-- [ ] 10.1 完善 `docker-compose.yml`（参考文档 5.4）：
-  - PostgreSQL 15 + 初始化 SQL
-  - Redis 7
-  - 7 个服务（6 微服务 + 1 网关）
-  - 健康检查配置
-  - 网络隔离（内部网络 + 网关暴露）
-- [ ] 10.2 写 `.env.example` 模板
-- [ ] 10.3 验证 `docker-compose up -d` 所有服务启动 + 互相可达
-
-### 11. CI/CD（第 8-9 天）
-
-- [ ] 11.1 写 `.github/workflows/test.yml` — PR 时跑 lint + 单元测试
-- [ ] 11.2 写 `.github/workflows/deploy.yml`（参考文档 15.3）：
-  - 测试 → 构建 Docker 镜像 → 推送到阿里云容器镜像仓库
-  - 分 dev/staging/prod 三个环境
-- [ ] 11.3 配置 GitHub Secrets（阿里云 AK、镜像仓库密码等）
-- [ ] 11.4 写部署脚本（或配置阿里云云效流水线）
-
-### 12. 监控告警（第 9-10 天）
-
-- [ ] 12.1 配置阿里云 ARMS 应用监控（各服务接入）
-- [ ] 12.2 配置告警规则（参考文档 15.4）：
-  - AI 回答延迟 P95 > 5000ms
-  - 合规拦截率异常（< 0.1% 或 > 10%）
-  - 数据库连接池 > 80%
-  - 服务宕机
-- [ ] 12.3 配置 SLS 日志采集
-
-### 13. 文档（收尾）
-
-- [ ] 13.1 写项目根目录 README（项目介绍、快速开始、架构图）
-- [ ] 13.2 写部署文档（如何部署到阿里云）
-- [ ] 13.3 写移动端打包发布文档（iOS App Store + Android 应用商店）
-
----
-
-# 公共里程碑 & 检查点
-
-| 时间 | 里程碑 | 验收标准 |
-|------|--------|---------|
-| 第 1 周结束 | 基础搭建完成 | 所有服务能启动、网关能路由、数据库表创建完成 |
-| 第 2 周结束 | 核心接口可用 | A 的 chat 接口能返回 AI 答案、B 的 search 接口能检索到文档、D 的 check 接口能拦截违规内容 |
-| 第 3 周结束 | 业务闭环 | 完整的"知识检索→合规检查→AI生成答案→审计日志"链路走通 |
-| 第 4 周结束 | 移动端核心可用 | 登录→工作台→对话→拜访全流程走通 |
-| 第 5 周结束 | 功能完备 | 所有 P0 功能完成开发 |
-| 第 6 周结束 | 测试通过 + 部署 | 评估通过率 ≥ 80%、staging 环境部署验证通过 |
+B 的知识检索接口最先被需要 → B 优先开发检索接口
+A 依赖 B 的检索 + D 的合规/审计
+C 依赖 A 的对话 + D 的合规/审计
+E 依赖 A 和 C 的 API（但可先用 mock 开发界面）
 
 ---
 
 # 协作约定
 
-## 1. 接口契约
-
-每个人写完 API 后，**立即**更新到共享的 API 文档（用 Swagger 或飞书文档），其他人不用等代码写完就能按契约开发。格式：
+## 1. 服务间调用走网关
 
 ```
-POST /api/v1/specialists/{id}/chat
-Request: { "question": "string", "session_id": "string?" }
-Response: { "code": 0, "data": { "answer": "...", "citations": [...], "evidence_level": "..." } }
-Error: { "code": 4001, "message": "合规拦截", "data": { "rule_code": "R001" } }
+A调B: POST http://gateway:8000/api/v1/knowledge/search
+A调D: POST http://gateway:8000/api/v1/compliance/check
+C调A: POST http://gateway:8000/api/v1/specialists/{id}/chat
+C调D: POST http://gateway:8000/api/v1/compliance/check
+所有人调D: POST http://gateway:8000/api/v1/audit/log
 ```
 
-## 2. 外部服务依赖
+## 2. 统一响应格式
 
-服务间调用全部走网关（gateway:8000），不直连：
-```
-A调B: http://gateway:8000/api/v1/knowledge/search
-A调D: http://gateway:8000/api/v1/compliance/check
-C调A: http://gateway:8000/api/v1/specialists/{id}/chat
-C调D: http://gateway:8000/api/v1/compliance/check
+```json
+{"code": 0, "message": "success", "data": {}}
+{"code": 4001, "message": "合规拦截", "data": {"rule_code": "R001"}}
 ```
 
-## 3. 日会制度
+用 `from shared.common.response import success, error` 构建。
 
-每天 15 分钟站立会，每个人说三件事：
-- 昨天做了什么
-- 今天要做什么
-- 有没有阻塞
+## 3. main.py 模板（每个服务都一样）
 
-## 4. 阻塞处理
+```python
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-遇到阻塞（比如等别人的接口），不要等：
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from shared.common.exception_handler import register_exception_handlers
+from app.config import settings
+
+app = FastAPI(title="...", version="1.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], ...)
+register_exception_handlers(app)
+
+# 挂载路由
+from app.api.xxx import router
+app.include_router(router)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": settings.SERVICE_NAME}
+```
+
+## 4. 遇到阻塞
+
 - 先写 mock 数据继续开发
-- 在日会上说出来
+- 日会上抛出来
 - 优先 unblock 上游依赖
 
 ---
 
-> **所有任务细节以《AI数字员工系统-完整方案 v4.0》为准。**
+> **参考文档**：[AI数字员工系统-完整方案.md](./AI数字员工系统-完整方案.md)
+> **已完工代码**：查看 `shared/`, `services/compliance-service/`, `services/audit-service/`, `services/gateway/` 作为参考
