@@ -1,5 +1,7 @@
 """文档上传 -> 审核 -> 上线 流程管理"""
 import logging
+import os
+import tempfile
 from datetime import date
 from typing import List, Optional, Tuple
 
@@ -56,13 +58,21 @@ class DocumentManager:
 
         self.repo.update_status(doc_id, "processing", reviewer_id)
         try:
-            self.bailian.import_document(
-                file_url=doc.file_url,
-                title=doc.title,
-                doc_type=doc.doc_type,
-                evidence_level=doc.evidence_level,
-                source=doc.source,
-            )
+            if not doc.file_url:
+                raise BailianKnowledgeError("document has no file_url")
+            suffix = os.path.splitext(doc.file_url)[1]
+            fd, local_path = tempfile.mkstemp(suffix=suffix)
+            os.close(fd)
+            try:
+                self.oss.download_to_local(doc.file_url, local_path)
+                self.bailian.import_document(
+                    local_path=local_path,
+                    original_file_url=doc.file_url,
+                    tags=[doc.doc_type] if doc.doc_type else None,
+                )
+            finally:
+                if os.path.exists(local_path):
+                    os.unlink(local_path)
             logger.info("document %s imported to Bailian knowledge base", doc_id)
         except BailianKnowledgeError as exc:
             logger.exception("Bailian import failed for document %s", doc_id)

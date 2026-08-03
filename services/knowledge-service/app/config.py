@@ -25,6 +25,14 @@ class Settings:
     BAILIAN_KB_ID = os.getenv("BAILIAN_KB_ID", "")
     BAILIAN_APP_ID = os.getenv("BAILIAN_APP_ID", "")
     BAILIAN_API_BASE = os.getenv("BAILIAN_API_BASE", "https://bailian.aliyuncs.com/v2")
+    ALIBABA_CLOUD_ACCESS_KEY_ID = os.getenv(
+        "ALIBABA_CLOUD_ACCESS_KEY_ID",
+        os.getenv("ALIYUN_ACCESS_KEY_ID", ""),
+    )
+    ALIBABA_CLOUD_ACCESS_KEY_SECRET = os.getenv(
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+        os.getenv("ALIYUN_ACCESS_KEY_SECRET", ""),
+    )
 
     # OSS
     OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "")
