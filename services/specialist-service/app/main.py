@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.config import settings
+from shared.common.exception_handler import register_exception_handlers
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -31,16 +32,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 注册全局异常处理器
+register_exception_handlers(app)
+
+# 挂载路由
+from app.api.specialists import router as specialists_router
+app.include_router(specialists_router)
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0"}
-
-
-# TODO: 挂载路由
-# from app.api import specialists, conversations
-# app.include_router(specialists.router)
-# app.include_router(conversations.router)
 
 
 if __name__ == "__main__":
