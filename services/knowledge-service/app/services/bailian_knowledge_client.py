@@ -35,6 +35,24 @@ class BailianKnowledgeError(Exception):
     pass
 
 
+def _retry(fn, retries: int = 5, base_delay: float = 5.0):
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - transient TLS/proxy failures
+            last_error = exc
+            logger.warning(
+                "Bailian call attempt %s/%s failed: %s",
+                attempt + 1,
+                retries,
+                exc,
+            )
+            if attempt < retries - 1:
+                time.sleep(base_delay * (attempt + 1))
+    raise last_error
+
+
 class BailianKnowledgeClient:
     def __init__(self):
         # Local dev proxy (e.g. 127.0.0.1:7897) breaks TLS to Aliyun API hosts.
@@ -46,6 +64,7 @@ class BailianKnowledgeClient:
 
         self.workspace_id = settings.BAILIAN_WORKSPACE_ID
         self.kb_id = settings.BAILIAN_KB_ID
+        self.index_id = settings.BAILIAN_INDEX_ID or settings.BAILIAN_KB_ID
         self.app_id = settings.BAILIAN_APP_ID
         self.client = BailianClient(
             open_api_models.Config(
@@ -71,7 +90,8 @@ class BailianKnowledgeClient:
         body = getattr(response, "body", None)
         success = getattr(body, "success", None)
         code = getattr(body, "code", None)
-        if success in (False, "false", "False") or (code not in (None, "", "0", "200")):
+        ok_codes = (None, "", "0", "200", "Success", "success")
+        if success in (False, "false", "False") or (code not in ok_codes):
             message = getattr(body, "message", "unknown")
             raise BailianKnowledgeError(f"{action} failed: code={code} message={message}")
         return body
@@ -156,12 +176,14 @@ class BailianKnowledgeClient:
     def submit_index_add_documents_job(self, file_ids: List[str]) -> str:
         request = bailian_models.SubmitIndexAddDocumentsJobRequest(
             document_ids=file_ids,
-            index_id=self.kb_id,
+            index_id=self.index_id,
             source_type=SOURCE_TYPE,
         )
-        response = self.client.submit_index_add_documents_job(
-            self.workspace_id,
-            request,
+        response = _retry(
+            lambda: self.client.submit_index_add_documents_job(
+                self.workspace_id,
+                request,
+            )
         )
         body = self._check_success(response, "SubmitIndexAddDocumentsJob")
         if body.data is None:
@@ -174,13 +196,26 @@ class BailianKnowledgeClient:
 
     def get_index_job_status(self, job_id: str):
         request = bailian_models.GetIndexJobStatusRequest(
-            index_id=self.kb_id,
+            index_id=self.index_id,
             job_id=job_id,
             page_number=1,
             page_size=10,
         )
-        response = self.client.get_index_job_status(self.workspace_id, request)
+        response = _retry(
+            lambda: self.client.get_index_job_status(self.workspace_id, request)
+        )
         body = self._check_success(response, "GetIndexJobStatus")
+        return body.data
+
+    def list_indices(self, page_number: int = 1, page_size: int = 20):
+        request = bailian_models.ListIndicesRequest(
+            page_number=str(page_number),
+            page_size=str(page_size),
+        )
+        response = _retry(
+            lambda: self.client.list_indices(self.workspace_id, request)
+        )
+        body = self._check_success(response, "ListIndices")
         return body.data
 
     def wait_for_index_job(self, job_id: str, timeout: Optional[int] = None):
@@ -216,14 +251,16 @@ class BailianKnowledgeClient:
 
     def retrieve(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         request = bailian_models.RetrieveRequest(
-            index_id=self.kb_id,
+            index_id=self.index_id,
             query=query,
             dense_similarity_top_k=top_k,
             sparse_similarity_top_k=0,
             enable_reranking=True,
             rerank_top_n=top_k,
         )
-        response = self.client.retrieve(self.workspace_id, request)
+        response = _retry(
+            lambda: self.client.retrieve(self.workspace_id, request)
+        )
         body = self._check_success(response, "Retrieve")
         results = []
         for node in body.data.nodes or []:

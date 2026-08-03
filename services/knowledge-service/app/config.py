@@ -23,6 +23,7 @@ class Settings:
     BAILIAN_WS_URL = os.getenv("BAILIAN_WS_URL", "wss://dashscope.aliyuncs.com/api-ws/v1/inference")
     BAILIAN_WORKSPACE_ID = os.getenv("BAILIAN_WORKSPACE_ID", "")
     BAILIAN_KB_ID = os.getenv("BAILIAN_KB_ID", "")
+    BAILIAN_INDEX_ID = os.getenv("BAILIAN_INDEX_ID", "")
     BAILIAN_APP_ID = os.getenv("BAILIAN_APP_ID", "")
     BAILIAN_API_BASE = os.getenv("BAILIAN_API_BASE", "https://bailian.aliyuncs.com/v2")
     ALIBABA_CLOUD_ACCESS_KEY_ID = os.getenv(
