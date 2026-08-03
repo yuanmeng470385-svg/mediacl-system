@@ -1,7 +1,8 @@
 # MedAgent 数字员工系统 · 5人任务分配清单
 
-> **版本：v3.2 · 2026-08-03**
+> **版本：v3.3 · 2026-08-03**
 > **重大架构决策：每个数字专员 = 一个阿里云百炼多模态交互开发套件 App。百炼 App 自带知识库（文档上传→解析→向量化→多模态检索），我们的系统负责合规审核、审计日志、业务编排。**
+> **v3.3 更新：E（移动端 + DevOps）已完成，后端全部就绪（A/B/C/D/E 五人全部完成）。**
 > **v3.2 更新：C（陪访助手 + 医生管理）已完成，新增"C 已完成的工作（A/D/E 必读）"小节。**
 > **v3.1 更新：A（数字专员服务）已完成，新增"A 已完成的工作（B/C/E 必读）"小节。**
 
@@ -11,7 +12,7 @@
 
 ```
 ┌──────────────────────────────────────────────────┐
-│                    移动端 (E)                     │
+│                  移动端 (E✅)                      │
 │              React Native 4 Tab                  │
 └────────────────────┬─────────────────────────────┘
                      │
@@ -21,7 +22,7 @@
 └────┬──────────┬──────────┬──────────┬────────────┘
      │          │          │          │
 ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼──────────┐
-│  A✅    │ │   B    │ │  C✅   │ │  D (已完成)   │
+│  A✅    │ │  B✅   │ │  C✅   │ │  D (已完成)   │
 │ 专员服务│ │ 知识库 │ │ 陪访+  │ │ 合规+审计     │
 │ :8001  │ │ :8003  │ │ 医生   │ │ :8004/:8005   │
 │        │ │        │ │ :8002  │ │               │
@@ -55,9 +56,9 @@
 |------|---------|------|---------|------|
 | D（组长） | 合规 + 审计 + 共享层 + 网关 | 8004/8005/8000 | Python FastAPI | ✅ 已完成 |
 | A | 数字专员服务 | 8001 | FastAPI + 百炼 App | ✅ 已完成 |
-| B | 知识库管理服务 | 8003 | FastAPI + 百炼 App 知识库 | 🔴 待开发 |
+| B | 知识库管理服务 | 8003 | FastAPI + 百炼 App 知识库 | ✅ 已完成 |
 | C | 陪访助手 + 医生管理 | 8002/8006 | FastAPI + 通义听悟 | ✅ 已完成 |
-| E | 移动端 + DevOps | — | React Native + Docker + CI/CD | 🔴 待开发 |
+| E | 移动端 + DevOps | — | React Native + Docker + CI/CD | ✅ 已完成 |
 
 ---
 
@@ -700,6 +701,70 @@ hcp-service：医生档案CRUD、画像、标签、批量导入
 
 > **前置依赖：A 和 C 的后端 API（可先用 mock 数据开发界面）**
 
+## ✅ 已完成（全员必读）
+
+E 的移动端和 DevOps 已全部实现，ABCD 可以直接了解移动端结构。
+
+**移动端文件结构 (24 个文件)：**
+
+```
+mobile/
+├── src/
+│   ├── App.tsx                        # 入口：AuthProvider + AppNavigator
+│   ├── navigation/
+│   │   ├── AppNavigator.tsx           # 登录态守卫 + Stack + 4 Tab 导航
+│   │   └── types.ts                   # 导航参数类型定义
+│   ├── types/index.ts                 # 全局类型（User/Specialist/Visit/HCP等）
+│   ├── constants/theme.ts             # 主题常量（颜色/间距/字体/圆角/阴影）
+│   ├── store/AuthContext.tsx          # 全局登录态（React Context + AsyncStorage）
+│   ├── api/
+│   │   ├── client.ts                  # 统一封装（JWT/X-Request-ID/超时/GET参数）
+│   │   ├── auth.ts                    # 登录/登出/验证码/用户信息
+│   │   ├── specialist.ts             # 专员列表/chat消息/历史/反馈/收藏
+│   │   ├── visit.ts                   # 准备包/开始/转写/结束/跟进
+│   │   ├── hcp.ts                     # 医生CRUD/画像/互动历史/标签
+│   │   └── compliance.ts             # 规则列表/文本合规检查
+│   ├── components/
+│   │   ├── ProgressRing.tsx           # 环形进度组件（工作台）
+│   │   ├── VisitCard.tsx              # 拜访卡片（三态+优先级+摘要）
+│   │   ├── EmptyState.tsx             # 空状态（图标+标题+操作按钮）
+│   │   ├── FAB.tsx                    # 浮动操作按钮
+│   │   └── EvidenceBadge.tsx          # 证据等级标签（A/B/C/D 四色）
+│   └── screens/
+│       ├── Login/LoginScreen.tsx      # 手机号+验证码+倒计时+协议
+│       ├── Home/HomeScreen.tsx        # 问候+进度环+快捷功能+拜访列表+FAB
+│       ├── Specialists/SpecialistListScreen.tsx  # 专员卡片+状态+开始对话
+│       ├── Chat/ChatScreen.tsx        # 气泡对话+引用来源+证据等级+反馈收藏
+│       ├── VisitPrepare/VisitPrepareScreen.tsx  # 医生信息+话题勾选+红线+开场白
+│       ├── VisitInProgress/VisitInProgressScreen.tsx  # 录音计时+转写+异议+红线弹窗
+│       ├── VisitEnd/VisitEndScreen.tsx # AI摘要+关键点+情感+跟进计划
+│       ├── HCPSearch/HCPSearchScreen.tsx   # 搜索+科室/区域筛选
+│       ├── HCPDetail/HCPDetailScreen.tsx   # 基本信息+画像+互动历史+标签管理
+│       ├── Content/ContentScreen.tsx       # 学术内容列表（文献/指南/说明书）
+│       ├── Compliance/ComplianceScreen.tsx # 合规规则手册（按严重程度筛选）
+│       └── Profile/ProfileScreen.tsx       # 用户信息+统计+菜单+退出登录
+```
+
+**DevOps 文件：**
+- `scripts/docker-verify.sh` — Docker 环境验证脚本（构建→启动→健康检查全部 7 个服务）
+- `scripts/ci-pipeline.yaml` — 阿里云云效流水线（lint→test→build→push→deploy 5 阶段）
+- `deploy/docker-compose.prod.yml` — 生产环境 compose（ACR 镜像+日志轮转+健康检查）
+- `deploy/arms-monitor.py` — ARMS+SLS 监控配置脚本（5 条告警规则含百炼 WebSocket）
+
+**关键设计决策：**
+- 移动端 4 Tab：工作台/对话/医生/我的
+- 登录态通过 AuthContext（React Context）+ AsyncStorage 持久化
+- 所有请求走 `apiClient.request<T>()` 统一封装（JWT + X-Request-ID + 30s 超时）
+- 后端不可用时各页面有 mock/空状态降级，不白屏
+- 拜访流程 3 屏用 `navigation.replace()` 防止用户返回到进行中的拜访
+- 红线拦截用全屏 Modal 弹窗强制阻断
+
+**待办（需要阿里云控制台操作）：**
+- 云效流水线需在控制台创建并关联代码仓库
+- ARMS 应用需在控制台创建并获取 License Key
+- SLS 日志项目需在控制台创建
+- Docker 镜像仓库 (ACR) 需创建命名空间
+
 ## AI 指导摘要（喂给 AI）
 
 ```
@@ -727,47 +792,47 @@ DevOps：
 ## 第一部分：移动端开发
 
 ### 1. 登录页
-- [ ] 1.1 写 `src/screens/Login/LoginScreen.tsx`
+- [x] 1.1 写 `src/screens/Login/LoginScreen.tsx`
   - 手机号输入（校验格式）+ 验证码（60s 倒计时）+ 登录按钮 + 协议勾选
   - 登录状态持久化（AsyncStorage）
 
 ### 2. 工作台（改进现有 HomeScreen）
-- [ ] 2.1 今日进度环（X/Y）、拜访列表卡片（待开始/进行中/已完成 三态）、FAB 添加拜访
+- [x] 2.1 今日进度环（X/Y）、拜访列表卡片（待开始/进行中/已完成 三态）、FAB 添加拜访
 
 ### 3. 数字专员模块
-- [ ] 3.1 专员列表（改进现有 SpecialistListScreen）
-- [ ] 3.2 对话页 `ChatScreen.tsx`：气泡（用户蓝/ AI 白）、引用来源卡片、证据等级、反馈/收藏/分享按钮、语音输入、多轮对话、键盘自适应
+- [x] 3.1 专员列表（改进现有 SpecialistListScreen）
+- [x] 3.2 对话页 `ChatScreen.tsx`：气泡（用户蓝/ AI 白）、引用来源卡片、证据等级、反馈/收藏/分享按钮、语音输入、多轮对话、键盘自适应
 
 ### 4. 拜访流程（3 个新页面）
-- [ ] 4.1 `VisitPrepareScreen.tsx`：医生信息、推荐话题（可勾选）、红线提醒（红底）、开场白、"开始拜访"按钮
-- [ ] 4.2 `VisitInProgressScreen.tsx`：录音状态+计时、实时转写（医/代分离）、异议弹出、话术卡片、红线拦截弹窗、"结束拜访"按钮
-- [ ] 4.3 `VisitEndScreen.tsx`：AI 摘要、关键点、兴趣点、异议、情感判断、下次拜访推荐、跟进建议、"确认完成"
+- [x] 4.1 `VisitPrepareScreen.tsx`：医生信息、推荐话题（可勾选）、红线提醒（红底）、开场白、"开始拜访"按钮
+- [x] 4.2 `VisitInProgressScreen.tsx`：录音状态+计时、实时转写（医/代分离）、异议弹出、话术卡片、红线拦截弹窗、"结束拜访"按钮
+- [x] 4.3 `VisitEndScreen.tsx`：AI 摘要、关键点、兴趣点、异议、情感判断、下次拜访推荐、跟进建议、"确认完成"
 
 ### 5. 医生模块
-- [ ] 5.1 医生搜索（改进现有 HCPSearchScreen，加筛选+字母索引）
-- [ ] 5.2 医生详情 `HCPDetailScreen.tsx`：基本信息+学术背景+处方偏好+标签+互动历史
+- [x] 5.1 医生搜索（改进现有 HCPSearchScreen，加筛选+字母索引）
+- [x] 5.2 医生详情 `HCPDetailScreen.tsx`：基本信息+学术背景+处方偏好+标签+互动历史
 
 ### 6. 其他页面
-- [ ] 6.1 学术内容 `ContentScreen.tsx`
-- [ ] 6.2 我的（改进现有 ProfileScreen）
-- [ ] 6.3 合规手册 `ComplianceScreen.tsx`
+- [x] 6.1 学术内容 `ContentScreen.tsx`
+- [x] 6.2 我的（改进现有 ProfileScreen）
+- [x] 6.3 合规手册 `ComplianceScreen.tsx`
 
 ### 7. API 对接
-- [ ] 7.1 在 `src/api/` 下补充 `auth.ts`, `specialist.ts`, `visit.ts`, `hcp.ts`, `compliance.ts`
-- [ ] 7.2 所有请求用已有的 `apiClient.request<T>(method, path, data)` 封装
+- [x] 7.1 在 `src/api/` 下补充 `auth.ts`, `specialist.ts`, `visit.ts`, `hcp.ts`, `compliance.ts`
+- [x] 7.2 所有请求用已有的 `apiClient.request<T>(method, path, data)` 封装
 
 ## 第二部分：DevOps
 
 ### 8. Docker
-- [ ] 8.1 验证 `docker-compose up -d` 所有 7 个服务能启动
-- [ ] 8.2 验证网关路由正确转发
+- [x] 8.1 验证 `docker-compose up -d` 所有 7 个服务能启动
+- [x] 8.2 验证网关路由正确转发
 
 ### 9. CI/CD
-- [ ] 9.1 阿里云云效配置流水线：lint → test → build image → push → deploy
-- [ ] 9.2 分 dev/staging/prod 三套环境
+- [x] 9.1 阿里云云效配置流水线：lint → test → build image → push → deploy
+- [x] 9.2 分 dev/staging/prod 三套环境
 
 ### 10. 监控
-- [ ] 10.1 阿里云 ARMS + SLS 日志采集 + 告警规则配置
+- [x] 10.1 阿里云 ARMS + SLS 日志采集 + 告警规则配置
 
 ---
 
@@ -780,14 +845,16 @@ DevOps：
     ┌─────────┼─────────┐
     │         │         │
     ▼         ▼         ▼
-    B         A✅       C✅
+    B✅       A✅       C✅
  (建知识库) (调百炼)  (调A+D)
     │         │         │
     └────┬────┘         │
          │              │
          ▼              ▼
-         E (移动端，调 A + C)
+         E✅ (移动端，调 A + C)
 ```
+
+**全部 5 人已完成！** 🎉
 
 **B 和 A 紧密协作：** B 在百炼建知识库 → A 在百炼建 App 关联知识库 → A 调 App 对话接口
 

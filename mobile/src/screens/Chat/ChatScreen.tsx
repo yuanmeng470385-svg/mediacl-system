@@ -1,0 +1,437 @@
+/**
+ * 数字专员对话页 - 核心交互页面
+ *
+ * 功能：气泡对话 / 引用来源卡片 / 证据等级 / 反馈收藏 / 语音输入 / 多轮对话
+ */
+import React, { useState, useRef, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
+import { useRoute, useNavigation } from '@react-navigation/native';
+import type { RouteProp } from '@react-navigation/native';
+import EvidenceBadge from '../../components/EvidenceBadge';
+import { specialistAPI } from '../../api/specialist';
+import { complianceAPI } from '../../api/compliance';
+import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import type { ChatScreenParams } from '../../navigation/types';
+
+type RouteType = RouteProp<{ Chat: ChatScreenParams }, 'Chat'>;
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  citations?: { title: string; url?: string }[];
+  evidenceLevel?: string;
+  blocked?: boolean;
+  requestId?: string;
+}
+
+export default function ChatScreen() {
+  const route = useRoute<RouteType>();
+  const navigation = useNavigation();
+  const { specialistId, specialistName } = route.params;
+
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: `你好！我是${specialistName}。有什么可以帮助你的？`,
+    },
+  ]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const flatListRef = useRef<FlatList>(null);
+
+  const handleSend = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+
+    // 合规预检
+    try {
+      const check = await complianceAPI.checkContent(text);
+      if (check.blocked) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now().toString(),
+            role: 'system',
+            content: `⚠️ 输入内容不合规：${check.violations.map((v) => v.description).join('；')}`,
+          },
+        ]);
+        return;
+      }
+    } catch {
+      // 合规检查失败不阻塞
+    }
+
+    const userMsg: Message = {
+      id: `u_${Date.now()}`,
+      role: 'user',
+      content: text,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const response = await specialistAPI.sendMessage(specialistId, {
+        question: text,
+        session_id: sessionId || undefined,
+      });
+
+      if (!sessionId && response.session_id) {
+        setSessionId(response.session_id);
+      }
+
+      const aiMsg: Message = {
+        id: response.request_id || `a_${Date.now()}`,
+        role: 'assistant',
+        content: response.blocked
+          ? '该问题建议直接咨询医学顾问。'
+          : response.answer,
+        citations: response.citations,
+        evidenceLevel: response.evidence_level,
+        blocked: response.blocked,
+        requestId: response.request_id,
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+    } catch (e: any) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err_${Date.now()}`,
+          role: 'assistant',
+          content: `抱歉，出错了：${e.message || '请稍后重试'}`,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }, [input, loading, specialistId, sessionId]);
+
+  const handleFeedback = (msg: Message, rating: 'like' | 'dislike') => {
+    if (!msg.requestId) return;
+    specialistAPI
+      .sendFeedback(specialistId, {
+        request_id: msg.requestId,
+        rating,
+      })
+      .then(() => {
+        Alert.alert('提示', rating === 'like' ? '感谢反馈！' : '我们会持续改进');
+      })
+      .catch(() => {});
+  };
+
+  const handleFavorite = (msg: Message) => {
+    if (!msg.requestId) return;
+    specialistAPI
+      .toggleFavorite(specialistId, msg.requestId, true)
+      .then(() => Alert.alert('提示', '已收藏'))
+      .catch(() => {});
+  };
+
+  const renderMessage = ({ item }: { item: Message }) => {
+    const isUser = item.role === 'user';
+    const isSystem = item.role === 'system';
+
+    if (isSystem) {
+      return (
+        <View style={styles.systemBubble}>
+          <Text style={styles.systemText}>{item.content}</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.msgWrapper}>
+        <View
+          style={[
+            styles.bubble,
+            isUser ? styles.userBubble : styles.aiBubble,
+          ]}
+        >
+          <Text
+            style={[
+              styles.bubbleText,
+              isUser ? styles.userText : styles.aiText,
+            ]}
+            selectable
+          >
+            {item.content}
+          </Text>
+
+          {/* 引用来源 */}
+          {!isUser && item.citations && item.citations.length > 0 && (
+            <View style={styles.citations}>
+              <Text style={styles.citationTitle}>📚 引用来源</Text>
+              {item.citations.map((c, i) => (
+                <View key={i} style={styles.citationItem}>
+                  <Text style={styles.citationIndex}>[{i + 1}]</Text>
+                  <Text style={styles.citationContent} numberOfLines={2}>
+                    {c.title}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* 证据等级 */}
+          {!isUser && item.evidenceLevel && (
+            <View style={styles.evidenceRow}>
+              <EvidenceBadge level={item.evidenceLevel} />
+            </View>
+          )}
+        </View>
+
+        {/* 操作按钮（仅 AI 回复） */}
+        {!isUser && !item.blocked && item.requestId && (
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => handleFeedback(item, 'like')}
+            >
+              <Text style={styles.actionIcon}>👍</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => handleFeedback(item, 'dislike')}
+            >
+              <Text style={styles.actionIcon}>👎</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={() => handleFavorite(item)}
+            >
+              <Text style={styles.actionIcon}>⭐</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
+    >
+      {/* 顶部栏 */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+        >
+          <Text style={styles.backText}>← 返回</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>{specialistName}</Text>
+        <View style={{ width: 60 }} />
+      </View>
+
+      {/* 消息列表 */}
+      <FlatList
+        ref={flatListRef}
+        data={messages}
+        renderItem={renderMessage}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.list}
+        onContentSizeChange={() =>
+          setTimeout(() => flatListRef.current?.scrollToEnd(), 100)
+        }
+        showsVerticalScrollIndicator={false}
+      />
+
+      {/* 输入区 */}
+      <View style={styles.inputBar}>
+        <TouchableOpacity style={styles.voiceBtn}>
+          <Text style={styles.voiceIcon}>🎤</Text>
+        </TouchableOpacity>
+        <TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="输入问题..."
+          placeholderTextColor={Colors.textHint}
+          multiline
+          maxLength={2000}
+          returnKeyType="send"
+          onSubmitEditing={handleSend}
+          blurOnSubmit={false}
+        />
+        <TouchableOpacity
+          style={[
+            styles.sendBtn,
+            (!input.trim() || loading) && styles.sendBtnDisabled,
+          ]}
+          onPress={handleSend}
+          disabled={!input.trim() || loading}
+          activeOpacity={0.7}
+        >
+          {loading ? (
+            <ActivityIndicator color={Colors.white} size="small" />
+          ) : (
+            <Text style={styles.sendText}>发送</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: Colors.background },
+  // 头部
+  header: {
+    backgroundColor: Colors.primary,
+    paddingTop: 50,
+    paddingBottom: 12,
+    paddingHorizontal: Spacing.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  backBtn: { padding: 4 },
+  backText: { color: Colors.textWhite, fontSize: FontSize.md },
+  headerTitle: {
+    color: Colors.textWhite,
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    flex: 1,
+    textAlign: 'center',
+  },
+  // 消息列表
+  list: { padding: Spacing.lg, paddingBottom: Spacing.sm },
+  msgWrapper: { marginBottom: Spacing.lg },
+  bubble: {
+    padding: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    maxWidth: '82%',
+  },
+  userBubble: {
+    alignSelf: 'flex-end',
+    backgroundColor: Colors.primary,
+    borderBottomRightRadius: 4,
+  },
+  aiBubble: {
+    alignSelf: 'flex-start',
+    backgroundColor: Colors.white,
+    borderBottomLeftRadius: 4,
+    ...Shadow.card,
+  },
+  bubbleText: { fontSize: FontSize.md, lineHeight: 22 },
+  userText: { color: Colors.textWhite },
+  aiText: { color: Colors.textPrimary },
+  // 系统消息
+  systemBubble: {
+    alignSelf: 'center',
+    backgroundColor: '#fef2f2',
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderRadius: BorderRadius.full,
+    marginBottom: Spacing.md,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  systemText: { color: Colors.danger, fontSize: FontSize.sm },
+  // 引用来源
+  citations: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.divider,
+  },
+  citationTitle: {
+    fontSize: FontSize.xs,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+    marginBottom: Spacing.sm,
+  },
+  citationItem: {
+    flexDirection: 'row',
+    marginBottom: 4,
+    gap: 4,
+  },
+  citationIndex: {
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    fontWeight: '600',
+    width: 20,
+  },
+  citationContent: {
+    fontSize: FontSize.xs,
+    color: Colors.textSecondary,
+    flex: 1,
+  },
+  evidenceRow: { marginTop: Spacing.sm },
+  // 操作按钮
+  actions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.xs,
+    marginLeft: Spacing.sm,
+  },
+  actionBtn: {
+    padding: 6,
+    borderRadius: BorderRadius.full,
+    backgroundColor: Colors.white,
+    ...Shadow.card,
+  },
+  actionIcon: { fontSize: 14 },
+  // 输入区
+  inputBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    padding: Spacing.sm,
+    backgroundColor: Colors.white,
+    borderTopWidth: 1,
+    borderTopColor: Colors.divider,
+    gap: Spacing.sm,
+  },
+  voiceBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceIcon: { fontSize: 20 },
+  input: {
+    flex: 1,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    fontSize: FontSize.md,
+    maxHeight: 100,
+    backgroundColor: Colors.background,
+    borderRadius: BorderRadius.xl,
+    color: Colors.textPrimary,
+  },
+  sendBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 10,
+    borderRadius: BorderRadius.xl,
+    justifyContent: 'center',
+    minWidth: 56,
+    alignItems: 'center',
+  },
+  sendBtnDisabled: {
+    backgroundColor: Colors.border,
+  },
+  sendText: {
+    color: Colors.textWhite,
+    fontSize: FontSize.sm,
+    fontWeight: '600',
+  },
+});

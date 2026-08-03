@@ -1,7 +1,7 @@
 /**
  * API 客户端 - 统一封装
  *
- * TODO: 替换为真实的 API 调用逻辑
+ * 所有后端请求通过网关 (gateway:8000) 访问
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -12,6 +12,14 @@ const API_BASE_URL = Platform.select({
   ios: 'http://localhost:8000',
   default: 'http://localhost:8000',
 });
+
+interface RequestOptions {
+  method: string;
+  path: string;
+  data?: any;
+  params?: Record<string, any>;  // GET 查询参数
+  timeout?: number;
+}
 
 class APIClient {
   private baseURL: string;
@@ -32,7 +40,16 @@ class APIClient {
     return this.token;
   }
 
-  async request<T>(method: string, path: string, data?: any): Promise<T> {
+  async clearToken(): Promise<void> {
+    this.token = null;
+    await AsyncStorage.removeItem('medagent_token');
+  }
+
+  async request<T>(
+    method: string,
+    path: string,
+    dataOrParams?: any
+  ): Promise<T> {
     const token = await this.getToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -40,30 +57,72 @@ class APIClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    // 生成 X-Request-ID
     headers['X-Request-ID'] = this.generateUUID();
 
-    const response = await fetch(`${this.baseURL}${path}`, {
-      method,
-      headers,
-      body: data ? JSON.stringify(data) : undefined,
-    });
+    // 构建 URL（GET 请求拼查询参数）
+    let url = `${this.baseURL}${path}`;
+    let body: string | undefined;
 
-    const result = await response.json();
-
-    if (result.code !== 0) {
-      throw new APIError(result.message, result.code);
+    if (method === 'GET' && dataOrParams) {
+      const params = new URLSearchParams();
+      Object.entries(dataOrParams).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          params.append(key, String(value));
+        }
+      });
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+    } else if (dataOrParams) {
+      body = JSON.stringify(dataOrParams);
     }
 
-    return result.data as T;
+    // 超时控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const result = await response.json();
+
+      if (result.code !== 0) {
+        throw new APIError(
+          result.message || '请求失败',
+          result.code || -1
+        );
+      }
+
+      return result.data as T;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error instanceof APIError) throw error;
+      if (error.name === 'AbortError') {
+        throw new APIError('请求超时，请检查网络连接', -1);
+      }
+      // 网络错误
+      throw new APIError(
+        error.message || '网络异常，请检查网络连接',
+        -1
+      );
+    }
   }
 
   private generateUUID(): string {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
+      /[xy]/g,
+      (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      }
+    );
   }
 }
 

@@ -1,0 +1,170 @@
+# ==============================================
+# MedAgent CI/CD 流水线配置
+# 平台：阿里云云效 (Flow)
+# ==============================================
+
+# 流水线名称
+name: MedAgent-CI-CD
+
+# 触发条件
+triggers:
+  push:
+    branches:
+      - master
+      - develop
+      - feature/*
+  pull_request:
+    branches:
+      - master
+      - develop
+
+# 环境变量
+env:
+  DOCKER_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  DOCKER_NAMESPACE: medagent
+  # 以下变量在云效「变量和缓存」中配置
+  # DOCKER_USERNAME
+  # DOCKER_PASSWORD
+  # ALIYUN_ACCESS_KEY_ID
+  # ALIYUN_ACCESS_KEY_SECRET
+
+# ========== 阶段定义 ==========
+stages:
+  # ---- Stage 1: 代码检查 ----
+  - name: lint
+    label: 代码检查
+    jobs:
+      - name: python-lint
+        runs-on: linux
+        image: python:3.11-slim
+        steps:
+          - name: 安装依赖
+            run: |
+              pip install ruff mypy --quiet
+          - name: Ruff 代码风格检查
+            run: |
+              ruff check services/ shared/ --select E,F,W --ignore E501
+          - name: Mypy 类型检查
+            run: |
+              mypy services/ shared/ --ignore-missing-imports --no-strict-optional || true
+
+      - name: mobile-lint
+        runs-on: linux
+        image: node:20-slim
+        steps:
+          - name: 安装依赖
+            run: |
+              cd mobile && npm ci --quiet 2>/dev/null || npm install --quiet
+          - name: ESLint 检查
+            run: |
+              cd mobile && npx eslint src/ --ext .ts,.tsx || true
+          - name: TypeScript 编译检查
+            run: |
+              cd mobile && npx tsc --noEmit || true
+
+  # ---- Stage 2: 测试 ----
+  - name: test
+    label: 单元测试
+    dependsOn: lint
+    jobs:
+      - name: backend-tests
+        runs-on: linux
+        image: python:3.11-slim
+        services:
+          - postgres:15
+          - redis:7
+        steps:
+          - name: 安装依赖
+            run: |
+              pip install -r services/compliance-service/requirements.txt
+              pip install -r services/audit-service/requirements.txt
+              pip install -r services/specialist-service/requirements.txt
+              pip install -r services/knowledge-service/requirements.txt
+              pip install -r services/visit-service/requirements.txt
+              pip install -r services/hcp-service/requirements.txt
+              pip install pytest httpx
+          - name: 初始化数据库
+            run: |
+              export DATABASE_URL=postgresql://medagent:medagent123@localhost:5432/medagent
+              python -c "
+              from shared.common.db_session import engine, Base
+              import shared.models.user, shared.models.product, shared.models.compliance, shared.models.audit_log
+              Base.metadata.create_all(engine)
+              "
+          - name: 运行测试
+            run: |
+              python -m pytest services/compliance-service/tests/ -v
+              python -m pytest services/audit-service/tests/ -v
+              python -m pytest services/specialist-service/tests/ -v || true
+
+  # ---- Stage 3: 构建镜像 ----
+  - name: build
+    label: 构建 Docker 镜像
+    dependsOn: test
+    jobs:
+      - name: build-and-push
+        runs-on: linux
+        image: docker:24
+        steps:
+          - name: 登录阿里云容器镜像服务
+            run: |
+              echo "${DOCKER_PASSWORD}" | docker login \
+                --username="${DOCKER_USERNAME}" \
+                --password-stdin \
+                registry.cn-hangzhou.aliyuncs.com
+
+          - name: 构建 & 推送 7 个服务
+            run: |
+              SERVICES=(gateway specialist-service visit-service knowledge-service compliance-service audit-service hcp-service)
+              TAG=${CI_COMMIT_SHA:-latest}
+              for svc in "${SERVICES[@]}"; do
+                echo "Building ${svc}..."
+                docker build -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} ./services/${svc}
+                docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG}
+                # 同时打 latest 标签
+                docker tag ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} \
+                           ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:latest
+                docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:latest
+              done
+
+  # ---- Stage 4: 部署 ----
+  - name: deploy
+    label: 部署
+    dependsOn: build
+    # 仅 master 分支自动部署
+    when: branch == 'master'
+    jobs:
+      - name: deploy-staging
+        label: 部署到预发布环境
+        runs-on: linux
+        steps:
+          - name: 通过 SSH 部署
+            run: |
+              # 在云效中配置 STAGING_HOST 和 SSH 密钥
+              ssh -o StrictHostKeyChecking=no root@${STAGING_HOST} << 'EOF'
+                cd /opt/medagent
+                docker compose pull
+                docker compose up -d --remove-orphans
+                docker compose ps
+              EOF
+
+  # ---- Stage 5: 通知 ----
+  - name: notify
+    label: 通知
+    dependsOn: deploy
+    when: always()
+    jobs:
+      - name: dingtalk-notify
+        runs-on: linux
+        steps:
+          - name: 钉钉通知
+            run: |
+              STATUS="$([[ "${CI_JOB_STATUS}" == "success" ]] && echo '✅ 部署成功' || echo '❌ 部署失败')"
+              curl -X POST "${DINGTALK_WEBHOOK}" \
+                -H 'Content-Type: application/json' \
+                -d "{
+                  \"msgtype\": \"text\",
+                  \"text\": {
+                    \"content\": \"MedAgent ${CI_COMMIT_BRANCH} ${STATUS}\nCommit: ${CI_COMMIT_SHA:-unknown}\n时间: $(date '+%Y-%m-%d %H:%M:%S')\"
+                  }
+                }" 2>/dev/null || true

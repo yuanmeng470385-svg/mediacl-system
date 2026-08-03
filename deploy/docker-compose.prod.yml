@@ -1,0 +1,163 @@
+# ==============================================
+# MedAgent 生产环境 docker-compose
+# 使用阿里云 ACR 镜像，不本地构建
+# ==============================================
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: medagent-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: medagent
+      POSTGRES_USER: ${DB_USER:-medagent}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-medagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: medagent-redis
+    restart: always
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  gateway:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/gateway:${IMAGE_TAG:-latest}
+    container_name: medagent-gateway
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  specialist-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/specialist-service:${IMAGE_TAG:-latest}
+    container_name: medagent-specialist
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  visit-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/visit-service:${IMAGE_TAG:-latest}
+    container_name: medagent-visit
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  knowledge-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/knowledge-service:${IMAGE_TAG:-latest}
+    container_name: medagent-knowledge
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  compliance-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/compliance-service:${IMAGE_TAG:-latest}
+    container_name: medagent-compliance
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"
+        max-file: "3"
+
+  audit-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/audit-service:${IMAGE_TAG:-latest}
+    container_name: medagent-audit
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  hcp-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/hcp-service:${IMAGE_TAG:-latest}
+    container_name: medagent-hcp
+    restart: always
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  redis_data:
