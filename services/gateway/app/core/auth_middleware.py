@@ -28,6 +28,10 @@ PUBLIC_PATHS = [
     "/docs",
     "/openapi.json",
     "/redoc",
+    # 服务间内部调用无需认证
+    "/api/v1/compliance/check",
+    "/api/v1/audit/log",
+    "/api/v1/knowledge/search",
 ]
 
 
