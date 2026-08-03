@@ -1,7 +1,8 @@
 # MedAgent 数字员工系统 · 5人任务分配清单
 
-> **版本：v3.1 · 2026-08-03**
+> **版本：v3.2 · 2026-08-03**
 > **重大架构决策：每个数字专员 = 一个阿里云百炼多模态交互开发套件 App。百炼 App 自带知识库（文档上传→解析→向量化→多模态检索），我们的系统负责合规审核、审计日志、业务编排。**
+> **v3.2 更新：C（陪访助手 + 医生管理）已完成，新增"C 已完成的工作（A/D/E 必读）"小节。**
 > **v3.1 更新：A（数字专员服务）已完成，新增"A 已完成的工作（B/C/E 必读）"小节。**
 
 ---
@@ -20,7 +21,7 @@
 └────┬──────────┬──────────┬──────────┬────────────┘
      │          │          │          │
 ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼──────────┐
-│  A✅    │ │   B    │ │   C    │ │  D (已完成)   │
+│  A✅    │ │   B    │ │  C✅   │ │  D (已完成)   │
 │ 专员服务│ │ 知识库 │ │ 陪访+  │ │ 合规+审计     │
 │ :8001  │ │ :8003  │ │ 医生   │ │ :8004/:8005   │
 │        │ │        │ │ :8002  │ │               │
@@ -55,7 +56,7 @@
 | D（组长） | 合规 + 审计 + 共享层 + 网关 | 8004/8005/8000 | Python FastAPI | ✅ 已完成 |
 | A | 数字专员服务 | 8001 | FastAPI + 百炼 App | ✅ 已完成 |
 | B | 知识库管理服务 | 8003 | FastAPI + 百炼 App 知识库 | 🔴 待开发 |
-| C | 陪访助手 + 医生管理 | 8002/8006 | FastAPI + 通义听悟 | 🔴 待开发 |
+| C | 陪访助手 + 医生管理 | 8002/8006 | FastAPI + 通义听悟 | ✅ 已完成 |
 | E | 移动端 + DevOps | — | React Native + Docker + CI/CD | 🔴 待开发 |
 
 ---
@@ -559,6 +560,49 @@ POST http://gateway:8000/api/v1/specialists/{id}/chat
 
 > **前置依赖：A 的数字专员对话接口（用于生成准备包）、D 的合规检查+审计日志接口**
 
+## ✅ 已完成（A/D/E 必读）
+
+C 的两个服务已全部实现（25 个测试全部通过），A/D/E 可以直接联调。
+
+**hcp-service (`:8006`) — 医生档案与画像：**
+- `app/models/hcp.py` — Hcp ORM（映射 hcps 表，to_dict 含所有字段）
+- `app/db/repositories/hcp_repo.py` — CRUD + 分页搜索（支持 name/hospital/department/title/region/status/tag 全维度筛选）+ 标签增删（去重）+ 批量导入（逐行创建，单行失败不阻塞）
+- `app/services/profile_generator.py` — 画像生成器：聚合互动历史 → 千问生成 JSON（学术画像/处方偏好/沟通建议/合规风险提示）；LLM 不可用时降级为基础数据聚合
+- `app/services/excel_parser.py` — Excel 批量导入解析（openpyxl，中文表头→模型字段映射，影响力中→英转换）
+- `app/services/audit_client.py` — 调 D 的审计日志（画像生成留痕）
+- `app/db/repositories/visit_interaction_repo.py` — 互动历史只读查询（同库直读 visit_records，表不存在时降级为空列表）
+- `app/api/hcps.py` — 9 个接口全部实现：列表(分页+筛选)/详情/画像(含AI降级)/互动历史/新增/编辑/批量导入Excel/添加标签/删除标签
+- 11 个单元测试（Excel 解析 4 + 仓库逻辑 5 + 画像降级 2）
+
+**visit-service (`:8002`) — 陪访助手全流程：**
+- `app/services/tingwu_client.py` — 通义听悟真实客户端（SDK 延迟导入、create_task + get_result 轮询、容错解析）+ TingwuMockClient（文本模拟，开发调试/测试用）
+- `app/services/specialist_client.py` / `compliance_client.py` / `audit_client.py` — 调 A/D 的三个客户端（60s 超时、fail-open/fail-silent 降级策略）
+- `app/services/qwen_client.py` — 千问直调（异议识别语义分析，qwen-plus 默认）
+- `app/core/objection_detector.py` — 异议识别器（两级：规则层 5 类正则 + 语义层千问分析兴趣点/情感；语义不可用自动降级为仅规则层）
+- `app/models/visit_record.py` + `app/db/repositories/visit_repo.py` — 数据层（status 派生自 ai_summary 是否为空）
+- `app/core/visit_manager.py` — 核心编排（770行）：
+  - `prepare_visit()` — 获取医生画像+历史 → 调 A chat 生成准备包（推荐话题/红线提醒/开场白/跟进项），A 不可用时降级
+  - `start_visit()` — 创建拜访记录 + 审计日志
+  - `process_transcript()` — 听悟转写（或 text 直传）+ 合规实时检查(D) + 异议识别 + 应对话术建议（按异议类型匹配模板）
+  - `end_visit()` — 调 A 生成结构化记录（摘要/关键点/兴趣/异议/情感/下次计划）→ AI 输出合规审核(D) → 审计日志；合规拦截时用模板话术替换
+  - `follow_up()` — 调 A 生成跟进计划
+- `app/api/visits.py` — 8 个接口全部实现：pre-visit/start/{id}/transcript/{id}/end/{id}/follow-up/列表/详情/编辑
+- 14 个测试（异议识别 8 + 完整流程 6：准备包降级/开始/转写+违规检测/结束生成/拦截替换/跟进建议）
+
+**C 不需要百炼 App** — 准备包/总结/跟进建议全部走 A 的 chat 接口，百炼由 A 内部消化。C 自己的 AI 能力（异议语义分析/画像生成）走千问直调（DASHSCOPE_API_KEY 全员通用）。
+
+**已知限制（后续版本处理）：**
+- 异议识别的应对话术为规则层模板，尚未引入产品级知识库定制
+- 医生画像每次调用实时生成（无缓存），高频场景可加 Redis 缓存
+- visit_manager 同库直读 hcps/digital_specialists 表（RO），不如走 API 解耦，但避免了循环依赖
+- 通义听悟真实调用未集成测试（需可访问的录音 URL）
+- 拜访中合规实时检查为后处理模式（转写完成后整段检查），非流式逐句检查
+
+**待办（不影响 E 联调）：**
+- 与 A 联调（需要 A 侧完成 1.1-1.6 百炼 App 创建）
+- 与 D 联调合规审核+审计日志端到端验证（D 已完成，启动即联调）
+- 通义听悟真实转写端到端验证（需 alibabacloud_tingwu20230930 SDK 和一端可访问的录音 URL）
+
 ## AI 指导摘要（喂给 AI）
 
 ```
@@ -590,72 +634,65 @@ hcp-service：医生档案CRUD、画像、标签、批量导入
 
 ### 1. 通义听悟客户端
 
-- [ ] 1.1 写 `app/services/tingwu_client.py`
-  - `create_task(audio_url)` → task_id
-  - `get_result(task_id)` → 转写文本 + 说话人分离
-  - 环境变量：TINGWU_APP_KEY, TINGWU_ACCESS_TOKEN
-- [ ] 1.2 写 mock 版本（用文本模拟，开发调试用）
+- [x] 1.1 写 `app/services/tingwu_client.py`（TingwuClient + TingwuMockClient）
+- [x] 1.2 写 mock 版本（TingwuMockClient.transcribe 文本模拟）
 
 ### 2. 外部服务客户端
 
-- [ ] 2.1 写 `app/services/specialist_client.py`（调 A，地址 `http://gateway:8000/api/v1/specialists/{id}/chat`）
-- [ ] 2.2 写 `app/services/compliance_client.py`（调 D，参考 A 任务里的写法）
-- [ ] 2.3 写 `app/services/audit_client.py`（调 D，参考 A 任务里的写法）
+- [x] 2.1 写 `app/services/specialist_client.py`（调 A，60s 超时，A 不可用时降级）
+- [x] 2.2 写 `app/services/compliance_client.py`（调 D，fail-open 安全放行）
+- [x] 2.3 写 `app/services/audit_client.py`（调 D，fail-silent 不阻塞业务）
 
 ### 3. 核心业务
 
-- [ ] 3.1 写 `app/core/visit_manager.py`（参考完整方案 8.2）：
-  - `prepare_visit(hcp_id, user_id, product_id)` → 调 A 生成准备包
-  - `start_visit(hcp_id, user_id, product_id)` → 创建拜访记录
-  - `process_transcript(visit_id, audio_url)` → 转写+合规检查+异议识别
-  - `end_visit(visit_id, full_transcript)` → 调 A 生成记录+审计日志
+- [x] 3.1 写 `app/core/visit_manager.py`（已实现 5 方法：prepare / start / process_transcript / end_visit / follow_up）
 
 ### 4. 数据层
 
-- [ ] 4.1 写 `app/models/visit_record.py` → ORM 映射 `visit_records` 表
-- [ ] 4.2 写 `app/db/repositories/visit_repo.py`
+- [x] 4.1 写 `app/models/visit_record.py` → ORM 映射 `visit_records` 表（status 派生自 ai_summary）
+- [x] 4.2 写 `app/db/repositories/visit_repo.py`（分页列表含日期/状态筛选）
 
 ### 5. API 路由（8 个）
 
-- [ ] 5.1 `POST /api/v1/visits/pre-visit` — 拜访前准备包
-- [ ] 5.2 `POST /api/v1/visits/start` — 开始拜访
-- [ ] 5.3 `POST /api/v1/visits/{id}/transcript` — 上传实时转写
-- [ ] 5.4 `POST /api/v1/visits/{id}/end` — 结束拜访，生成记录
-- [ ] 5.5 `GET /api/v1/visits/{id}` — 详情
-- [ ] 5.6 `GET /api/v1/visits` — 列表
-- [ ] 5.7 `PUT /api/v1/visits/{id}` — 编辑
-- [ ] 5.8 `POST /api/v1/visits/{id}/follow-up` — 跟进建议
+- [x] 5.1 `POST /api/v1/visits/pre-visit` — 拜访前准备包
+- [x] 5.2 `POST /api/v1/visits/start` — 开始拜访
+- [x] 5.3 `POST /api/v1/visits/{id}/transcript` — 实时转写（audio_url 或 text 直传）
+- [x] 5.4 `POST /api/v1/visits/{id}/end` — 结束拜访，生成记录
+- [x] 5.5 `GET /api/v1/visits/{id}` — 详情
+- [x] 5.6 `GET /api/v1/visits` — 列表（分页+user/hcp/product/status/日期筛选）
+- [x] 5.7 `PUT /api/v1/visits/{id}` — 编辑
+- [x] 5.8 `POST /api/v1/visits/{id}/follow-up` — 跟进建议
 
 ## 第二部分：医生管理（hcp-service:8006）
 
 ### 6. 数据层
 
-- [ ] 6.1 写 `app/models/hcp.py` → ORM 映射 `hcps` 表
-- [ ] 6.2 写 `app/db/repositories/hcp_repo.py`
+- [x] 6.1 写 `app/models/hcp.py` → ORM 映射 `hcps` 表（15 字段 + to_dict）
+- [x] 6.2 写 `app/db/repositories/hcp_repo.py`（全维度筛选 + 标签管理 + 批量导入）
 
 ### 7. 业务逻辑
 
-- [ ] 7.1 医生画像生成/更新（聚合互动历史 + AI）
-- [ ] 7.2 医生搜索（姓名/医院/科室/标签）
-- [ ] 7.3 标签管理
-- [ ] 7.4 批量导入（Excel → openpyxl 解析）
+- [x] 7.1 医生画像生成/更新（聚合互动历史 + 千问 → LLM 不可用时降级基础数据聚合）
+- [x] 7.2 医生搜索（姓名/医院/科室/职称/区域/状态/标签 全维度筛选）
+- [x] 7.3 标签管理（add_tags/remove_tags，去重，保留原标签）
+- [x] 7.4 批量导入（Excel → openpyxl 解析 → 逐行创建，单行失败不阻塞）
 
 ### 8. API 路由（9 个）
 
-- [ ] 8.1 `GET /api/v1/hcps` — 列表（分页+筛选）
-- [ ] 8.2 `GET /api/v1/hcps/{id}` — 详情
-- [ ] 8.3 `GET /api/v1/hcps/{id}/profile` — 画像
-- [ ] 8.4 `GET /api/v1/hcps/{id}/interactions` — 互动历史
-- [ ] 8.5 `POST /api/v1/hcps` — 新增
-- [ ] 8.6 `PUT /api/v1/hcps/{id}` — 编辑
-- [ ] 8.7 `POST /api/v1/hcps/batch-import` — 批量导入
-- [ ] 8.8 `POST /api/v1/hcps/{id}/tags` — 添加标签
-- [ ] 8.9 `DELETE /api/v1/hcps/{id}/tags` — 删除标签
+- [x] 8.1 `GET /api/v1/hcps` — 列表（分页+name/hospital/department/title/region/status/tag 7 维筛选）
+- [x] 8.2 `GET /api/v1/hcps/{id}` — 详情
+- [x] 8.3 `GET /api/v1/hcps/{id}/profile` — 画像（AI 含降级 + 审计留痕）
+- [x] 8.4 `GET /api/v1/hcps/{id}/interactions` — 互动历史（同库读 visit_records）
+- [x] 8.5 `POST /api/v1/hcps` — 新增
+- [x] 8.6 `PUT /api/v1/hcps/{id}` — 编辑（仅更新传入字段）
+- [x] 8.7 `POST /api/v1/hcps/batch-import` — 批量导入（Excel，返回成功数+失败明细）
+- [x] 8.8 `POST /api/v1/hcps/{id}/tags` — 添加标签（去重）
+- [x] 8.9 `DELETE /api/v1/hcps/{id}/tags` — 删除标签
 
 ### 9. main.py + 测试
 
-- [ ] 9.1 两个服务均按标准模板更新 main.py
-- [ ] 9.2 集成测试：完整拜访流程（准备→开始→转写→结束）
+- [x] 9.1 两个服务均按标准模板更新 main.py（register_exception_handlers + 路由挂载 + CORS）
+- [x] 9.2 测试：hcp 11 通过 + visit 14 通过（异议识别 8 + 完整流程 6），共 25 通过
 
 ---
 
@@ -743,7 +780,7 @@ DevOps：
     ┌─────────┼─────────┐
     │         │         │
     ▼         ▼         ▼
-    B         A✅       C
+    B         A✅       C✅
  (建知识库) (调百炼)  (调A+D)
     │         │         │
     └────┬────┘         │
