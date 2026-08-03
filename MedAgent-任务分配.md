@@ -1,7 +1,8 @@
 # MedAgent 数字员工系统 · 5人任务分配清单
 
-> **版本：v3.0 · 2026-08-03**
+> **版本：v3.1 · 2026-08-03**
 > **重大架构决策：每个数字专员 = 一个阿里云百炼多模态交互开发套件 App。百炼 App 自带知识库（文档上传→解析→向量化→多模态检索），我们的系统负责合规审核、审计日志、业务编排。**
+> **v3.1 更新：A（数字专员服务）已完成，新增"A 已完成的工作（B/C/E 必读）"小节。**
 
 ---
 
@@ -19,7 +20,7 @@
 └────┬──────────┬──────────┬──────────┬────────────┘
      │          │          │          │
 ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼──────────┐
-│  A     │ │   B    │ │   C    │ │  D (已完成)   │
+│  A✅    │ │   B    │ │   C    │ │  D (已完成)   │
 │ 专员服务│ │ 知识库 │ │ 陪访+  │ │ 合规+审计     │
 │ :8001  │ │ :8003  │ │ 医生   │ │ :8004/:8005   │
 │        │ │        │ │ :8002  │ │               │
@@ -52,7 +53,7 @@
 | 代号 | 负责模块 | 端口 | 核心技术 | 状态 |
 |------|---------|------|---------|------|
 | D（组长） | 合规 + 审计 + 共享层 + 网关 | 8004/8005/8000 | Python FastAPI | ✅ 已完成 |
-| A | 数字专员服务 | 8001 | FastAPI + 百炼 App | 🔴 待开发 |
+| A | 数字专员服务 | 8001 | FastAPI + 百炼 App | ✅ 已完成 |
 | B | 知识库管理服务 | 8003 | FastAPI + 百炼 App 知识库 | 🔴 待开发 |
 | C | 陪访助手 + 医生管理 | 8002/8006 | FastAPI + 通义听悟 | 🔴 待开发 |
 | E | 移动端 + DevOps | — | React Native + Docker + CI/CD | 🔴 待开发 |
@@ -212,6 +213,36 @@ if __name__ == "__main__":
 > **核心引擎。每个数字专员 = 一个百炼多模态交互开发套件 App。**
 > **前置依赖：** B 创建并配置好的百炼 App（含知识库）
 
+## ✅ 已完成（B/C/E 必读）
+
+specialist-service 已实现（commit `114907d`），B/C/E 可以直接联调。
+
+**已实现：**
+- `app/services/bailian_client.py` — 百炼多模态交互 **WebSocket** 客户端（Connect → Start → Listening → RequestToRespond → Stop，支持 dialog_id 续传）
+- `app/services/qwen_client.py` — 通义千问直调（百炼不可用时的降级方案）
+- `app/services/compliance_client.py` / `audit_client.py` — 调 D 的合规检查 + 审计日志（失败不阻塞业务）
+- `app/core/answer_generator.py` — 完整流水线：合规预检 → 百炼生成 → 合规审核答案 → 审计日志 → 返回 `{answer, evidence_level, session_id, request_id, latency_ms, blocked}`
+- `app/api/specialists.py` — 7 个接口：专员列表/详情、`chat`（核心）、会话历史、使用统计、反馈、收藏
+- `app/main.py` — 标准模板（异常处理器 + CORS + JWT）
+- `tests/eval_specialist.py` + `tests/eval_sets/oncology_v1.json` — 24 条评估用例（覆盖 R001-R007 全部规则），冒烟验证通过
+
+**C 联调方式（生成准备包/拜访总结）：**
+```bash
+POST http://gateway:8000/api/v1/specialists/{id}/chat
+{"question": "为张主任生成拜访准备包", "session_id": null}
+→ {"code":0, "data":{"answer":"...", "blocked":false, ...}}
+```
+
+**已知限制（后续版本处理）：**
+- `citations` 暂返回空数组（百炼未解析独立引用，后续从 RespondingContent.extra_info 解析）
+- `feedback` / `favorite` 仅记录日志，未入库
+- 数据层未建独立 repo 类（任务 3.4/3.5），API 直接内联 SQLAlchemy query
+
+**待办（不影响 B/C/E 联调）：**
+- 1.1-1.6 百炼控制台创建 App（每产品一个），App ID 写入 `digital_specialists.bailian_app_id`
+- 7.2 真实评估：配好 App 后跑 `python tests/eval_specialist.py --app-id <你的App ID>`，目标通过率 ≥ 80%
+- 7.3 与 D 联调合规+审计的端到端验证
+
 ## AI 指导摘要（喂给 AI）
 
 ```
@@ -268,7 +299,7 @@ if __name__ == "__main__":
 
 ### 第 2 步：外部服务客户端
 
-- [ ] 2.1 写 `app/services/bailian_client.py`
+- [x] 2.1 写 `app/services/bailian_client.py`（已实现为 WebSocket 多模态交互客户端）
   ```python
   class BailianClient:
       def __init__(self):
@@ -283,10 +314,10 @@ if __name__ == "__main__":
               payload["input"]["session_id"] = session_id
           # ... 含超时(30s)、异常处理、百炼不可用时的降级方案
   ```
-- [ ] 2.2 写 `app/services/qwen_client.py`（通义千问直调，百炼不可用时的降级方案）
+- [x] 2.2 写 `app/services/qwen_client.py`（通义千问直调，百炼不可用时的降级方案）
   - OpenAI 兼容接口：`base_url=https://dashscope.aliyuncs.com/compatible-mode/v1`
   - `chat(messages, model, temperature, max_tokens)` 和 `chat_stream()`
-- [ ] 2.3 写 `app/services/compliance_client.py`
+- [x] 2.3 写 `app/services/compliance_client.py`
   ```python
   async def check(content: str, context: dict) -> dict:
       async with httpx.AsyncClient() as client:
@@ -296,19 +327,19 @@ if __name__ == "__main__":
           )
           return resp.json()["data"]
   ```
-- [ ] 2.4 写 `app/services/audit_client.py`（同理，调 `http://gateway:8000/api/v1/audit/log`）
+- [x] 2.4 写 `app/services/audit_client.py`（同理，调 `http://gateway:8000/api/v1/audit/log`）
 
 ### 第 3 步：数据层
 
-- [ ] 3.1 用 `shared/common/db_session.py` 的 `get_db`（不需要自己写）
-- [ ] 3.2 写 `app/models/specialist.py` → ORM 映射 `digital_specialists` 表（id, name, product_id, persona, knowledge_scope, compliance_level, bailian_app_id, prompt_version, status）
-- [ ] 3.3 写 `app/models/conversation.py` → ORM 映射 `conversations` 表（id, user_id, specialist_id, session_id, role, content, citations, compliance_result, tokens_used, latency_ms）
-- [ ] 3.4 写 `app/db/repositories/specialist_repo.py`（list_all, get_by_id, create, update）
-- [ ] 3.5 写 `app/db/repositories/conversation_repo.py`（save_message, get_session_history）
+- [x] 3.1 用 `shared/common/db_session.py` 的 `get_db`（不需要自己写）
+- [x] 3.2 写 `app/models/specialist.py` → ORM 映射 `digital_specialists` 表（id, name, product_id, persona, knowledge_scope, compliance_level, bailian_app_id, prompt_version, status）
+- [x] 3.3 写 `app/models/conversation.py` → ORM 映射 `conversations` 表（id, user_id, specialist_id, session_id, role, content, citations, compliance_result, tokens_used, latency_ms）
+- [ ] 3.4 写 `app/db/repositories/specialist_repo.py`（list_all, get_by_id, create, update）— 未实现，API 直接内联 SQLAlchemy query
+- [ ] 3.5 写 `app/db/repositories/conversation_repo.py`（save_message, get_session_history）— 未实现，API 直接内联 SQLAlchemy query
 
 ### 第 4 步：核心业务——答案生成器
 
-- [ ] 4.1 写 `app/core/answer_generator.py`：
+- [x] 4.1 写 `app/core/answer_generator.py`：
   ```python
   class AnswerGenerator:
       def __init__(self):
@@ -360,28 +391,28 @@ if __name__ == "__main__":
 
 ### 第 5 步：API 路由
 
-- [ ] 5.1 `GET /api/v1/specialists` — 专员列表（返回 id, name, product_id, status）
-- [ ] 5.2 `GET /api/v1/specialists/{id}` — 专员详情
-- [ ] 5.3 `POST /api/v1/specialists/{id}/chat` — **核心接口**
+- [x] 5.1 `GET /api/v1/specialists` — 专员列表（返回 id, name, product_id, status）
+- [x] 5.2 `GET /api/v1/specialists/{id}` — 专员详情
+- [x] 5.3 `POST /api/v1/specialists/{id}/chat` — **核心接口**
   ```json
   Request:  {"question": "肺癌用药注意事项", "session_id": "可选"}
   Response: {"code":0, "data":{"answer":"...", "citations":[{"title":"...","url":"..."}], "evidence_level":"B", "session_id":"...", "latency_ms":1234, "blocked":false}}
   ```
-- [ ] 5.4 `GET /api/v1/conversations/{session_id}` — 会话历史
-- [ ] 5.5 `GET /api/v1/specialists/{id}/stats` — 使用统计
-- [ ] 5.6 `POST /api/v1/specialists/{id}/feedback` — 点赞/点踩（记录到 DB）
-- [ ] 5.7 `POST /api/v1/specialists/{id}/favorite` — 收藏/取消收藏
-- [ ] 5.8 每个路由加 `Depends(get_current_user)` + 全局异常处理
+- [x] 5.4 `GET /api/v1/conversations/{session_id}` — 会话历史
+- [x] 5.5 `GET /api/v1/specialists/{id}/stats` — 使用统计
+- [x] 5.6 `POST /api/v1/specialists/{id}/feedback` — 点赞/点踩（记录日志，未入库，见已知限制）
+- [x] 5.7 `POST /api/v1/specialists/{id}/favorite` — 收藏/取消收藏（记录日志，未入库，见已知限制）
+- [x] 5.8 每个路由加 `Depends(get_current_user)` + 全局异常处理
 
 ### 第 6 步：更新 main.py
 
-- [ ] 6.1 按标准模板更新 `app/main.py`：挂载路由 + 注册异常处理器 + CORS
+- [x] 6.1 按标准模板更新 `app/main.py`：挂载路由 + 注册异常处理器 + CORS
 
 ### 第 7 步：测试
 
-- [ ] 7.1 写 `tests/eval_specialist.py`（参考完整方案 9.4，≥20 条评估用例）
-- [ ] 7.2 评估目标：通过率 ≥ 80%
-- [ ] 7.3 与 D 联调合规+审计 → 已验证通过
+- [x] 7.1 写 `tests/eval_specialist.py` + `tests/eval_sets/oncology_v1.json`（24 条评估用例，冒烟验证通过）
+- [ ] 7.2 评估目标：通过率 ≥ 80%（需百炼 App 配置完成后跑真实评估）
+- [ ] 7.3 与 D 联调合规+审计 → 端到端验证（待真实评估一并验证）
 - [ ] 7.4 与 E 联调移动端对话接口
 
 ---
@@ -712,7 +743,7 @@ DevOps：
     ┌─────────┼─────────┐
     │         │         │
     ▼         ▼         ▼
-    B         A         C
+    B         A✅       C
  (建知识库) (调百炼)  (调A+D)
     │         │         │
     └────┬────┘         │
