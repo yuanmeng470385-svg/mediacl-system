@@ -1,0 +1,98 @@
+"""异议识别器 — 拜访中实时识别医生异议
+
+两级识别：
+  1. 规则层（正则，方案 8.2）：价格/疗效/副作用/竞品/拖延 五类常见异议
+  2. 语义层（通义千问）：分析整段转写识别规则未覆盖的异议 + 兴趣点 + 情感
+     （未配置 DASHSCOPE_API_KEY 或调用失败时自动降级为仅规则层）
+"""
+import json
+import re
+import logging
+from typing import Dict, List
+
+from app.services.qwen_client import QwenClient
+
+logger = logging.getLogger(__name__)
+
+# 规则层异议模式（按类型分组）
+OBJECTION_PATTERNS = {
+    "price": [r"价格.{0,4}贵", r"贵了", r"预算", r"性价比", r"太贵"],
+    "efficacy": [r"不太.{0,6}效果", r"没.{0,3}效果", r"效果.{0,3}一般", r"不管用"],
+    "safety": [r"担心.{0,8}副作用", r"副作用", r"不良反应", r"安全性", r"耐药"],
+    "competition": [r"用.{0,6}药", r"别家", r"竞品", r"替代.{0,2}方案", r"同类"],
+    "deferral": [r"再考虑", r"商量", r"下次再说", r"再说吧", r"考虑考虑"],
+}
+
+_SEMANTIC_PROMPT = """你是医药销售陪访助手。分析以下拜访对话中医生表达的异议、兴趣点与整体情感。
+
+对话：
+{transcript}
+
+严格输出 JSON（不要 markdown 代码块）：
+{{
+  "objections": [{{"type": "price|efficacy|safety|competition|deferral|other", "text": "异议原句"}}],
+  "interests": ["医生感兴趣的点"],
+  "sentiment": "positive|neutral|negative"
+}}
+没有异议则 objections 为空数组。"""
+
+
+class ObjectionDetector:
+    """异议识别器"""
+
+    def __init__(self, qwen: QwenClient = None):
+        self.qwen = qwen or QwenClient()
+
+    def detect(self, text: str) -> Dict:
+        """识别异议（规则 + 语义），返回 {"objections": [...], "interests": [...], "sentiment": "...", "method": "rules|rules+semantic"}"""
+        rule_objections = self._rule_detect(text)
+        semantic = self._semantic_detect(text)
+
+        if semantic:
+            # 合并：规则层命中 + 语义层补充（按原文去重）
+            seen = {o["text"] for o in rule_objections}
+            for obj in semantic.get("objections", []):
+                if obj["text"] not in seen:
+                    rule_objections.append(obj)
+                    seen.add(obj["text"])
+            return {
+                "objections": rule_objections,
+                "interests": semantic.get("interests", []),
+                "sentiment": semantic.get("sentiment", "neutral"),
+                "method": "rules+semantic",
+            }
+        return {"objections": rule_objections, "interests": [], "sentiment": "neutral", "method": "rules"}
+
+    def _rule_detect(self, text: str) -> List[Dict]:
+        objections = []
+        for otype, patterns in OBJECTION_PATTERNS.items():
+            for p in patterns:
+                for m in re.finditer(p, text):
+                    # 截取命中句段作为异议内容
+                    start = max(0, m.start() - 15)
+                    segment = text[start:m.end() + 15].strip()
+                    objections.append({"type": otype, "text": segment})
+                    break  # 同类型只取第一条
+        return objections
+
+    def _semantic_detect(self, text: str) -> Dict:
+        if not text.strip():
+            return {}
+        try:
+            resp = self.qwen.chat(
+                messages=[{"role": "user", "content": _SEMANTIC_PROMPT.format(transcript=text[:3000])}],
+                max_tokens=600,
+            )
+            content = resp["content"].strip()
+            if content.startswith("```"):
+                content = content.strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+            result = json.loads(content)
+            result["objections"] = result.get("objections", [])
+            result["interests"] = result.get("interests", [])
+            result["sentiment"] = result.get("sentiment", "neutral")
+            return result
+        except Exception as e:
+            logger.info(f"语义异议识别不可用，降级为规则识别: {e}")
+            return {}
