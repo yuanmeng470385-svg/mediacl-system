@@ -89,17 +89,13 @@ export default function VisitEndScreen() {
     );
   }
 
-  const sentimentEmoji =
-    summary?.sentiment === 'positive'
-      ? '😊'
-      : summary?.sentiment === 'negative'
-      ? '😔'
-      : '😐';
+  const sentimentColor =
+    summary?.sentiment === 'positive' ? Colors.success
+      : summary?.sentiment === 'negative' ? Colors.danger
+      : Colors.textSecondary;
   const sentimentLabel =
-    summary?.sentiment === 'positive'
-      ? '积极'
-      : summary?.sentiment === 'negative'
-      ? '消极'
+    summary?.sentiment === 'positive' ? '积极'
+      : summary?.sentiment === 'negative' ? '消极'
       : '中性';
 
   return (
@@ -117,7 +113,7 @@ export default function VisitEndScreen() {
         {/* 情感判断 */}
         <View style={[styles.card, Shadow.card]}>
           <View style={styles.sentimentRow}>
-            <Text style={styles.sentimentEmoji}>{sentimentEmoji}</Text>
+            <View style={[styles.sentimentDot, { backgroundColor: sentimentColor }]} />
             <View>
               <Text style={styles.sentimentLabel}>
                 整体氛围：{sentimentLabel}
@@ -249,7 +245,7 @@ const styles = StyleSheet.create({
   },
   // 情感
   sentimentRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg },
-  sentimentEmoji: { fontSize: 40 },
+  sentimentDot: { width: 32, height: 32, borderRadius: 16 },
   sentimentLabel: { fontSize: FontSize.lg, fontWeight: '600', color: Colors.textPrimary },
   sentimentHint: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: 2 },
   // 摘要

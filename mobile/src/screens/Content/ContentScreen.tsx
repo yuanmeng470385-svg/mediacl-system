@@ -2,6 +2,8 @@
  * 学术内容页 - 文献/指南/说明书浏览
  */
 import React, { useState } from 'react';
+import Icon from '../../components/Icon';
+import { ActionIcons } from '../../components/Icon';
 import {
   View,
   Text,
@@ -48,10 +50,10 @@ const MOCK_CONTENT: ContentItem[] = [
 ];
 
 const typeLabels: Record<string, { icon: string; label: string }> = {
-  literature: { icon: '📄', label: '文献' },
-  guideline: { icon: '📋', label: '指南' },
-  manual: { icon: '📘', label: '说明书' },
-  news: { icon: '📰', label: '资讯' },
+  literature: { icon: 'file-document-outline', label: '文献' },
+  guideline: { icon: 'clipboard-text-outline', label: '指南' },
+  manual: { icon: 'book-open-page-variant-outline', label: '说明书' },
+  news: { icon: 'newspaper-variant-outline', label: '资讯' },
 };
 
 const tabs = ['全部', '文献', '指南', '说明书'];
@@ -71,7 +73,7 @@ export default function ContentScreen() {
   });
 
   const renderItem = ({ item }: { item: ContentItem }) => {
-    const type = typeLabels[item.type] || { icon: '📄', label: item.type };
+    const type = typeLabels[item.type] || { icon: 'file-document-outline', label: item.type };
 
     return (
       <TouchableOpacity style={[styles.card, Shadow.card]} activeOpacity={0.7}>
@@ -111,7 +113,7 @@ export default function ContentScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>学术内容</Text>
         <View style={styles.searchRow}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Icon name={ActionIcons.search} size={18} color={Colors.textHint} />
           <TextInput
             style={styles.searchInput}
             placeholder="搜索学术内容..."
@@ -149,7 +151,7 @@ export default function ContentScreen() {
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           <EmptyState
-            icon="📚"
+            icon="book-open-page-variant-outline"
             title="暂无学术内容"
             description="知识库上线后将展示医学文献和指南"
           />

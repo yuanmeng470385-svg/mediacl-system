@@ -14,6 +14,8 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import EmptyState from '../../components/EmptyState';
+import Icon from '../../components/Icon';
+import { ActionIcons } from '../../components/Icon';
 import { specialistAPI } from '../../api/specialist';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { DigitalSpecialist } from '../../types';
@@ -21,7 +23,7 @@ import type { RootStackParamList } from '../../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-const avatarColors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#22c55e'];
+const avatarColors = ['#0D3B66', '#1565C0', '#00ACC1', '#2E7D32', '#C62828'];
 
 export default function SpecialistListScreen() {
   const navigation = useNavigation<Nav>();
@@ -191,7 +193,7 @@ export default function SpecialistListScreen() {
         }
         ListEmptyComponent={
           <EmptyState
-            icon="🤖"
+            icon="robot-outline"
             title="暂无数字专员"
             description="请联系管理员在百炼控制台创建数字专员 App"
           />

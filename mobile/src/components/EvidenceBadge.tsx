@@ -11,10 +11,10 @@ interface EvidenceBadgeProps {
 }
 
 const levelConfig: Record<string, { color: string; bg: string; label: string }> = {
-  A: { color: Colors.evidenceA, bg: '#dcfce7', label: 'A 级证据' },
-  B: { color: Colors.evidenceB, bg: '#dbeafe', label: 'B 级证据' },
-  C: { color: Colors.evidenceC, bg: '#fef3c7', label: 'C 级证据' },
-  D: { color: Colors.evidenceD, bg: '#fee2e2', label: 'D 级证据' },
+  A: { color: Colors.evidenceA, bg: Colors.successLight, label: 'A 级证据' },
+  B: { color: Colors.evidenceB, bg: Colors.primarySurface, label: 'B 级证据' },
+  C: { color: Colors.evidenceC, bg: Colors.warningLight, label: 'C 级证据' },
+  D: { color: Colors.evidenceD, bg: Colors.dangerLight, label: 'D 级证据' },
 };
 
 export default function EvidenceBadge({
@@ -23,7 +23,7 @@ export default function EvidenceBadge({
 }: EvidenceBadgeProps) {
   const config = levelConfig[level] || {
     color: Colors.textHint,
-    bg: Colors.background,
+    bg: Colors.border,
     label: `${level} 级`,
   };
 
@@ -56,8 +56,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   dot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
   },
   text: {

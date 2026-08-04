@@ -63,12 +63,11 @@ export default function ProgressRing({
       </View>
       {/* 中心文字 */}
       <View style={styles.center}>
-        <Text style={[styles.number, { color: isComplete ? Colors.success : Colors.primary }]}>
-          {completed}/{total}
+        <Text style={[styles.number, { color: isComplete ? Colors.success : Colors.accent }]}>
+          {completed}
+          <Text style={{ color: Colors.textHint, fontSize: FontSize.md }}>/{total}</Text>
         </Text>
-        {percentage > 0 && (
-          <Text style={styles.percent}>{percentage}%</Text>
-        )}
+        <Text style={styles.percent}>{percentage}%</Text>
         <Text style={styles.label}>{label}</Text>
       </View>
     </View>

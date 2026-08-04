@@ -15,6 +15,8 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import EmptyState from '../../components/EmptyState';
+import Icon from '../../components/Icon';
+import { ActionIcons } from '../../components/Icon';
 import { hcpAPI } from '../../api/hcp';
 import { visitAPI } from '../../api/visit';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -91,7 +93,7 @@ export default function HCPDetailScreen() {
   if (!hcp) {
     return (
       <EmptyState
-        icon="👨‍⚕️"
+        icon="doctor"
         title="医生不存在"
         description="该医生信息可能已被删除"
       />
@@ -103,7 +105,7 @@ export default function HCPDetailScreen() {
       {/* 头部 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← 返回</Text>
+          <Icon name={ActionIcons.back} size={22} color={Colors.textWhite} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>医生详情</Text>
         <View style={{ width: 60 }} />
@@ -181,7 +183,7 @@ export default function HCPDetailScreen() {
             {/* 学术背景 */}
             {profile?.academic_profile && (
               <View style={[styles.card, Shadow.card]}>
-                <Text style={styles.sectionTitle}>🎓 学术背景</Text>
+                <Text style={styles.sectionTitle}>学术背景</Text>
                 <Text style={styles.profileText}>
                   {profile.academic_profile.background}
                 </Text>
@@ -199,7 +201,7 @@ export default function HCPDetailScreen() {
             {/* 处方偏好 */}
             {profile?.prescription_analysis && (
               <View style={[styles.card, Shadow.card]}>
-                <Text style={styles.sectionTitle}>💊 处方偏好</Text>
+                <Text style={styles.sectionTitle}>处方偏好</Text>
                 <Text style={styles.profileText}>
                   {profile.prescription_analysis.preference}
                 </Text>
@@ -224,7 +226,7 @@ export default function HCPDetailScreen() {
             {/* 沟通建议 */}
             {profile?.communication_advice && (
               <View style={[styles.card, Shadow.card]}>
-                <Text style={styles.sectionTitle}>💬 沟通建议</Text>
+                <Text style={styles.sectionTitle}>沟通建议</Text>
                 <Text style={styles.profileText}>
                   最佳时间：{profile.communication_advice.best_time}
                 </Text>
@@ -257,7 +259,7 @@ export default function HCPDetailScreen() {
             {/* 合规风险 */}
             {profile?.compliance_risk && profile.compliance_risk.length > 0 && (
               <View style={[styles.card, styles.warningCard]}>
-                <Text style={styles.sectionTitle}>⚠️ 合规风险提示</Text>
+                <Text style={[styles.sectionTitle, { color: Colors.danger }]}>合规风险提示</Text>
                 <View style={styles.bulletList}>
                   {profile.compliance_risk.map((risk, i) => (
                     <Text key={i} style={styles.bulletItem}>
@@ -297,10 +299,10 @@ export default function HCPDetailScreen() {
                       ]}
                     >
                       {interaction.sentiment === 'positive'
-                        ? '😊 积极'
+                        ? '积极'
                         : interaction.sentiment === 'negative'
-                        ? '😔 消极'
-                        : '😐 中性'}
+                        ? '消极'
+                        : '中性'}
                     </Text>
                   </View>
                   <Text style={styles.interactionProduct}>

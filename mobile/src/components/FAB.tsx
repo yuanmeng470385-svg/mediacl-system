@@ -3,7 +3,8 @@
  */
 import React from 'react';
 import { TouchableOpacity, Text, StyleSheet } from 'react-native';
-import { Colors, Shadow } from '../constants/theme';
+import Icon from './Icon';
+import { Colors, Shadow, FontSize } from '../constants/theme';
 
 interface FABProps {
   onPress: () => void;
@@ -16,17 +17,17 @@ interface FABProps {
 export default function FAB({
   onPress,
   label,
-  icon = '+',
+  icon = 'plus',
   bottom = 24,
   right = 20,
 }: FABProps) {
   return (
     <TouchableOpacity
-      style={[styles.fab, Shadow.button, { bottom, right }]}
+      style={[styles.fab, Shadow.fab, { bottom, right }]}
       onPress={onPress}
       activeOpacity={0.8}
     >
-      <Text style={styles.icon}>{icon}</Text>
+      <Icon name={icon} size={22} color={Colors.textWhite} />
       {label && <Text style={styles.label}>{label}</Text>}
     </TouchableOpacity>
   );
@@ -41,16 +42,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderRadius: 28,
-    gap: 6,
-  },
-  icon: {
-    color: Colors.textWhite,
-    fontSize: 22,
-    fontWeight: '300',
+    gap: 8,
   },
   label: {
     color: Colors.textWhite,
-    fontSize: 15,
+    fontSize: FontSize.md,
     fontWeight: '600',
   },
 });

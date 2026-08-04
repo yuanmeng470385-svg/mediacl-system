@@ -15,6 +15,8 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import EmptyState from '../../components/EmptyState';
+import Icon from '../../components/Icon';
+import { ActionIcons } from '../../components/Icon';
 import { hcpAPI } from '../../api/hcp';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { HCP } from '../../types';
@@ -105,7 +107,7 @@ export default function HCPSearchScreen() {
       {/* 搜索栏 */}
       <View style={styles.searchBar}>
         <View style={styles.searchInputRow}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Icon name={ActionIcons.search} size={18} color={Colors.textHint} />
           <TextInput
             style={styles.searchInput}
             placeholder="搜索医生姓名、医院..."
@@ -117,7 +119,7 @@ export default function HCPSearchScreen() {
           />
           {searchText.length > 0 && (
             <TouchableOpacity onPress={() => { setSearchText(''); loadHCPs(); }}>
-              <Text style={styles.clearBtn}>✕</Text>
+              <Icon name={ActionIcons.close} size={18} color={Colors.textHint} />
             </TouchableOpacity>
           )}
         </View>
@@ -125,7 +127,7 @@ export default function HCPSearchScreen() {
           style={styles.filterToggle}
           onPress={() => setShowFilters(!showFilters)}
         >
-          <Text style={styles.filterIcon}>⚙</Text>
+          <Icon name={ActionIcons.filter} size={20} color={Colors.textWhite} />
         </TouchableOpacity>
       </View>
 
@@ -202,7 +204,7 @@ export default function HCPSearchScreen() {
             </View>
           ) : (
             <EmptyState
-              icon="👨‍⚕️"
+              icon="doctor"
               title="暂无医生数据"
               description="联系管理员导入医生数据"
             />

@@ -1,5 +1,6 @@
 /**
  * 工作台 - 今日工作总览
+ * 临床精准风：深海军蓝头部 + 纯白卡片 + 青蓝数据高亮
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import {
@@ -16,6 +17,8 @@ import ProgressRing from '../../components/ProgressRing';
 import VisitCard from '../../components/VisitCard';
 import EmptyState from '../../components/EmptyState';
 import FAB from '../../components/FAB';
+import Icon from '../../components/Icon';
+import { ActionIcons, FeatureIcons } from '../../components/Icon';
 import { visitAPI } from '../../api/visit';
 import { useAuth } from '../../store/AuthContext';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -35,23 +38,18 @@ export default function HomeScreen() {
     try {
       const today = new Date().toISOString().split('T')[0];
       const result = await visitAPI.list({
-        page: 1,
-        page_size: 20,
-        start_date: today,
-        end_date: today,
+        page: 1, page_size: 20,
+        start_date: today, end_date: today,
       });
       setVisits(result.items || []);
     } catch {
-      // Mock 数据——后端不可用时展示
       setVisits([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadVisits();
-  }, [loadVisits]);
+  useEffect(() => { loadVisits(); }, [loadVisits]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -63,7 +61,6 @@ export default function HomeScreen() {
   const total = visits.length;
   const inProgress = visits.filter((v) => v.status === 'in_progress');
 
-  // 问候语
   const hour = new Date().getHours();
   const greeting = hour < 12 ? '早上好' : hour < 18 ? '下午好' : '晚上好';
   const today = new Date();
@@ -74,29 +71,30 @@ export default function HomeScreen() {
     <View style={styles.container}>
       {/* 头部 */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>
-            {greeting}，{user?.name || '医药代表'}
-          </Text>
-          <Text style={styles.date}>{dateStr}</Text>
-        </View>
-        <View style={styles.headerRight}>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.greeting}>
+              {greeting}，{user?.name || '医药代表'}
+            </Text>
+            <Text style={styles.date}>{dateStr}</Text>
+          </View>
           <TouchableOpacity
             style={styles.notifyBtn}
             onPress={() => navigation.navigate('NotificationSettings')}
           >
-            <Text style={styles.notifyIcon}>🔔</Text>
+            <Icon name={ActionIcons.notification} size={20} color={Colors.textWhite} />
           </TouchableOpacity>
         </View>
       </View>
 
       <ScrollView
-        style={styles.content}
+        style={styles.body}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
+            tintColor={Colors.primary}
             colors={[Colors.primary]}
           />
         }
@@ -107,8 +105,9 @@ export default function HomeScreen() {
           <ProgressRing completed={completed} total={total} />
           {inProgress.length > 0 && (
             <View style={styles.inProgressBar}>
+              <View style={styles.inProgressDot} />
               <Text style={styles.inProgressText}>
-                🔵 {inProgress.length} 场拜访进行中
+                {inProgress.length} 场拜访进行中
               </Text>
             </View>
           )}
@@ -117,29 +116,26 @@ export default function HomeScreen() {
         {/* 快捷功能 */}
         <View style={styles.quickActions}>
           {[
-            { icon: '💬', label: '数字专员', route: 'Specialists' as const },
-            { icon: '📄', label: '学术内容', route: 'ContentDetail' as const, params: { contentId: 0 } },
-            { icon: '👨‍⚕️', label: '找医生', route: 'HCPs' as const },
-            { icon: '📋', label: '合规手册', route: 'ComplianceManual' as const },
+            { icon: FeatureIcons.specialist, label: '数字专员', route: 'Specialists' as const },
+            { icon: FeatureIcons.content, label: '学术内容', route: 'ContentDetail' as const, params: { contentId: 0 } },
+            { icon: FeatureIcons.doctor, label: '找医生', route: 'HCPs' as const },
+            { icon: FeatureIcons.compliance, label: '合规手册', route: 'ComplianceManual' as const },
           ].map((item, i) => (
             <TouchableOpacity
               key={i}
               style={[styles.quickBtn, Shadow.card]}
               onPress={() => {
-                if (item.route === 'ContentDetail') {
-                  // ContentDetail needs contentId, fallback to main tab
-                  navigation.navigate('MainTabs' as any);
-                  // Then navigate to HCPs as a fallback
-                  (navigation as any).navigate('HCPs');
-                } else if (item.route === 'ComplianceManual') {
-                  navigation.navigate('ComplianceManual');
+                if (item.route === 'ContentDetail' || item.route === 'ComplianceManual') {
+                  (navigation as any).navigate(item.route, item.params || {});
                 } else {
                   (navigation as any).navigate(item.route);
                 }
               }}
               activeOpacity={0.7}
             >
-              <Text style={styles.quickIcon}>{item.icon}</Text>
+              <View style={styles.quickIconCircle}>
+                <Icon name={item.icon} size={24} color={Colors.primary} />
+              </View>
               <Text style={styles.quickLabel}>{item.label}</Text>
             </TouchableOpacity>
           ))}
@@ -148,12 +144,10 @@ export default function HomeScreen() {
         {/* 今日拜访列表 */}
         <Text style={styles.sectionTitle}>今日拜访</Text>
         {loading ? (
-          <View style={styles.loading}>
-            <Text style={styles.loadingText}>加载中...</Text>
-          </View>
+          <View style={styles.loading}><Text style={styles.loadingText}>加载中...</Text></View>
         ) : visits.length === 0 ? (
           <EmptyState
-            icon="📅"
+            icon="calendar-blank-outline"
             title="暂无拜访安排"
             description="点击右下角 + 添加新的拜访计划"
           />
@@ -162,25 +156,14 @@ export default function HomeScreen() {
             <VisitCard
               key={visit.id}
               visit={visit}
-              onPress={() =>
-                navigation.navigate('VisitDetail', { visitId: visit.id })
-              }
+              onPress={() => navigation.navigate('VisitDetail', { visitId: visit.id })}
             />
           ))
         )}
-        {/* 底部留白 */}
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* FAB - 新增拜访 */}
-      <FAB
-        icon="+"
-        label="新增拜访"
-        onPress={() => {
-          // 简单提示选医生后进入准备页
-          (navigation as any).navigate('HCPs');
-        }}
-      />
+      <FAB icon="plus" label="新增拜访" onPress={() => (navigation as any).navigate('HCPs')} />
     </View>
   );
 }
@@ -189,69 +172,68 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
     backgroundColor: Colors.primary,
-    paddingHorizontal: Spacing.xl,
     paddingTop: 52,
-    paddingBottom: Spacing.xl,
+    paddingBottom: Spacing.xxl,
+    ...Shadow.header,
+  },
+  headerContent: {
+    paddingHorizontal: Spacing.xxl,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  headerRight: { flexDirection: 'row', gap: Spacing.md },
-  greeting: { color: Colors.textWhite, fontSize: FontSize.xl, fontWeight: '700' },
-  date: { color: 'rgba(255,255,255,0.8)', fontSize: FontSize.sm, marginTop: 4 },
+  greeting: { color: Colors.textWhite, fontSize: FontSize.xxl, fontWeight: '700' },
+  date: { color: 'rgba(255,255,255,0.7)', fontSize: FontSize.sm, marginTop: 6 },
   notifyBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  notifyIcon: { fontSize: 18 },
-  content: { flex: 1, padding: Spacing.lg },
+  body: { flex: 1, padding: Spacing.lg },
   sectionTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
+    fontSize: FontSize.lg, fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: Spacing.md,
-    marginTop: Spacing.sm,
+    marginBottom: Spacing.md, marginTop: Spacing.sm,
   },
   card: {
     backgroundColor: Colors.white,
-    borderRadius: BorderRadius.lg,
+    borderRadius: BorderRadius.xl,
     padding: Spacing.xl,
     marginBottom: Spacing.lg,
     alignItems: 'center',
   },
   inProgressBar: {
-    marginTop: Spacing.lg,
-    paddingTop: Spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: Colors.divider,
-    width: '100%',
-    alignItems: 'center',
+    marginTop: Spacing.lg, paddingTop: Spacing.md,
+    borderTopWidth: 1, borderTopColor: Colors.divider,
+    width: '100%', alignItems: 'center',
+    flexDirection: 'row', justifyContent: 'center', gap: Spacing.sm,
+  },
+  inProgressDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: Colors.info,
   },
   inProgressText: {
-    fontSize: FontSize.sm,
-    color: Colors.primary,
-    fontWeight: '600',
+    fontSize: FontSize.sm, color: Colors.info, fontWeight: '600',
   },
   quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: 'row', justifyContent: 'space-between',
     marginBottom: Spacing.xl,
   },
   quickBtn: {
     flex: 1,
     backgroundColor: Colors.white,
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.lg,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.md,
     alignItems: 'center',
     marginHorizontal: 4,
     gap: Spacing.sm,
   },
-  quickIcon: { fontSize: 28 },
-  quickLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '500' },
+  quickIconCircle: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: Colors.primarySurface,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  quickLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '600' },
   loading: { padding: Spacing.xxxl, alignItems: 'center' },
   loadingText: { color: Colors.textHint, fontSize: FontSize.sm },
 });

@@ -3,6 +3,8 @@
  */
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import Icon from './Icon';
+import { ActionIcons, VisitIcons } from './Icon';
 import { Colors, FontSize, BorderRadius, Shadow, Spacing } from '../constants/theme';
 import type { VisitRecord } from '../types';
 
@@ -12,10 +14,10 @@ interface VisitCardProps {
 }
 
 const statusConfig: Record<string, { label: string; color: string; bg: string }> = {
-  pending: { label: '待开始', color: '#f59e0b', bg: '#fef3c7' },
-  in_progress: { label: '进行中', color: '#3b82f6', bg: '#dbeafe' },
-  completed: { label: '已完成', color: '#22c55e', bg: '#dcfce7' },
-  cancelled: { label: '已取消', color: '#6b7280', bg: '#f3f4f6' },
+  pending: { label: '待开始', color: Colors.warning, bg: Colors.warningLight },
+  in_progress: { label: '进行中', color: Colors.info, bg: Colors.infoLight },
+  completed: { label: '已完成', color: Colors.success, bg: Colors.successLight },
+  cancelled: { label: '已取消', color: Colors.textHint, bg: Colors.border },
 };
 
 export default function VisitCard({ visit, onPress }: VisitCardProps) {
@@ -29,9 +31,12 @@ export default function VisitCard({ visit, onPress }: VisitCardProps) {
     >
       <View style={styles.header}>
         <View style={styles.nameRow}>
+          <Icon name={VisitIcons.doctor} size={20} color={Colors.primary} />
           <Text style={styles.hcpName}>{visit.hcp_name || '未知医生'}</Text>
           {visit.status === 'pending' && (
-            <Text style={styles.priority}>高优</Text>
+            <View style={styles.priorityBadge}>
+              <Text style={styles.priorityText}>高优</Text>
+            </View>
           )}
         </View>
         <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
@@ -42,13 +47,17 @@ export default function VisitCard({ visit, onPress }: VisitCardProps) {
       </View>
 
       <View style={styles.info}>
-        <Text style={styles.infoText}>
-          📅 {visit.planned_date || '未排期'}
-        </Text>
+        <View style={styles.infoRow}>
+          <Icon name={VisitIcons.calendar} size={14} color={Colors.textHint} />
+          <Text style={styles.infoText}>{visit.planned_date || '未排期'}</Text>
+        </View>
         {visit.actual_start_time && (
-          <Text style={styles.infoText}>
-            ⏱ {visit.actual_start_time} - {visit.actual_end_time || '进行中'}
-          </Text>
+          <View style={styles.infoRow}>
+            <Icon name={VisitIcons.clock} size={14} color={Colors.textHint} />
+            <Text style={styles.infoText}>
+              {visit.actual_start_time} - {visit.actual_end_time || '进行中'}
+            </Text>
+          </View>
         )}
       </View>
 
@@ -69,6 +78,8 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.lg,
     padding: Spacing.lg,
     marginBottom: Spacing.md,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.primary,
   },
   header: {
     flexDirection: 'row',
@@ -80,21 +91,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    gap: Spacing.sm,
   },
   hcpName: {
     fontSize: FontSize.lg,
     fontWeight: '600',
     color: Colors.textPrimary,
   },
-  priority: {
-    fontSize: FontSize.xs,
-    color: Colors.danger,
-    backgroundColor: '#fee2e2',
+  priorityBadge: {
+    backgroundColor: Colors.dangerLight,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: BorderRadius.sm,
-    marginLeft: Spacing.sm,
-    overflow: 'hidden',
+  },
+  priorityText: {
+    fontSize: FontSize.xs,
+    color: Colors.danger,
     fontWeight: '600',
   },
   statusBadge: {
@@ -107,18 +119,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   info: {
-    flexDirection: 'row',
-    gap: Spacing.lg,
+    gap: Spacing.xs,
     marginBottom: Spacing.sm,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
   },
   infoText: {
     fontSize: FontSize.sm,
     color: Colors.textSecondary,
   },
   summary: {
-    backgroundColor: Colors.background,
+    backgroundColor: Colors.backgroundAlt,
     padding: Spacing.md,
     borderRadius: BorderRadius.md,
+    borderLeftWidth: 2,
+    borderLeftColor: Colors.accent,
   },
   summaryText: {
     fontSize: FontSize.sm,

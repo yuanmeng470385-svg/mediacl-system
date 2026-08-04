@@ -7,7 +7,9 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../store/AuthContext';
-import { Colors } from '../constants/theme';
+import Icon from '../components/Icon';
+import { TabIcons } from '../components/Icon';
+import { Colors, FontSize, Shadow } from '../constants/theme';
 import type { RootStackParamList, MainTabParamList } from './types';
 
 // Screens
@@ -39,7 +41,8 @@ function MainTabs() {
           backgroundColor: Colors.white,
           borderTopColor: Colors.divider,
           paddingBottom: 4,
-          height: 56,
+          height: 60,
+          ...Shadow.header,
         },
         tabBarLabelStyle: {
           fontSize: 11,
@@ -52,8 +55,8 @@ function MainTabs() {
         component={HomeScreen}
         options={{
           tabBarLabel: '工作台',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>🏠</Text>
+          tabBarIcon: ({ color, focused }) => (
+            <Icon name={focused ? TabIcons.homeActive : TabIcons.home} size={24} color={color} />
           ),
         }}
       />
@@ -62,8 +65,8 @@ function MainTabs() {
         component={SpecialistListScreen}
         options={{
           tabBarLabel: '对话',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>💬</Text>
+          tabBarIcon: ({ color, focused }) => (
+            <Icon name={focused ? TabIcons.chatActive : TabIcons.chat} size={24} color={color} />
           ),
         }}
       />
@@ -73,7 +76,7 @@ function MainTabs() {
         options={{
           tabBarLabel: '医生',
           tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>👨‍⚕️</Text>
+            <Icon name={TabIcons.doctor} size={24} color={color} />
           ),
         }}
       />
@@ -82,8 +85,8 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarLabel: '我的',
-          tabBarIcon: ({ color }) => (
-            <Text style={{ fontSize: 22, color }}>👤</Text>
+          tabBarIcon: ({ color, focused }) => (
+            <Icon name={focused ? TabIcons.profileActive : TabIcons.profile} size={24} color={color} />
           ),
         }}
       />
@@ -95,7 +98,7 @@ function MainTabs() {
 function SplashScreen() {
   return (
     <View style={styles.splash}>
-      <Text style={styles.splashIcon}>💊</Text>
+      <View style={styles.splashLogo}><Text style={styles.splashLogoText}>MA</Text></View>
       <Text style={styles.splashTitle}>MedAgent</Text>
       <ActivityIndicator
         style={{ marginTop: 24 }}
@@ -183,7 +186,7 @@ export default function AppNavigator() {
 function PlaceholderScreen() {
   return (
     <View style={styles.placeholder}>
-      <Text style={styles.placeholderIcon}>🚧</Text>
+      <Icon name="tools" size={48} color={Colors.textHint} />
       <Text style={styles.placeholderText}>功能开发中</Text>
     </View>
   );
@@ -197,6 +200,8 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   splashIcon: { fontSize: 72 },
+  splashLogo: { width: 80, height: 80, borderRadius: 20, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  splashLogoText: { fontSize: 30, fontWeight: '800', color: Colors.textWhite, letterSpacing: -1 },
   splashTitle: {
     fontSize: 32,
     fontWeight: '700',

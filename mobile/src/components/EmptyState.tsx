@@ -3,6 +3,7 @@
  */
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import Icon from './Icon';
 import { Colors, FontSize, Spacing, BorderRadius } from '../constants/theme';
 
 interface EmptyStateProps {
@@ -14,7 +15,7 @@ interface EmptyStateProps {
 }
 
 export default function EmptyState({
-  icon = '📭',
+  icon = 'inbox-outline',
   title,
   description,
   actionLabel,
@@ -22,7 +23,9 @@ export default function EmptyState({
 }: EmptyStateProps) {
   return (
     <View style={styles.container}>
-      <Text style={styles.icon}>{icon}</Text>
+      <View style={styles.iconCircle}>
+        <Icon name={icon} size={36} color={Colors.textHint} />
+      </View>
       <Text style={styles.title}>{title}</Text>
       {description && (
         <Text style={styles.description}>{description}</Text>
@@ -33,6 +36,7 @@ export default function EmptyState({
           onPress={onAction}
           activeOpacity={0.7}
         >
+          <Icon name="plus" size={18} color={Colors.textWhite} />
           <Text style={styles.actionText}>{actionLabel}</Text>
         </TouchableOpacity>
       )}
@@ -47,8 +51,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: Spacing.xxxl,
   },
-  icon: {
-    fontSize: 48,
+  iconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: Spacing.lg,
   },
   title: {
@@ -67,9 +76,12 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     backgroundColor: Colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: Spacing.xxl,
     paddingVertical: Spacing.md,
     borderRadius: BorderRadius.full,
+    gap: Spacing.sm,
   },
   actionText: {
     color: Colors.textWhite,
