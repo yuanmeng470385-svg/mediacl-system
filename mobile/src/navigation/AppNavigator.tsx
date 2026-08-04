@@ -25,6 +25,10 @@ import VisitEndScreen from '../screens/VisitEnd/VisitEndScreen';
 import ContentScreen from '../screens/Content/ContentScreen';
 import ComplianceScreen from '../screens/Compliance/ComplianceScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
+import SettingsScreen from '../screens/Settings/SettingsScreen';
+import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
+import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
+import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -164,11 +168,11 @@ export default function AppNavigator() {
               component={ComplianceScreen}
               options={{ animation: 'slide_from_right' }}
             />
-            {/* 占位页面 */}
-            <Stack.Screen name="Settings" component={PlaceholderScreen} />
-            <Stack.Screen name="NotificationSettings" component={PlaceholderScreen} />
-            <Stack.Screen name="HelpCenter" component={PlaceholderScreen} />
-            <Stack.Screen name="VisitDetail" component={PlaceholderScreen} />
+            {/* 辅助页面 */}
+            <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="HelpCenter" component={HelpCenterScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="VisitDetail" component={VisitDetailScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen
@@ -179,16 +183,6 @@ export default function AppNavigator() {
         )}
       </Stack.Navigator>
     </NavigationContainer>
-  );
-}
-
-/** 开发中占位页 */
-function PlaceholderScreen() {
-  return (
-    <View style={styles.placeholder}>
-      <Icon name="tools" size={48} color={Colors.textHint} />
-      <Text style={styles.placeholderText}>功能开发中</Text>
-    </View>
   );
 }
 
@@ -208,12 +202,4 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     marginTop: 16,
   },
-  placeholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.background,
-  },
-  placeholderIcon: { fontSize: 48, marginBottom: 16 },
-  placeholderText: { fontSize: 16, color: Colors.textHint },
 });
