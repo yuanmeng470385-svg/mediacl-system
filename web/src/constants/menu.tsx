@@ -1,0 +1,22 @@
+import {
+  DashboardOutlined,
+  RobotOutlined,
+  BookOutlined,
+  SafetyOutlined,
+  AuditOutlined,
+  UserOutlined,
+  TeamOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
+import type { MenuDataItem } from '@ant-design/pro-components';
+
+export const menuConfig: MenuDataItem[] = [
+  { path: '/dashboard', name: '仪表盘', icon: <DashboardOutlined /> },
+  { path: '/specialist/list', name: '数字专员', icon: <RobotOutlined /> },
+  { path: '/knowledge/list', name: '知识库', icon: <BookOutlined /> },
+  { path: '/compliance/list', name: '合规规则', icon: <SafetyOutlined /> },
+  { path: '/audit/list', name: '审计查询', icon: <AuditOutlined /> },
+  { path: '/doctor/list', name: '医生管理', icon: <UserOutlined /> },
+  { path: '/user/list', name: '用户管理', icon: <TeamOutlined /> },
+  { path: '/system/config', name: '系统配置', icon: <SettingOutlined /> },
+];
