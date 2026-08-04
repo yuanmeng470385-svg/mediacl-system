@@ -80,7 +80,7 @@ export default function Dashboard() {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={14}>
-          <Card title="对话量趋势（7 天）" bordered={false}>
+          <Card title="对话量趋势（7 天）" variant="borderless">
             <Line
               data={trend}
               xField="date"
@@ -92,7 +92,7 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={24} lg={10}>
-          <Card title="风险热力图" bordered={false}>
+          <Card title="风险热力图" variant="borderless">
             <Heatmap
               data={heatmap}
               xField="product"
@@ -107,7 +107,7 @@ export default function Dashboard() {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} md={14}>
-          <Card title="合规拦截 Top 5" bordered={false}>
+          <Card title="合规拦截 Top 5" variant="borderless">
             <Column
               data={topViolations}
               xField="rule"
@@ -119,7 +119,7 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={24} md={10}>
-          <Card title="服务状态" bordered={false}>
+          <Card title="服务状态" variant="borderless">
             <HealthDot services={services} />
           </Card>
         </Col>

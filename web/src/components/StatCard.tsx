@@ -11,7 +11,7 @@ interface Props {
 
 export default function StatCard({ title, value, suffix, trend, trendValue }: Props) {
   return (
-    <Card bordered={false}>
+    <Card variant="borderless">
       <Statistic
         title={title}
         value={value}
