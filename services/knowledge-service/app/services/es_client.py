@@ -24,7 +24,7 @@ class EsClient:
         try:
             es = self.client()
             es.index(index=self.index, id=f"doc_{doc_id}", document={
-                "title": title, "content": content, **(fields or {}),
+                "title": title, "content": content, "doc_id": doc_id, **(fields or {}),
             })
             return True
         except Exception as exc:
