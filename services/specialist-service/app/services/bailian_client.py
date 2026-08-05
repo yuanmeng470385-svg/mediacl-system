@@ -6,6 +6,7 @@
 流程：Connect → Start → 等待 Listening → RequestToRespond(type=prompt) → 接收 RespondingContent → Stop
 """
 
+import asyncio
 import os
 import json
 import uuid
@@ -51,6 +52,7 @@ class BailianClient:
         """
         task_id = str(uuid.uuid4())
         answer_parts = []
+        citations = []
         dialog_id = session_id
 
         try:
@@ -85,7 +87,7 @@ class BailianClient:
 
                 # ---- Step 2: 等待 Listening 状态 ----
                 for _ in range(20):
-                    msg = json.loads(await ws.recv())
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
                     ev = msg.get("payload", {}).get("output", {}).get("event", "")
                     if ev == "Started":
                         dialog_id = msg["payload"]["output"].get("dialog_id", dialog_id)
@@ -120,12 +122,25 @@ class BailianClient:
 
                 # ---- Step 4: 接收回答 ----
                 for _ in range(60):
-                    msg = json.loads(await ws.recv())
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
                     ev = msg.get("payload", {}).get("output", {}).get("event", "")
                     if ev == "RespondingContent":
-                        text = msg["payload"]["output"].get("text", "")
-                        finished = msg["payload"]["output"].get("finished", False)
+                        output = msg["payload"]["output"]
+                        text = output.get("text", "")
+                        finished = output.get("finished", False)
                         answer_parts.append(text)  # 流式增量，每次是全量
+                        # 引用溯源：解析 extra_info.docs（缺省/结构不符时防御式跳过）
+                        extra_info = output.get("extra_info") or {}
+                        for doc in extra_info.get("docs") or []:
+                            if not isinstance(doc, dict):
+                                continue
+                            title = doc.get("doc_name") or doc.get("title") or doc.get("file_name") or ""
+                            if title and not any(c["title"] == title for c in citations):
+                                citations.append({
+                                    "title": title,
+                                    "url": doc.get("doc_url") or doc.get("url") or "",
+                                    "doc_id": str(doc.get("doc_id") or doc.get("file_id") or ""),
+                                })
                         if finished:
                             break
                     elif ev == "Error":
@@ -133,6 +148,8 @@ class BailianClient:
                         raise BailianException(
                             f"百炼错误 [{error.get('error_code')}]: {error.get('error_message')}"
                         )
+                else:
+                    raise BailianException("等待回答完成超时（60 次消息未结束）")
 
                 # ---- Step 5: Stop ----
                 await ws.send(json.dumps({
@@ -147,6 +164,7 @@ class BailianClient:
                     "text": final_answer,
                     "dialog_id": dialog_id,
                     "finished": True,
+                    "citations": citations,
                 }
 
         except websockets.exceptions.ConnectionClosed as e:

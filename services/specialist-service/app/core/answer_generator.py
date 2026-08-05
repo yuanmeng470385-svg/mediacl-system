@@ -95,6 +95,7 @@ class AnswerGenerator:
                 session_id=session_id,
             )
             answer = bailian_result.get("text", "")
+            citations = bailian_result.get("citations", [])
             session_id = bailian_result.get("dialog_id", session_id)
             ai_prompt = question
             ai_response = answer
@@ -102,6 +103,7 @@ class AnswerGenerator:
             # ---- 降级：百炼不可用时直调通义千问 ----
             logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
             answer = self._fallback_generate(question, specialist)
+            citations = []
             ai_prompt = question
             ai_response = answer
             ai_model = "qwen-max"
@@ -127,7 +129,7 @@ class AnswerGenerator:
             )
             return {
                 "answer": "该问题建议直接咨询医学顾问。",
-                "citations": [],
+                "citations": citations,
                 "evidence_level": None,
                 "session_id": session_id,
                 "request_id": request_id,
@@ -154,7 +156,7 @@ class AnswerGenerator:
 
         return {
             "answer": answer,
-            "citations": [],  # 百炼暂不返回独立 citations，后续可从 RespondingContent.extra_info 解析
+            "citations": citations,
             "evidence_level": self._extract_evidence_level(answer),
             "session_id": session_id,
             "request_id": request_id,
