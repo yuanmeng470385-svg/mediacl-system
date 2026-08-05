@@ -37,6 +37,9 @@ register_exception_handlers(app)
 from app.api.rules import router as rules_router
 app.include_router(rules_router)
 
+from app.api import report as report_api
+app.include_router(report_api.router)
+
 
 @app.get("/health")
 async def health():
