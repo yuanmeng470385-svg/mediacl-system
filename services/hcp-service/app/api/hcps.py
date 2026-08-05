@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError
 from shared.common.auth import get_current_user, require_roles
+from shared.common.internal_auth import require_internal_key
 
 # 医生库维护端点（S6 RBAC）：写操作限 admin/manager
 HCP_ADMIN_ROLES = ("admin", "manager")
@@ -201,4 +202,37 @@ async def remove_hcp_tags(
         raise ParamError("tags 不能为空")
     hcp = _get_hcp_or_404(db, hcp_id)
     hcp = HcpRepo.remove_tags(db, hcp, tags)
+    return success(hcp.to_dict())
+
+
+# ==================== 内部接口（visit-service 拜访后画像更新） ====================
+
+@router.post("/profile-update")
+async def update_hcp_profile_from_visit(
+    request: dict,
+    db: Session = Depends(get_db),
+    _internal: bool = Depends(require_internal_key),
+):
+    """拜访后画像更新（内部接口，visit-service 调用）：
+    {hcp_id, academic_background?, prescription_preference?, influence_level?, tags?, source, visit_id?}
+    """
+    hcp_id = request.get("hcp_id")
+    if not hcp_id:
+        raise ParamError("hcp_id 不能为空")
+    hcp = HcpRepo.get(db, hcp_id)
+    if not hcp:
+        raise HTTPException(status_code=404, detail="医生档案不存在")
+    updates = {
+        "academic_background": request.get("academic_background"),
+        "prescription_preference": request.get("prescription_preference"),
+        "influence_level": request.get("influence_level"),
+        "tags": request.get("tags"),
+    }
+    hcp = HcpRepo.merge_profile(db, hcp, updates)
+    await write_audit_log(
+        user_id=None, action="hcp_profile_update_from_visit",
+        resource_type="hcp", resource_id=str(hcp_id),
+        after_value={"source": request.get("source"), "visit_id": request.get("visit_id"),
+                     "updated": [k for k, v in updates.items() if v]},
+    )
     return success(hcp.to_dict())

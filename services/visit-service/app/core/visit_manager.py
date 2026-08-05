@@ -13,6 +13,7 @@
   - 听悟不可用 → process_transcript 报错并给出明确提示，可改用 text 直传
 """
 import json
+import os
 import asyncio
 import logging
 from datetime import date, datetime
@@ -103,6 +104,38 @@ def _parse_follow_up_items(items: list, visit_id: int, user_id: int) -> list:
             "channel": channel or None,
         })
     return parsed
+
+
+async def _push_profile_update(hcp_id: int, structured: dict, visit_id: int) -> bool:
+    """拜访后画像更新：调 hcp-service 内部接口，失败不阻塞主流程"""
+    import httpx
+    from shared.common.internal_auth import internal_headers
+    gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8000")
+    updates = {}
+    interests = structured.get("hcp_interests") or []
+    if interests:
+        updates["academic_background"] = {"research_interest": interests[0][:200]}
+        updates["tags"] = [f"兴趣:{i[:30]}" for i in interests[:3]]
+    objections = structured.get("hcp_objections") or []
+    if objections:
+        updates["prescription_preference"] = {"noted_objections": [str(o)[:200] for o in objections[:5]]}
+    sentiment = structured.get("sentiment")
+    if sentiment:
+        updates["influence_level"] = sentiment
+    if not updates:
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{gateway_url}/api/v1/hcps/profile-update",
+                headers=internal_headers(),
+                json={"hcp_id": hcp_id, **updates, "source": "ai_visit", "visit_id": visit_id},
+            )
+            resp.raise_for_status()
+            return True
+    except Exception as exc:
+        logger.warning("医生画像更新失败（不影响拜访记录）: hcp_id=%s err=%s", hcp_id, exc)
+        return False
 
 
 class VisitManager:
@@ -401,6 +434,9 @@ class VisitManager:
             ai_prompt=prompt[:2000], ai_response=ai_summary[:2000],
             compliance_result=compliance,
         )
+        # 医生画像更新（必做项）：基于本次拜访的 AI 结构化结果
+        if structured:
+            await _push_profile_update(record.hcp_id, structured, visit_id)
         logger.info(f"拜访结束: visit_id={visit_id} duration={duration}min sentiment={sentiment}")
         return record.to_dict()
 

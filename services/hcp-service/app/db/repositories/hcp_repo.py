@@ -17,6 +17,30 @@ def _to_tags(tags: Any) -> List[str]:
     return []
 
 
+def _merge_profile_fields(base: dict, updates: dict) -> dict:
+    """画像 JSONB 合并：新 key 写入，已有 key 不覆盖（保留人工/历史数据）；tags 去重追加"""
+    result = dict(base)
+    for key, value in (updates or {}).items():
+        if value is None:
+            continue
+        if key == "tags":
+            existing = result.get("tags") or []
+            merged_tags = list(existing)
+            for tag in value:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            result["tags"] = merged_tags
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
+            merged = dict(result[key])
+            for k, v in value.items():
+                if k not in merged:
+                    merged[k] = v
+            result[key] = merged
+        elif key not in result or result[key] is None:
+            result[key] = value
+    return result
+
+
 class HcpRepo:
     """医生档案仓库"""
 
@@ -116,6 +140,18 @@ class HcpRepo:
         for t in _to_tags(tags):
             current.discard(t)
         hcp.tags = sorted(current)
+        db.commit()
+        db.refresh(hcp)
+        return hcp
+
+    @staticmethod
+    def merge_profile(db: Session, hcp, updates: dict):
+        """按合并语义更新画像字段（academic_background/prescription_preference/influence_level/tags）"""
+        profile_keys = ("academic_background", "prescription_preference", "influence_level", "tags")
+        current = {k: getattr(hcp, k) for k in profile_keys}
+        merged = _merge_profile_fields(current, updates)
+        for k in profile_keys:
+            setattr(hcp, k, merged.get(k))
         db.commit()
         db.refresh(hcp)
         return hcp
