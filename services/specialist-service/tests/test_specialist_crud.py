@@ -20,3 +20,12 @@ def test_normalize_status():
     assert _normalize_status("DRAFT") == "draft"
     with pytest.raises(ParamError):
         _normalize_status("banned")
+
+
+def test_validate_create_accepts_whitelist_fields():
+    _validate_specialist_fields({"name": "A", "product_id": 1, "persona": {"style": "专业"}}, creating=True)
+
+
+def test_validate_rejects_non_whitelist_on_create():
+    with pytest.raises(ParamError):
+        _validate_specialist_fields({"name": "A", "product_id": 1, "hack": True}, creating=True)

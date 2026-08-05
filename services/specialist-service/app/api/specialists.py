@@ -185,11 +185,12 @@ def _normalize_status(status: str) -> str:
 
 
 def _validate_specialist_fields(request: dict, creating: bool) -> dict:
-    """白名单 + 必填校验（纯函数，便于单测）"""
+    """白名单 + 必填校验（纯函数，便于单测）。
+
+    creating 与 updating 都接受 SPECIALIST_UPDATE_FIELDS 白名单字段，
+    白名单之外的字段一律 ParamError；creating 额外要求 name 与 product_id 非空。
+    """
     allowed = set(request.keys()) - SPECIALIST_UPDATE_FIELDS
-    if creating:
-        allowed -= {"name"}
-        allowed.discard("status")
     if allowed:
         raise ParamError(f"不允许的字段: {sorted(allowed)}")
     if creating:
