@@ -22,6 +22,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import HTTPException
+from websockets.exceptions import ConcurrencyError, ConnectionClosed
 
 from shared.common.auth import verify_token
 from shared.common.db_session import SessionLocal
@@ -73,20 +74,26 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             return
 
         await websocket.accept()
-        await websocket.send_json({"type": "ready", "visit_id": visit_id})
+        # 串行化该连接的所有 send：后台合规任务与主路径并发 send 会触发
+        # websockets>=12 的 ConcurrencyError（事件被吞、合规拦截丢失）
+        send_lock = asyncio.Lock()
+        async with send_lock:
+            await websocket.send_json({"type": "ready", "visit_id": visit_id})
 
         try:
             asr, is_mock = _get_asr_client()
         except RuntimeError as exc:
-            await websocket.send_json({"type": "error", "message": str(exc)})
+            async with send_lock:
+                await websocket.send_json({"type": "error", "message": str(exc)})
             await websocket.close(code=4500)  # 服务端未配置
             return
 
         async def on_sentence(text: str, index: int, is_final: bool):
             # 回推增量/断句给 App
-            await websocket.send_json({
-                "type": "sentence", "index": index, "text": text, "final": is_final,
-            })
+            async with send_lock:
+                await websocket.send_json({
+                    "type": "sentence", "index": index, "text": text, "final": is_final,
+                })
             # 断句完成：追加到拜访记录 + 实时合规检查
             if is_final:
                 # fail-closed：Mock 会话的文本绝不落库（防止假转写污染证据库）
@@ -104,11 +111,15 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
                             {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
                         )
                         if compliance.get("blocked"):
-                            await websocket.send_json({
-                                "type": "compliance",
-                                "blocked": True,
-                                "violations": compliance.get("violations", []),
-                            })
+                            async with send_lock:
+                                await websocket.send_json({
+                                    "type": "compliance",
+                                    "blocked": True,
+                                    "violations": compliance.get("violations", []),
+                                })
+                    except (ConcurrencyError, ConnectionClosed):
+                        # 客户端已断开或发送竞争：跳过推送，不是合规检查失败
+                        logger.info("客户端已断开或发送竞争，跳过合规推送")
                     except Exception as exc:
                         logger.error("实时合规检查失败: %s", exc)
                 asyncio.create_task(_check_later())  # 不阻塞转写流（<2s 承诺）
@@ -140,7 +151,8 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         finally:
             await asr.close()
             try:
-                await websocket.send_json({"type": "completed"})
+                async with send_lock:
+                    await websocket.send_json({"type": "completed"})
             except Exception:
                 pass  # 客户端已断开
     finally:
