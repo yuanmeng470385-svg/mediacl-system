@@ -1,4 +1,5 @@
 """百炼流式响应引用溯源解析（mock websocket 收包序列）"""
+import asyncio
 import json
 import pytest
 
@@ -68,7 +69,7 @@ def test_recv_timeout_raises_bailian_exception(monkeypatch):
 
     class _HungWs(_FakeWs):
         async def recv(self):
-            raise TimeoutError("recv timed out")
+            await asyncio.sleep(3600)  # 真正挂起：无 wait_for 时测试将永久挂住（回归必现）
 
     frames = [_frame("Started", dialog_id="d1")]
     monkeypatch.setattr("websockets.connect", lambda *a, **kw: _HungWs(frames))
