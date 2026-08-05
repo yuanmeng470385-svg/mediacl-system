@@ -178,9 +178,9 @@ CREATE INDEX idx_tasks_visit ON tasks(visit_id);
 
 ### D3. 版本管理
 
-- `knowledge_documents` 加列（003 迁移 + init_db.sql）：`version INT DEFAULT 1`、`parent_doc_id BIGINT REFERENCES knowledge_documents(id)`。
-- 上传（`create_from_upload`）：查同 title + 同 product 现存文档 → 有则旧文档 status='archived'，新行 version=max+1 且 parent_doc_id=旧行 id；无则 version=1。
-- 列表/详情返回 version 与 parent_id。
+- 注意：`knowledge_documents.version` 已存在且是 String(20)（用户可见的文档版本号，如 "1.0"），不可复用。加列（003 迁移 + init_db.sql）：`revision INT DEFAULT 1`（版本链计数）、`parent_doc_id BIGINT REFERENCES knowledge_documents(id)`。
+- 上传（`create_from_upload`）：查同 title + 同 product 现存文档 → 有则旧文档 status='archived'，新行 revision=旧行.revision+1 且 parent_doc_id=旧行 id；无则 revision=1。
+- 列表/详情返回 revision 与 parent_doc_id。
 
 ### D4. 反馈落库
 
