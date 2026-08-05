@@ -1,0 +1,24 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [auth-service, specialist-service, visit-service, knowledge-service, compliance-service, audit-service, hcp-service, gateway]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build image
+        run: |
+          docker build -t registry.cn-hangzhou.aliyuncs.com/medagent/${{ matrix.service }}:${{ github.sha }} \
+            -f services/${{ matrix.service }}/Dockerfile .
+      - name: Push image
+        run: |
+          docker login --username=${{ secrets.ALIYUN_REGISTRY_USER }} \
+            --password=${{ secrets.ALIYUN_REGISTRY_PASS }} \
+            registry.cn-hangzhou.aliyuncs.com
+          docker push registry.cn-hangzhou.aliyuncs.com/medagent/${{ matrix.service }}:${{ github.sha }}

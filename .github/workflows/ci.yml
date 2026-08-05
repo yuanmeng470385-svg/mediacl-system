@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+    branches: [master]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [auth-service, specialist-service, visit-service, knowledge-service, compliance-service, audit-service, hcp-service, gateway]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          pip install -r services/${{ matrix.service }}/requirements.txt
+          pip install pytest pytest-asyncio
+      - name: Test
+        env:
+          JWT_SECRET: ci-test-secret
+          INTERNAL_API_KEY: ci-test-internal-key
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DATABASE_URL: postgresql://medagent:medagent123@localhost:5432/medagent
+        run: |
+          cd services/${{ matrix.service }}
+          python -m pytest tests/ -v || exit 1
+      - name: Import check
+        run: |
+          cd services/${{ matrix.service }}
+          python -c "import app.main" || exit 1
+
+  frontend-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - name: Web build check
+        run: |
+          cd web && npm ci && npx tsc --noEmit || exit 1
+      - name: Mobile type check
+        run: |
+          cd mobile && npm ci && npx tsc --noEmit || exit 1
