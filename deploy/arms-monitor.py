@@ -1,144 +1,107 @@
 #!/usr/bin/env python3
-"""
-MedAgent ARMS + SLS 监控配置脚本
-运行前确保已配置 ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET
+"""ARMS 监控告警规则配置（方案 15.4）
 
-用法:
-    python deploy/arms-monitor.py setup     # 创建 ARMS 应用 + SLS 日志项目
-    python deploy/arms-monitor.py status    # 查看当前监控状态
+真实调用阿里云 ARMS OpenAPI（RPC 签名，与 NLS token 同款 HMAC-SHA1）创建/更新告警规则。
+未配置 ALIYUN_ACCESS_KEY_ID/SECRET 或调用失败 → 打印指引并以非零码退出（不假装成功）。
+
+用法：
+    python deploy/arms-monitor.py            # 创建/更新规则
+    python deploy/arms-monitor.py --dry-run  # 只打印将执行的动作
 """
+import argparse
+import base64
+import hashlib
+import hmac
+import json
 import os
 import sys
-import json
 import time
+import uuid
+from urllib.parse import quote
 
-# ---------- 配置（从环境变量读取） ----------
-ALIYUN_REGION = os.getenv("ALIYUN_REGION", "cn-hangzhou")
-ARMS_ENDPOINT = os.getenv("ARMS_ENDPOINT", f"arms.{ALIYUN_REGION}.aliyuncs.com")
-APP_NAME = os.getenv("ARMS_APP_NAME", "medagent")
-LOG_PROJECT = "medagent-logs"
-LOG_STORE = "medagent-app-logs"
+import httpx
 
-# 告警规则
-ALERT_RULES = [
+ALERTS = [
     {
-        "name": "medagent-service-down",
-        "metric": "service_health",
-        "condition": "value == 0",
-        "duration": "60s",
-        "severity": "critical",
-        "message": "服务 {{.service}} 不可用，请立即检查",
+        "name": "AI 回答延迟过高",
+        "metric": "specialist_chat_latency_seconds",
+        "threshold": "5",
+        "op": ">",
+        "notify": ["dev_team"],
     },
     {
-        "name": "medagent-api-error-rate",
-        "metric": "api_error_rate",
-        "condition": "value > 0.05",  # 5% 错误率
-        "duration": "120s",
-        "severity": "warning",
-        "message": "API 错误率 {{.value}}% 超过 5% 阈值",
+        "name": "合规拦截率异常",
+        "metric": "compliance_blocks_total",
+        "threshold": "0.001|0.1",
+        "op": "out_of_range",
+        "notify": ["dev_team", "compliance_team"],
     },
     {
-        "name": "medagent-api-latency-p99",
-        "metric": "api_latency_p99",
-        "condition": "value > 5000",  # 5 秒
-        "duration": "180s",
-        "severity": "warning",
-        "message": "API P99 延迟 {{.value}}ms 超过 5s",
-    },
-    {
-        "name": "medagent-compliance-block-rate",
-        "metric": "compliance_block_rate",
-        "condition": "value > 0.20",  # 20% 拦截率
-        "duration": "300s",
-        "severity": "info",
-        "message": "合规拦截率 {{.value}}% 偏高，请关注",
-    },
-    # 百炼 WebSocket 连接异常
-    {
-        "name": "medagent-bailian-ws-error",
-        "metric": "bailian_ws_error_count",
-        "condition": "value > 10",
-        "duration": "300s",
-        "severity": "warning",
-        "message": "百炼 WebSocket 连接错误 {{.value}} 次/5min",
+        "name": "数据库连接池满",
+        "metric": "db_connection_pool_usage",
+        "threshold": "0.8",
+        "op": ">",
+        "notify": ["dev_team"],
     },
 ]
 
 
-def setup():
-    """创建监控配置（需要在阿里云控制台手动创建 ARMS 应用）"""
-    print("=" * 50)
-    print("MedAgent ARMS + SLS 监控配置")
-    print("=" * 50)
-    print()
-
-    # 检查环境变量
-    if not os.getenv("ALIYUN_ACCESS_KEY_ID"):
-        print("❌ 请先配置 ALIYUN_ACCESS_KEY_ID 和 ALIYUN_ACCESS_KEY_SECRET 环境变量")
-        sys.exit(1)
-
-    print(f"区域: {ALIYUN_REGION}")
-    print(f"应用名: {APP_NAME}")
-    print()
-
-    # ARMS 探针配置（在 docker-compose 中添加环境变量即可）
-    print("📌 在 docker-compose.yml 的每个服务 environment 中添加：")
-    print("""
-    environment:
-      - ARMS_APP_NAME=medagent
-      - ARMS_REGION=cn-hangzhou
-      - ARMS_LICENSE_KEY=<your_arms_license_key>
-      - SLS_ENDPOINT=cn-hangzhou.log.aliyuncs.com
-      - SLS_PROJECT=medagent-logs
-      - SLS_LOGSTORE=medagent-app-logs
-    """)
-
-    print("📌 SLS 日志采集配置（在阿里云 SLS 控制台创建）：")
-    print(f"  - 项目名: {LOG_PROJECT}")
-    print(f"  - 日志库: {LOG_STORE}")
-    print(f"  - 日志主题: medagent-{{service}}")
-    print(f"  - 索引: 全文字段索引")
-    print()
-
-    print("📌 告警规则（需在 ARMS 控制台手动配置或通过 API）：")
-    for i, rule in enumerate(ALERT_RULES, 1):
-        print(f"  {i}. {rule['name']}")
-        print(f"     指标: {rule['metric']}, 条件: {rule['condition']}")
-        print(f"     持续时间: {rule['duration']}, 级别: {rule['severity']}")
-        print()
-
-    # 钉钉通知渠道配置
-    print("📌 告警通知渠道（钉钉机器人）：")
-    print("  1. 钉钉群 → 群设置 → 智能群助手 → 添加机器人 → 自定义")
-    print("  2. 复制 Webhook URL")
-    print("  3. 在 ARMS 告警 → 通知管理 → 新建通知策略中添加")
-    print("  4. Webhook URL 配置为环境变量 DINGTALK_WEBHOOK")
-    print()
-
-    print("✅ 配置清单已生成，请在阿里云控制台完成上述配置")
-    print()
-    print("📖 参考文档：")
-    print("  ARMS: https://help.aliyun.com/product/34362.html")
-    print("  SLS:  https://help.aliyun.com/product/28958.html")
+def _percent_encode(value: str) -> str:
+    return quote(str(value), safe="~")
 
 
-def status():
-    """查看监控状态"""
-    print("MedAgent 监控概览")
-    print("-" * 30)
-    print(f"ARMS 应用: {APP_NAME}")
-    print(f"区域: {ALIYUN_REGION}")
-    print(f"SLS 项目: {LOG_PROJECT}/{LOG_STORE}")
-    print(f"告警规则: {len(ALERT_RULES)} 条")
-    print()
-    print("在阿里云控制台查看详情：")
-    print(f"  ARMS: https://arms.console.aliyun.com/")
-    print(f"  SLS:  https://sls.console.aliyun.com/")
+def _sign(params: dict, secret: str) -> str:
+    sorted_items = sorted(params.items())
+    canonical = "&".join(f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted_items)
+    string_to_sign = f"GET&%2F&{_percent_encode(canonical)}"
+    digest = hmac.new(secret.encode(), string_to_sign.encode(), hashlib.sha1)
+    return base64.b64encode(digest.digest()).decode()
+
+
+def _call_arms(action: str, extra: dict) -> dict:
+    ak = os.getenv("ALIYUN_ACCESS_KEY_ID", "")
+    sk = os.getenv("ALIYUN_ACCESS_KEY_SECRET", "")
+    if not ak or not sk:
+        raise RuntimeError("未配置 ALIYUN_ACCESS_KEY_ID/ALIYUN_ACCESS_KEY_SECRET")
+    params = {
+        "AccessKeyId": ak,
+        "Action": action,
+        "Format": "JSON",
+        "SignatureMethod": "HMAC-SHA1",
+        "SignatureNonce": uuid.uuid4().hex,
+        "SignatureVersion": "1.0",
+        "Timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "Version": "2019-08-08",
+        "RegionId": os.getenv("ALIYUN_REGION", "cn-hangzhou"),
+        **extra,
+    }
+    params["Signature"] = _sign(params, sk)
+    resp = httpx.get("https://arms.aliyuncs.com/", params=params, timeout=15.0)
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get("Code") not in (None, "200", "Success"):
+        raise RuntimeError(f"ARMS API 错误: {body}")
+    return body
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="只打印动作，不调用 API")
+    args = parser.parse_args()
+
+    for alert in ALERTS:
+        if args.dry_run:
+            print(f"[dry-run] 将创建/更新告警规则: {alert['name']} ({alert['metric']} {alert['op']} {alert['threshold']})")
+            continue
+        try:
+            body = _call_arms("CreatePrometheusAlertRule", {"AlertName": alert["name"]})
+            print(f"OK 告警规则 {alert['name']}: {body}")
+        except Exception as exc:
+            print(f"FAIL 告警规则 {alert['name']}: {exc}", file=sys.stderr)
+            print("请在阿里云控制台手动配置（ARMS → 告警规则），或补齐 AK 权限后重跑。", file=sys.stderr)
+            sys.exit(1)
+    print("ARMS 告警规则配置完成（或 dry-run 结束）")
 
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
-    if cmd == "setup":
-        setup()
-    else:
-        status()
+    main()

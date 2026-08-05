@@ -40,6 +40,9 @@ app.include_router(rules_router)
 from app.api import report as report_api
 app.include_router(report_api.router)
 
+from app.api import metrics as metrics_api
+app.include_router(metrics_api.router)
+
 
 @app.get("/health")
 async def health():

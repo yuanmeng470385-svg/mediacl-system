@@ -1,0 +1,18 @@
+# ARMS 告警规则源文件（与 deploy/arms-monitor.py 的 ALERTS 列表同内容）
+# 单一事实来源的意图：留待后续用本文件替换脚本内硬编码列表；本轮以脚本内列表为准。
+alerts:
+  - name: "AI 回答延迟过高"
+    metric: "specialist_chat_latency_seconds"
+    threshold: "5"
+    op: ">"
+    notify: ["dev_team"]
+  - name: "合规拦截率异常"
+    metric: "compliance_blocks_total"
+    threshold: "0.001|0.1"
+    op: "out_of_range"
+    notify: ["dev_team", "compliance_team"]
+  - name: "数据库连接池满"
+    metric: "db_connection_pool_usage"
+    threshold: "0.8"
+    op: ">"
+    notify: ["dev_team"]

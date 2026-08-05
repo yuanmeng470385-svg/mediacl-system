@@ -116,6 +116,8 @@ class AnswerGenerator:
         )
         if answer_check.get("blocked"):
             latency_ms = int((time.time() - start_time) * 1000)
+            from app.api.metrics import CHAT_LATENCY
+            CHAT_LATENCY.observe(latency_ms / 1000.0)
             # 审计日志
             await write_audit_log(
                 user_id=user_id,
@@ -140,6 +142,8 @@ class AnswerGenerator:
 
         # ---- Step 4: 审计日志 ----
         latency_ms = int((time.time() - start_time) * 1000)
+        from app.api.metrics import CHAT_LATENCY
+        CHAT_LATENCY.observe(latency_ms / 1000.0)
         await write_audit_log(
             user_id=user_id,
             action="chat_response",

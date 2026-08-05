@@ -181,6 +181,9 @@ class ComplianceChecker:
 
         # 如果已有 reject 级别的违规，直接返回（省一次 LLM 调用）
         if any(v["action"] == "reject" for v in violations):
+            from app.api.metrics import COMPLIANCE_BLOCKS
+            for v in violations:
+                COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
             return self._result(True, violations)
 
         # ----- 第 3 关：LLM 语义审核 -----
@@ -190,6 +193,9 @@ class ComplianceChecker:
             violations.extend(semantic_violations)
 
         blocked = any(v["action"] == "reject" for v in violations)
+        from app.api.metrics import COMPLIANCE_BLOCKS
+        for v in violations:
+            COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
         return self._result(blocked, violations)
 
     # ==================== 第 1 关 + 第 2 关：文本匹配 ====================
