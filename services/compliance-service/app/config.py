@@ -23,6 +23,9 @@ class Settings:
         os.path.join(os.path.dirname(__file__), "..", "..", "..", "shared", "compliance-rules", "rules.yaml")
     )
 
+    # 规则热更新 TTL（秒）：超过该时间自动从数据库重载
+    RULES_RELOAD_TTL = float(os.getenv("RULES_RELOAD_TTL", "60"))
+
     GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

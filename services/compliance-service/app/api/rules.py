@@ -122,10 +122,14 @@ async def create_rule(
     db: Session = Depends(get_db),
 ):
     """新增合规规则"""
+    rule_code = (request.get("rule_code") or "").strip()
+    rule_name = (request.get("rule_name") or "").strip()
+    if not rule_code or not rule_name:
+        raise ParamError("rule_code 和 rule_name 不能为空")
     rule = ComplianceRule(
-        rule_code=request["rule_code"],
-        rule_name=request["rule_name"],
-        rule_type=request["rule_type"],
+        rule_code=rule_code,
+        rule_name=rule_name,
+        rule_type=request.get("rule_type") or "keyword",
         content=request.get("content", {}),
         severity=request.get("severity", "high"),
         action=request.get("action", "reject"),
@@ -135,6 +139,7 @@ async def create_rule(
     db.add(rule)
     db.commit()
     db.refresh(rule)
+    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
     logger.info(f"新增合规规则: {rule.rule_code} by user {current_user['id']}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_create",
@@ -164,6 +169,7 @@ async def update_rule(
     rule.version = (rule.version or 0) + 1
 
     db.commit()
+    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
     logger.info(f"更新合规规则: {rule.rule_code} v{rule.version}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_update",
@@ -186,6 +192,7 @@ async def delete_rule(
         raise HTTPException(status_code=404, detail="规则不存在")
     rule.enabled = False
     db.commit()
+    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
     logger.info(f"禁用合规规则: {rule.rule_code}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_disable",

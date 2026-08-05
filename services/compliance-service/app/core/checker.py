@@ -14,6 +14,7 @@
 import os
 import re
 import json
+import time
 import logging
 from typing import Dict, List, Optional
 
@@ -31,6 +32,8 @@ class ComplianceChecker:
     def __init__(self):
         self.qwen_client = None  # 延迟初始化（仅语义审核时需要）
         self.rules: List[Dict] = []
+        self.rules_ttl = settings.RULES_RELOAD_TTL
+        self._rules_loaded_at = 0.0
         self._reload_rules()
 
     # ==================== 规则加载 ====================
@@ -50,9 +53,13 @@ class ComplianceChecker:
                 "请检查 RULES_YAML_PATH 环境变量。", yaml_path
             )
 
-        # 2. TODO: 从数据库加载规则（优先级高于 YAML，可覆盖）
-        # db_rules = self._load_db_rules()
-        # rules = self._merge_rules(rules, db_rules)
+        # 2. 从数据库加载规则（优先级高于 YAML，可覆盖）
+        try:
+            db_rules = self._load_db_rules()
+            rules = self._merge_rules(rules, db_rules)
+            logger.info("数据库规则加载完成，共 %d 条（含 YAML %d 条）", len(db_rules), len(rules))
+        except Exception as exc:
+            logger.error("数据库规则加载失败，仅用 YAML（危险：DB 规则不生效）: %s", exc)
 
         # 3. 仅保留 enabled 的规则
         rules = [r for r in rules if r.get("enabled", True)]
@@ -62,14 +69,63 @@ class ComplianceChecker:
             logger.error("合规规则为 0 条 —— 所有内容都会被放行，请立即排查")
         else:
             logger.info(f"合规规则加载完成，共 {len(self.rules)} 条有效规则")
+        self._rules_loaded_at = time.time()
+
+    def _load_db_rules(self) -> List[Dict]:
+        """从 compliance_rules 表加载启用的规则（引擎格式）"""
+        from shared.common.db_session import SessionLocal
+        from shared.models.compliance import ComplianceRule
+        db = SessionLocal()
+        try:
+            rows = db.query(ComplianceRule).filter(ComplianceRule.enabled == True).all()  # noqa: E712
+            out = []
+            for r in rows:
+                content = r.content or {}
+                out.append({
+                    "id": r.rule_code,
+                    "name": r.rule_name,
+                    "type": r.rule_type,
+                    "patterns": content.get("patterns", []),
+                    "severity": r.severity,
+                    "action": r.action,
+                    "description": getattr(r, "description", "") or "",
+                    "enabled": r.enabled,
+                })
+            return out
+        finally:
+            db.close()
+
+    @staticmethod
+    def _merge_rules(yaml_rules: List[Dict], db_rules: List[Dict]) -> List[Dict]:
+        """DB 覆盖 YAML：同 id 以 DB 为准，YAML 独有的保留"""
+        by_id = {r["id"]: r for r in db_rules}
+        for r in yaml_rules:
+            by_id.setdefault(r["id"], r)
+        return list(by_id.values())
 
     def _compile_rules(self):
-        """预编译关键词和正则，提高运行效率"""
+        """预编译关键词和正则（单条失败只剔除该条，不拖垮引擎）"""
+        valid = []
         for rule in self.rules:
             if rule["type"] == "keyword":
                 rule["_patterns"] = [p for p in rule.get("patterns", [])]
+                valid.append(rule)
             elif rule["type"] == "regex":
-                rule["_compiled"] = [re.compile(p) for p in rule.get("patterns", [])]
+                compiled = []
+                ok = True
+                for p in rule.get("patterns", []):
+                    try:
+                        compiled.append(re.compile(p))
+                    except re.error as exc:
+                        logger.error("规则 %s 的正则 %r 编译失败，整条规则剔除: %s", rule["id"], p, exc)
+                        ok = False
+                        break
+                if ok:
+                    rule["_compiled"] = compiled
+                    valid.append(rule)
+            else:  # semantic
+                valid.append(rule)
+        self.rules = valid
 
     def reload(self):
         """热更新：重新加载所有规则"""
@@ -94,6 +150,13 @@ class ComplianceChecker:
                 "checked_rules": [...]
             }
         """
+        # 规则热更新：超过 TTL 自动重载（双 worker 各自最多延迟 rules_ttl 秒生效）
+        if time.time() - self._rules_loaded_at > self.rules_ttl:
+            try:
+                self._reload_rules()
+            except Exception as exc:
+                logger.error("TTL 自动重载规则失败: %s", exc)
+
         if not content or not content.strip():
             return self._safe_result()
 
@@ -269,7 +332,10 @@ class ComplianceChecker:
             else:
                 # 语义规则走 LLM
                 result = self._semantic_check(content, [rule], {})
-                matched = result[0]["matched_text"] if result else None
+                # 语义结果与 hits 对齐：只认 rule_code 匹配当前规则的违规
+                # （LLM 返回其他规则或 R999 解析失败兜底时，不误算为当前规则命中）
+                aligned = next((v for v in result if v["rule_code"] == rule["id"]), None)
+                matched = aligned["matched_text"] if aligned else None
             hits.append({
                 "rule_code": rule["id"],
                 "rule_name": rule["name"],
