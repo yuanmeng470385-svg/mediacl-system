@@ -15,7 +15,7 @@
 import json
 import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -75,6 +75,34 @@ def _parse_json_content(content: str) -> Optional[dict]:
         return result if isinstance(result, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+from app.db.repositories.task_repo import TaskRepo, CHANNEL_TYPE_MAP
+
+
+def _parse_follow_up_items(items: list, visit_id: int, user_id: int) -> list:
+    """把 AI 返回的 follow_up_items 归一化为 tasks 行数据（坏格式跳过）"""
+    parsed = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        action = (item.get("action") or "").strip()
+        if not action:
+            continue
+        due_raw = (item.get("due") or "").strip()
+        try:
+            due_date = date.fromisoformat(due_raw) if due_raw else None
+        except ValueError:
+            due_date = None
+        channel = (item.get("channel") or "").strip()
+        parsed.append({
+            "title": action,
+            "description": item.get("description"),
+            "task_type": CHANNEL_TYPE_MAP.get(channel, "follow_up"),
+            "due_date": due_date,
+            "channel": channel or None,
+        })
+    return parsed
 
 
 class VisitManager:
@@ -405,6 +433,18 @@ class VisitManager:
         specialist_id = self._resolve_specialist(db, record.product_id)
         result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
         parsed = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
+
+        # 自动创建后续任务（必做项）：AI 建议逐条落库，失败不影响主流程
+        follow_up_items = (parsed.get("follow_up_items") or []) if isinstance(parsed, dict) else []
+        created = []
+        for item in _parse_follow_up_items(follow_up_items, visit_id, user_id):
+            try:
+                task = TaskRepo.create(db, visit_id, user_id, item)
+                created.append(task.id)
+            except Exception as exc:
+                logger.error("任务创建失败: %s", exc)
+        if created:
+            logger.info("visit %s 自动创建任务 %s 条: %s", visit_id, len(created), created)
 
         await write_audit_log(
             user_id=user_id, action="visit_follow_up",

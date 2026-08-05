@@ -69,6 +69,7 @@ ROUTE_MAP = {
     "/api/v1/conversations": settings.SPECIALIST_SERVICE_URL,
     "/api/v1/favorites": settings.SPECIALIST_SERVICE_URL,
     "/api/v1/visits": settings.VISIT_SERVICE_URL,
+    "/api/v1/tasks": settings.VISIT_SERVICE_URL,
     "/api/v1/knowledge": settings.KNOWLEDGE_SERVICE_URL,
     "/api/v1/compliance": settings.COMPLIANCE_SERVICE_URL,
     "/api/v1/audit": settings.AUDIT_SERVICE_URL,
