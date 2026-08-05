@@ -11,7 +11,7 @@ jobs:
       matrix:
         service: [auth-service, specialist-service, visit-service, knowledge-service, compliance-service, audit-service, hcp-service, gateway]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build image
         run: |
           docker build -t registry.cn-hangzhou.aliyuncs.com/medagent/${{ matrix.service }}:${{ github.sha }} \

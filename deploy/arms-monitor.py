@@ -54,7 +54,8 @@ def _sign(params: dict, secret: str) -> str:
     sorted_items = sorted(params.items())
     canonical = "&".join(f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted_items)
     string_to_sign = f"GET&%2F&{_percent_encode(canonical)}"
-    digest = hmac.new(secret.encode(), string_to_sign.encode(), hashlib.sha1)
+    # 阿里云 RPC v1 签名规范：HMAC 密钥 = AccessKeySecret + "&"
+    digest = hmac.new((secret + "&").encode(), string_to_sign.encode(), hashlib.sha1)
     return base64.b64encode(digest.digest()).decode()
 
 

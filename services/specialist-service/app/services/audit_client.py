@@ -20,6 +20,8 @@ async def write_audit_log(
     action: str = "",
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
+    before_value: Any = None,
+    after_value: Any = None,
     ai_involved: bool = False,
     ai_model: Optional[str] = None,
     ai_prompt: Optional[str] = None,
@@ -36,26 +38,33 @@ async def write_audit_log(
     Returns:
         日志 ID，失败返回 None
     """
+    payload = {
+        "service_name": service_name,
+        "user_id": user_id,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "ai_involved": ai_involved,
+        "ai_model": ai_model,
+        "ai_prompt": ai_prompt,
+        "ai_response": ai_response,
+        "compliance_result": compliance_result,
+        "request_id": request_id,
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+    }
+    # before_value/after_value 可选透传（专员 CRUD 变更快照留痕）：为 None 时不携带，
+    # 保持既有 payload 形态（参照 hcp-service 的透传模式）
+    if before_value is not None:
+        payload["before_value"] = before_value
+    if after_value is not None:
+        payload["after_value"] = after_value
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{GATEWAY_URL}/api/v1/audit/log",
                 headers=internal_headers(),
-                json={
-                    "service_name": service_name,
-                    "user_id": user_id,
-                    "action": action,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "ai_involved": ai_involved,
-                    "ai_model": ai_model,
-                    "ai_prompt": ai_prompt,
-                    "ai_response": ai_response,
-                    "compliance_result": compliance_result,
-                    "request_id": request_id,
-                    "client_ip": client_ip,
-                    "user_agent": user_agent,
-                }
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json().get("data", {})

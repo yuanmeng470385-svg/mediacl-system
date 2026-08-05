@@ -78,7 +78,7 @@ class KnowledgeRepository:
     @staticmethod
     def find_latest_by_title(db: Session, title: str, product_id: Optional[int]) -> Optional[KnowledgeDocument]:
         q = db.query(KnowledgeDocument).filter(KnowledgeDocument.title == title)
-        if product_id:
+        if product_id is not None:
             q = q.filter(KnowledgeDocument.product_id == product_id)
         return q.order_by(KnowledgeDocument.revision.desc()).first()
 

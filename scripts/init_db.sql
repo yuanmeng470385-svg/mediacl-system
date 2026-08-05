@@ -219,24 +219,38 @@ INSERT INTO products (product_code, product_name, generic_name, manufacturer, in
 VALUES ('ONC-001', 'XX注射液', 'XXX注射用冻干粉', 'XX制药', '用于治疗XXX', 'active')
 ON CONFLICT (product_code) DO NOTHING;
 
--- 初始合规规则 (R001-R004)
+-- 初始合规规则 (R001-R007) —— 与 shared/compliance-rules/rules.yaml 完全一致
+-- （compliance-service 加载时同 rule_code 以 DB 为准，故种子必须覆盖 YAML 全集，
+--   否则 YAML 有而 DB 没有的拦截词会永久失效）
 INSERT INTO compliance_rules (rule_code, rule_name, rule_type, content, severity, action, description)
 VALUES
 ('R001', '禁止承诺疗效', 'keyword',
- '{"patterns": ["保证治好", "100%有效", "100% 有效", "吃了就好", "一定能治好", "包治百病"]}',
- 'high', 'reject', '禁止对产品疗效做出绝对化承诺'),
+ '{"patterns": ["保证治好", "100%有效", "100% 有效", "吃了就好", "一定能治好", "包治百病", "绝对有效", "肯定能好", "百分之百", "药到病除"]}',
+ 'high', 'reject', '禁止对产品疗效做出绝对化承诺或保证'),
 
 ('R002', '禁止回扣暗示', 'regex',
- '{"patterns": ["返[点红]", "提成费", "好处费", "私下给", "给回[扣]"]}',
- 'high', 'reject', '禁止暗示或讨论回扣、返点等利益输送'),
+ '{"patterns": ["返[点红]", "提成费", "好处费", "私下给", "给回[扣]", "酬[劳谢]"]}',
+ 'high', 'reject', '禁止暗示或讨论回扣、返点等利益输送行为'),
 
 ('R003', '禁止统方', 'semantic',
  '{}',
- 'high', 'reject', '禁止询问或讨论医生处方量数据'),
+ 'high', 'reject', '禁止询问或讨论医生处方量、处方数据'),
 
 ('R004', '禁止超适应症推广', 'semantic',
  '{}',
- 'high', 'reject', '禁止推广超出药品说明书范围的适应症')
+ 'high', 'reject', '禁止推广超出国家药监局批准药品说明书范围的适应症'),
+
+('R005', '禁止贬低竞品', 'semantic',
+ '{}',
+ 'medium', 'warn', '禁止恶意贬低或诋毁竞品产品'),
+
+('R006', '禁止泄露患者信息', 'semantic',
+ '{}',
+ 'high', 'reject', '禁止在对话中提及可识别的患者个人信息'),
+
+('R007', '禁止讨论未公开数据', 'semantic',
+ '{}',
+ 'high', 'warn', '禁止讨论公司内部未公开的临床试验数据或商业信息')
 ON CONFLICT (rule_code) DO NOTHING;
 
 -- ============================================

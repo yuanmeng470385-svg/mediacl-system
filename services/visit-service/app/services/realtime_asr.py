@@ -50,7 +50,8 @@ def _sign_params(params: Dict[str, str], access_key_secret: str) -> str:
     sorted_items = sorted(params.items())
     canonical = "&".join(f"{_percent_encode(k)}={_percent_encode(v)}" for k, v in sorted_items)
     string_to_sign = f"GET&%2F&{_percent_encode(canonical)}"
-    digest = hmac.new(access_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
+    # 阿里云 RPC v1 签名规范：HMAC 密钥 = AccessKeySecret + "&"
+    digest = hmac.new((access_key_secret + "&").encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
     return base64.b64encode(digest.digest()).decode("utf-8")
 
 
