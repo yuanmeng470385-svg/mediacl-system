@@ -1,5 +1,5 @@
 """知识库文档 ORM 模型"""
-from sqlalchemy import BigInteger, Column, Date, DateTime, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from shared.models.base import Base, TimestampMixin
@@ -21,6 +21,8 @@ class KnowledgeDocument(Base, TimestampMixin):
     reviewer_id = Column(BigInteger, ForeignKey("users.id"))
     review_date = Column(DateTime)
     tags = Column(JSONB)
+    revision = Column(Integer, default=1)              # 版本链计数（version 是用户可见文档版本字符串）
+    parent_doc_id = Column(BigInteger, ForeignKey("knowledge_documents.id"))
 
     def to_dict(self):
         return {
@@ -38,6 +40,8 @@ class KnowledgeDocument(Base, TimestampMixin):
             "reviewer_id": self.reviewer_id,
             "review_date": self.review_date.isoformat() if self.review_date else None,
             "tags": self.tags,
+            "revision": self.revision,
+            "parent_doc_id": self.parent_doc_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

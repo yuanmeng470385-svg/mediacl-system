@@ -15,6 +15,10 @@ from app.services.oss_client import OSSClient
 logger = logging.getLogger(__name__)
 
 
+def _next_revision(prev) -> int:
+    return (prev.revision if prev else 0) + 1
+
+
 class DocumentManager:
     def __init__(self, db):
         self.db = db
@@ -36,6 +40,18 @@ class DocumentManager:
         version: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ):
+        # 版本管理：同 title+product 已有文档 → 旧版归档，新行 revision+1 挂 parent 链
+        prev = self.repo.find_latest_by_title(self.db, title, product_id)
+        parent_doc_id = None
+        revision = 1
+        if prev:
+            revision = _next_revision(prev)
+            parent_doc_id = prev.id
+            try:
+                self.repo.archive(self.db, prev)
+            except Exception as exc:
+                logger.warning("归档旧版文档失败（不影响新文档）: %s", exc)
+
         file_url = self.oss.upload_local_file(local_path)
         logger.info("document uploaded to OSS by user %s: %s", uploader_id, file_url)
         return self.repo.create_document(
@@ -49,6 +65,8 @@ class DocumentManager:
             version=version,
             tags=tags,
             status="draft",
+            revision=revision,
+            parent_doc_id=parent_doc_id,
         )
 
     def approve_document(self, doc_id: int, reviewer_id: int):

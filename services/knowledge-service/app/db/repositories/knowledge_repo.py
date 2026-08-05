@@ -25,6 +25,8 @@ class KnowledgeRepository:
         version: Optional[str] = None,
         tags: Optional[List[str]] = None,
         status: str = "draft",
+        revision: int = 1,
+        parent_doc_id: Optional[int] = None,
     ) -> KnowledgeDocument:
         doc = KnowledgeDocument(
             title=title,
@@ -38,6 +40,8 @@ class KnowledgeRepository:
             version=version,
             tags=tags,
             status=status,
+            revision=revision,
+            parent_doc_id=parent_doc_id,
         )
         self.db.add(doc)
         self.db.commit()
@@ -70,6 +74,20 @@ class KnowledgeRepository:
             .all()
         )
         return items, total
+
+    @staticmethod
+    def find_latest_by_title(db: Session, title: str, product_id: Optional[int]) -> Optional[KnowledgeDocument]:
+        q = db.query(KnowledgeDocument).filter(KnowledgeDocument.title == title)
+        if product_id:
+            q = q.filter(KnowledgeDocument.product_id == product_id)
+        return q.order_by(KnowledgeDocument.revision.desc()).first()
+
+    @staticmethod
+    def archive(db: Session, doc: KnowledgeDocument) -> KnowledgeDocument:
+        doc.status = "archived"
+        db.commit()
+        db.refresh(doc)
+        return doc
 
     def update_status(
         self,
