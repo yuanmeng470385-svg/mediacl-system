@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from shared.common.auth import get_current_user, require_roles
+from app.models.knowledge_feedback import KnowledgeFeedback
 from app.services.audit_client import write_audit_log
 
 # 知识库管理端点（S6 RBAC / S9）：上传与审核限 admin/manager/medical（方案要求医学顾问审核）
@@ -227,13 +228,38 @@ async def search_test(
     return success({"query": data["query"], "backends": outputs})
 
 
+def validate_feedback_request(request: dict) -> dict:
+    query = (request.get("query") or "").strip()
+    if not query:
+        raise ParamError("query 不能为空")
+    rating = request.get("rating")
+    if rating not in (1, -1):
+        raise ParamError("rating 必须是 1（有用）或 -1（无用）")
+    return {"query": query, "rating": rating,
+            "doc_id": (request.get("doc_id") or "")[:100],
+            "comment": (request.get("comment") or "")[:500]}
+
+
 @router.post("/feedback")
 async def submit_feedback(
     request: dict,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    logger.info("knowledge feedback from user %s: %s", current_user["id"], request)
-    return success({"received": True})
+    """反馈检索质量（真实落库）"""
+    data = validate_feedback_request(request)
+    fb = KnowledgeFeedback(
+        user_id=current_user["id"], query=data["query"],
+        doc_id=data["doc_id"], rating=data["rating"], comment=data["comment"],
+    )
+    db.add(fb)
+    db.commit()
+    await write_audit_log(
+        user_id=current_user["id"], action="knowledge_feedback",
+        resource_type="knowledge_document", resource_id=data["doc_id"],
+        after_value=data,
+    )
+    return success({"feedback_id": fb.id}, "反馈已记录")
 
 
 @router.get("/stats")
