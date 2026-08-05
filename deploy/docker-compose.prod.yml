@@ -12,11 +12,12 @@ services:
       POSTGRES_DB: medagent
       POSTGRES_USER: ${DB_USER:-medagent}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-    ports:
-      - "5432:5432"
+    # S8：不映射公网端口 —— 数据库只在 compose 内部网络可达（由网关/服务访问）
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init_db.sql:/docker-entrypoint-initdb.d/init.sql
+      # init_db.sql 在仓库的 scripts/ 下，不在 deploy/ —— 原来的 ./init_db.sql 指向不存在的文件，
+      # 会被 Docker 当成目录挂载，导致生产库从来没被初始化过
+      - ../scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-medagent}"]
       interval: 10s
@@ -32,13 +33,12 @@ services:
     image: redis:7-alpine
     container_name: medagent-redis
     restart: always
-    command: redis-server --appendonly yes
-    ports:
-      - "6379:6379"
+    # S8：不映射公网端口 + requirepass 认证（REDIS_PASSWORD 必填，未设置则拒绝启动）
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD 必须设置}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -64,6 +64,27 @@ services:
       driver: "json-file"
       options:
         max-size: "50m"
+        max-file: "3"
+
+  auth-service:
+    image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/auth-service:${IMAGE_TAG:-latest}
+    container_name: medagent-auth
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-medagent}:${DB_PASSWORD}@postgres:5432/medagent
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      GATEWAY_URL: http://gateway:8000
+      AUTH_DEV_MODE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"
         max-file: "3"
 
   specialist-service:

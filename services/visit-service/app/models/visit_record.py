@@ -4,6 +4,12 @@ from sqlalchemy import Column, String, BigInteger, ForeignKey, DateTime, Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from shared.models.base import Base, TimestampMixin
 
+# 注册外键引用表的元数据（否则 SQLAlchemy 报 NoReferencedTableError）：
+# visit_records.hcp_id → hcps、product_id → products、specialist_id → digital_specialists
+import shared.models.hcp  # noqa: F401
+import shared.models.product  # noqa: F401
+import shared.models.digital_specialist  # noqa: F401
+
 
 class VisitRecord(Base, TimestampMixin):
     """拜访记录（映射 visit_records 表）

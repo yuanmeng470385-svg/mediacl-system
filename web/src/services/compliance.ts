@@ -22,4 +22,10 @@ export const complianceAPI = {
 
   stats: () =>
     client.get<ApiResponse<{ total: number; today_blocks: number; block_rate: number }>>('/compliance/stats'),
+
+  blocks: (params?: { page?: number; page_size?: number; rule_code?: string }) =>
+    client.get<PaginatedResponse<{
+      id: number; rule_code: string; rule_name: string; severity: string;
+      action: string; blocked_at: string;
+    }>>('/compliance/blocks', { params }),
 };

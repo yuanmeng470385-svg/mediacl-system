@@ -9,7 +9,7 @@ export const knowledgeAPI = {
     client.get<ApiResponse<KnowledgeDoc>>(`/knowledge/documents/${id}`),
 
   review: (id: string, action: 'approve' | 'reject', reason?: string) =>
-    client.post<ApiResponse<null>>(`/knowledge/documents/${id}/review`, { action, reason }),
+    client.post<ApiResponse<null>>(`/knowledge/documents/${id}/review`, { approved: action === 'approve', reason }),
 
   stats: () =>
     client.get<ApiResponse<{ docs: number; tags: number; chunks: number }>>('/knowledge/stats'),

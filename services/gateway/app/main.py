@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import httpx
 import logging
 import time
@@ -40,9 +40,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ==================== 中间件（按顺序注册） ====================
+# ==================== 中间件 ====================
+# Starlette 中间件是"后注册的先执行"（LIFO）。
+# 注册顺序 Auth → RateLimiter → CORS，实际执行顺序：CORS → RateLimiter → Auth → 路由。
+# 这样 CORS 在最外层（OPTIONS 预检不被认证拦 401）、限流在认证外层
+# （未认证流量按 IP 限流，认证流量按 user_id 限流）、Auth 最内层兜底。
 
-# 1. CORS
+# 3. JWT 认证（最内层：白名单路径自动跳过）
+app.add_middleware(AuthMiddleware)
+
+# 2. 限流（认证外层：scope["user"] 已有则按 user_id，否则按 IP）
+rate_limit = int(_os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
+
+# 1. CORS（最外层：跨域预检先过）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,13 +61,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 2. 限流（先于认证，防止暴力攻击）
-rate_limit = int(_os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
-app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
-
-# 3. JWT 认证（白名单路径自动跳过）
-app.add_middleware(AuthMiddleware)
 
 # ==================== 路由映射 ====================
 
@@ -68,7 +72,8 @@ ROUTE_MAP = {
     "/api/v1/compliance": settings.COMPLIANCE_SERVICE_URL,
     "/api/v1/audit": settings.AUDIT_SERVICE_URL,
     "/api/v1/hcps": settings.HCP_SERVICE_URL,
-    "/api/v1/auth": settings.SPECIALIST_SERVICE_URL,
+    "/api/v1/auth": settings.AUTH_SERVICE_URL,
+    "/api/v1/users": settings.AUTH_SERVICE_URL,  # 用户管理（Web 后台）
 }
 
 
@@ -90,6 +95,7 @@ async def health():
         "service": settings.SERVICE_NAME,
         "version": "1.0.0",
         "backends": {
+            "auth": settings.AUTH_SERVICE_URL,
             "specialist": settings.SPECIALIST_SERVICE_URL,
             "visit": settings.VISIT_SERVICE_URL,
             "knowledge": settings.KNOWLEDGE_SERVICE_URL,
@@ -131,10 +137,24 @@ async def proxy(request: Request, path: str):
 
             logger.info(f"PROXY {request.method} {target_url} → {response.status_code} ({elapsed:.3f}s)")
 
-            return JSONResponse(
-                content=response.json(),
+            content_type = response.headers.get("content-type", "")
+            if "application/json" in content_type:
+                return JSONResponse(
+                    content=response.json(),
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                )
+            # 非 JSON（Excel 导出/文件下载，H11）：原样透传字节，不尝试解析
+            # content-length/content-encoding/transfer-encoding 由新响应自己处理，不透传
+            filtered_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")
+            }
+            return Response(
+                content=response.content,
                 status_code=response.status_code,
-                headers=dict(response.headers),
+                headers=filtered_headers,
+                media_type=content_type,
             )
         except httpx.ConnectError:
             logger.error(f"无法连接到后端服务: {target_url}")

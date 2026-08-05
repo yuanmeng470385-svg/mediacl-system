@@ -1,3 +1,26 @@
+# ==============================================
+# MedAgent 本地开发编排
+#
+# 所有服务镜像的 build context 都是仓库根目录（因为需要 COPY shared/）。
+#
+# .env 里的 DATABASE_URL / REDIS_URL / GATEWAY_URL 写的是 localhost，
+# 那是给「宿主机直接跑 uvicorn」用的。容器内 localhost 指向容器自己，
+# 所以这里用 environment 覆盖成 compose 服务名（environment 优先级高于 env_file）。
+# ==============================================
+
+# 容器内网地址：一处定义，各服务复用
+x-internal-urls: &internal-urls
+  DATABASE_URL: postgresql://medagent:medagent123@postgres:5432/medagent
+  REDIS_URL: redis://redis:6379/0
+  GATEWAY_URL: http://gateway:8000
+  AUTH_SERVICE_URL: http://auth-service:8007
+  SPECIALIST_SERVICE_URL: http://specialist-service:8001
+  VISIT_SERVICE_URL: http://visit-service:8002
+  KNOWLEDGE_SERVICE_URL: http://knowledge-service:8003
+  COMPLIANCE_SERVICE_URL: http://compliance-service:8004
+  AUDIT_SERVICE_URL: http://audit-service:8005
+  HCP_SERVICE_URL: http://hcp-service:8006
+
 services:
   # ==================== 基础设施 ====================
   postgres:
@@ -33,11 +56,30 @@ services:
 
   # ==================== 网关 ====================
   gateway:
-    build: ./services/gateway
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
     container_name: medagent-gateway
     ports:
       - "8000:8000"
     env_file: .env
+    environment: *internal-urls
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ==================== 认证 ====================
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    container_name: medagent-auth
+    ports:
+      - "8007:8007"
+    env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,11 +88,14 @@ services:
 
   # ==================== 微服务 ====================
   specialist-service:
-    build: ./services/specialist-service
+    build:
+      context: .
+      dockerfile: services/specialist-service/Dockerfile
     container_name: medagent-specialist
     ports:
       - "8001:8001"
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,11 +103,14 @@ services:
         condition: service_healthy
 
   visit-service:
-    build: ./services/visit-service
+    build:
+      context: .
+      dockerfile: services/visit-service/Dockerfile
     container_name: medagent-visit
     ports:
       - "8002:8002"
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,11 +118,14 @@ services:
         condition: service_healthy
 
   knowledge-service:
-    build: ./services/knowledge-service
+    build:
+      context: .
+      dockerfile: services/knowledge-service/Dockerfile
     container_name: medagent-knowledge
     ports:
       - "8003:8003"
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,11 +133,17 @@ services:
         condition: service_healthy
 
   compliance-service:
-    build: ./services/compliance-service
+    build:
+      context: .
+      dockerfile: services/compliance-service/Dockerfile
     container_name: medagent-compliance
     ports:
       - "8004:8004"
     env_file: .env
+    environment:
+      <<: *internal-urls
+      # 容器内 shared 在 /app/shared，规则文件路径必须显式指定
+      RULES_YAML_PATH: /app/shared/compliance-rules/rules.yaml
     depends_on:
       postgres:
         condition: service_healthy
@@ -94,21 +151,30 @@ services:
         condition: service_healthy
 
   audit-service:
-    build: ./services/audit-service
+    build:
+      context: .
+      dockerfile: services/audit-service/Dockerfile
     container_name: medagent-audit
     ports:
       - "8005:8005"
     env_file: .env
+    environment:
+      # 审计服务用专用低权账号（migrations/002_audit_immutable.sql 创建，仅 INSERT/SELECT）
+      AUDIT_DATABASE_URL: postgresql://medagent_audit:${AUDIT_DB_PASSWORD}@postgres:5432/medagent
+      <<: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
 
   hcp-service:
-    build: ./services/hcp-service
+    build:
+      context: .
+      dockerfile: services/hcp-service/Dockerfile
     container_name: medagent-hcp
     ports:
       - "8006:8006"
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy

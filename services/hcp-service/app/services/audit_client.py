@@ -4,6 +4,8 @@ import logging
 from typing import Optional, Dict
 import httpx
 
+from shared.common.internal_auth import internal_headers
+
 logger = logging.getLogger(__name__)
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
@@ -28,6 +30,7 @@ async def write_audit_log(
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{GATEWAY_URL}/api/v1/audit/log",
+                headers=internal_headers(),
                 json={
                     "service_name": service_name,
                     "user_id": user_id,

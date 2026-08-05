@@ -10,7 +10,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
-from shared.common.auth import get_current_user
+from shared.common.auth import get_current_user, require_roles
+from app.services.audit_client import write_audit_log
+
+# 知识库管理端点（S6 RBAC / S9）：上传与审核限 admin/manager/medical（方案要求医学顾问审核）
+KB_ADMIN_ROLES = ("admin", "manager", "medical")
 from shared.common.db_session import get_db
 from shared.common.pagination import paginate
 from shared.common.response import BusinessError, ParamError, success
@@ -56,7 +60,7 @@ async def upload_document(
     publish_date: Optional[str] = Form(None),
     version: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*KB_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     if not title.strip():
@@ -102,6 +106,11 @@ async def upload_document(
         except OSError:
             pass
 
+    await write_audit_log(
+        user_id=current_user["id"], action="doc_upload",
+        resource_type="knowledge_document", resource_id=str(doc.id),
+        after_value={"title": doc.title, "doc_type": doc.doc_type, "status": doc.status},
+    )
     return success(doc.to_dict())
 
 
@@ -141,14 +150,25 @@ async def get_document(
 async def review_document(
     doc_id: int,
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*KB_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     manager = _manager(db)
-    if request.get("approved"):
+    # 契约：{"approved": true/false}。兼容旧前端传 {"action": "approve"|"reject"}
+    approved_raw = request.get("approved")
+    if approved_raw is None:
+        approved = request.get("action") == "approve"
+    else:
+        approved = bool(approved_raw)
+    if approved:
         doc = manager.approve_document(doc_id, current_user["id"])
     else:
         doc = manager.reject_document(doc_id, current_user["id"])
+    await write_audit_log(
+        user_id=current_user["id"], action="doc_review",
+        resource_type="knowledge_document", resource_id=str(doc_id),
+        after_value={"approved": approved, "status": doc.status},
+    )
     return success(doc.to_dict())
 
 

@@ -1,7 +1,7 @@
 """陪访助手服务 API 路由"""
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError
 from shared.common.auth import get_current_user
@@ -17,6 +17,14 @@ logger = logging.getLogger(__name__)
 _visit_manager = VisitManager()
 
 
+def _auth_token(raw_request: Request) -> Optional[str]:
+    """从请求头提取用户 JWT —— 透传给 specialist chat（网关要求 JWT，不带则 401）"""
+    header = raw_request.headers.get("authorization", "")
+    if header.startswith("Bearer "):
+        return header[7:]
+    return None
+
+
 def _get_visit_or_404(db: Session, visit_id: int) -> VisitRecord:
     record = VisitRepo.get(db, visit_id)
     if not record:
@@ -24,11 +32,29 @@ def _get_visit_or_404(db: Session, visit_id: int) -> VisitRecord:
     return record
 
 
+def _assert_visit_owner(db: Session, visit_id: int, current_user: dict) -> VisitRecord:
+    """归属校验（S4）：拜访记录只能被本人操作；admin 例外。返回记录本身。"""
+    record = _get_visit_or_404(db, visit_id)
+    if record.user_id != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="无权操作该拜访记录")
+    return record
+
+
+# PUT 允许编辑的业务字段白名单（S4）：
+# AI 生成字段（ai_summary/transcript/compliance_flags 等）与归属字段
+# （user_id/id）不允许通过普通编辑接口修改 —— 拜访记录是监管取证证据。
+ALLOWED_UPDATE_FIELDS = {
+    "hcp_id", "product_id", "specialist_id",
+    "visit_time", "duration_minutes", "attachments",
+}
+
+
 # ==================== 拜访前 ====================
 
 @router.post("/pre-visit")
 async def pre_visit(
     request: dict,
+    raw_request: Request,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -43,7 +69,8 @@ async def pre_visit(
     if not product_id:
         raise ParamError("product_id 不能为空")
     result = await _visit_manager.prepare_visit(
-        db, hcp_id=int(hcp_id), user_id=current_user["id"], product_id=int(product_id)
+        db, hcp_id=int(hcp_id), user_id=current_user["id"], product_id=int(product_id),
+        auth_token=_auth_token(raw_request),
     )
     return success(result)
 
@@ -83,6 +110,7 @@ async def process_transcript(
 
     Request: {"audio_url": "https://oss/audio.wav"} 或 {"text": "直接文本内容"}
     """
+    _assert_visit_owner(db, visit_id, current_user)
     audio_url = request.get("audio_url")
     text_content = request.get("text")
     if not audio_url and not text_content:
@@ -100,6 +128,7 @@ async def process_transcript(
 async def end_visit(
     visit_id: int,
     request: dict,
+    raw_request: Request,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -107,9 +136,11 @@ async def end_visit(
 
     Request: {"full_transcript": "可选，完整对话文本，不传则用已累积的转写"}
     """
+    _assert_visit_owner(db, visit_id, current_user)
     result = await _visit_manager.end_visit(
         db, visit_id, current_user["id"],
         full_transcript=request.get("full_transcript"),
+        auth_token=_auth_token(raw_request),
     )
     return success(result)
 
@@ -117,11 +148,15 @@ async def end_visit(
 @router.post("/{visit_id}/follow-up")
 async def follow_up(
     visit_id: int,
+    raw_request: Request,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """跟进建议：基于拜访记录 + 医生信息 → AI 生成跟进计划"""
-    result = await _visit_manager.follow_up(db, visit_id, current_user["id"])
+    _assert_visit_owner(db, visit_id, current_user)
+    result = await _visit_manager.follow_up(
+        db, visit_id, current_user["id"], auth_token=_auth_token(raw_request)
+    )
     return success(result)
 
 
@@ -134,7 +169,8 @@ async def get_visit(
     db: Session = Depends(get_db),
 ):
     """拜访详情"""
-    return success(_get_visit_or_404(db, visit_id).to_dict())
+    record = _assert_visit_owner(db, visit_id, current_user)
+    return success(record.to_dict())
 
 
 @router.get("")
@@ -154,6 +190,9 @@ async def list_visits(
 
     status: in_progress（未生成总结）/ completed（已结束）
     """
+    # S4：非 admin 不能按 user_id 筛全公司记录 —— 强制只看自己的
+    if current_user.get("role") != "admin":
+        user_id = current_user["id"]
     p = PaginationParams(page=page, page_size=page_size)
     items, total = VisitRepo.list(
         db, page=p.page, page_size=p.page_size,
@@ -170,7 +209,9 @@ async def update_visit(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """编辑拜访记录（仅更新传入字段）"""
-    record = _get_visit_or_404(db, visit_id)
-    record = VisitRepo.update(db, record, request)
+    """编辑拜访记录（仅更新白名单内的业务字段）"""
+    record = _assert_visit_owner(db, visit_id, current_user)
+    # 字段白名单（S4）：AI 生成/合规证据/归属字段一律拒绝 —— 不再任意 setattr
+    allowed = {k: v for k, v in request.items() if k in ALLOWED_UPDATE_FIELDS and v is not None}
+    record = VisitRepo.update(db, record, allowed)
     return success(record.to_dict())

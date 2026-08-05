@@ -13,6 +13,7 @@ import openpyxl
 from shared.common.response import success, ParamError
 from shared.common.auth import get_current_user
 from shared.common.db_session import get_db
+from shared.common.internal_auth import require_internal_key
 from shared.common.pagination import paginate
 from shared.models.audit_log import AuditLog
 
@@ -27,7 +28,11 @@ audit_logger = get_audit_logger()
 # ==================== 写入审计日志（内部接口） ====================
 
 @router.post("/log")
-async def write_log(request: dict, db: Session = Depends(get_db)):
+async def write_log(
+    request: dict,
+    db: Session = Depends(get_db),
+    _internal: bool = Depends(require_internal_key),
+):
     """
     写入审计日志 — 所有微服务内部调用
 
@@ -223,12 +228,23 @@ async def audit_stats(
         .all()
     )
 
+    # 按日趋势（最近 N 天按日期分组，供仪表盘趋势图）
+    day_rows = (
+        db.query(sqlfunc.date(AuditLog.timestamp).label("day"), sqlfunc.count(AuditLog.id))
+        .filter(AuditLog.timestamp >= since)
+        .group_by(sqlfunc.date(AuditLog.timestamp))
+        .order_by(sqlfunc.date(AuditLog.timestamp))
+        .all()
+    )
+    trend_daily = [{"date": str(day), "count": cnt} for day, cnt in day_rows]
+
     return success({
         "total_records": total,
         "recent_records": recent,
         "recent_days": days,
         "risk_distribution": {k or "unknown": v for k, v in risk_dist},
         "service_distribution": {k or "unknown": v for k, v in service_dist},
+        "trend_daily": trend_daily,
     })
 
 

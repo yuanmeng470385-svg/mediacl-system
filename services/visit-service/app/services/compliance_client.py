@@ -4,6 +4,8 @@ import logging
 from typing import Dict
 import httpx
 
+from shared.common.internal_auth import internal_headers
+
 logger = logging.getLogger(__name__)
 
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
@@ -25,6 +27,7 @@ async def check_compliance(content: str, context: dict = None) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{GATEWAY_URL}/api/v1/compliance/check",
+                headers=internal_headers(),
                 json={"content": content, "context": context}
             )
             resp.raise_for_status()

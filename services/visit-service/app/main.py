@@ -37,6 +37,9 @@ register_exception_handlers(app)
 from app.api.visits import router as visits_router
 app.include_router(visits_router)
 
+from app.api.asr_ws import router as asr_ws_router
+app.include_router(asr_ws_router)
+
 
 @app.get("/health")
 async def health():

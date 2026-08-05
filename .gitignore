@@ -60,3 +60,7 @@ htmlcov/
 .coverage
 *.cover
 eval_report.json
+
+# --- 前端构建产物 / 工具目录 ---
+*.tsbuildinfo
+.superpowers/

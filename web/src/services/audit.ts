@@ -16,5 +16,12 @@ export const auditAPI = {
     client.post('/audit/export', params, { responseType: 'blob' }),
 
   stats: () =>
-    client.get<ApiResponse<{ total: number; hit_rules: number }>>('/audit/stats'),
+    client.get<ApiResponse<{
+      total_records: number;
+      recent_records: number;
+      recent_days: number;
+      risk_distribution: Record<string, number>;
+      service_distribution: Record<string, number>;
+      trend_daily: { date: string; count: number }[];
+    }>>('/audit/stats'),
 };

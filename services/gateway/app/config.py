@@ -14,6 +14,7 @@ class Settings:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
     # 后端服务地址（Docker 内部网络用服务名，本地开发用 localhost）
+    AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://localhost:8007")
     SPECIALIST_SERVICE_URL = os.getenv("SPECIALIST_SERVICE_URL", "http://localhost:8001")
     VISIT_SERVICE_URL = os.getenv("VISIT_SERVICE_URL", "http://localhost:8002")
     KNOWLEDGE_SERVICE_URL = os.getenv("KNOWLEDGE_SERVICE_URL", "http://localhost:8003")

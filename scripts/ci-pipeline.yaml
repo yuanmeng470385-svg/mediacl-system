@@ -76,6 +76,7 @@ stages:
         steps:
           - name: 安装依赖
             run: |
+              pip install -r services/auth-service/requirements.txt
               pip install -r services/compliance-service/requirements.txt
               pip install -r services/audit-service/requirements.txt
               pip install -r services/specialist-service/requirements.txt
@@ -86,16 +87,21 @@ stages:
           - name: 初始化数据库
             run: |
               export DATABASE_URL=postgresql://medagent:medagent123@localhost:5432/medagent
+              # Base 在 shared.models.base，不在 db_session —— 从 db_session 导会 ImportError
               python -c "
-              from shared.common.db_session import engine, Base
+              from shared.common.db_session import engine
+              from shared.models.base import Base
               import shared.models.user, shared.models.product, shared.models.compliance, shared.models.audit_log
               Base.metadata.create_all(engine)
               "
           - name: 运行测试
+            # 不要加 || true —— 测试失败必须让流水线红
             run: |
-              python -m pytest services/compliance-service/tests/ -v
-              python -m pytest services/audit-service/tests/ -v
-              python -m pytest services/specialist-service/tests/ -v || true
+              cd services/auth-service       && python -m pytest tests/ -v && cd ../..
+              cd services/compliance-service && python -m pytest tests/ -v && cd ../..
+              cd services/audit-service      && python -m pytest tests/ -v && cd ../..
+              cd services/hcp-service        && python -m pytest tests/ -v && cd ../..
+              cd services/visit-service      && python -m pytest tests/ -v && cd ../..
 
   # ---- Stage 3: 构建镜像 ----
   - name: build
@@ -113,13 +119,15 @@ stages:
                 --password-stdin \
                 registry.cn-hangzhou.aliyuncs.com
 
-          - name: 构建 & 推送 7 个服务
+          - name: 构建 & 推送 8 个服务
             run: |
-              SERVICES=(gateway specialist-service visit-service knowledge-service compliance-service audit-service hcp-service)
+              SERVICES=(gateway auth-service specialist-service visit-service knowledge-service compliance-service audit-service hcp-service)
               TAG=${CI_COMMIT_SHA:-latest}
               for svc in "${SERVICES[@]}"; do
                 echo "Building ${svc}..."
-                docker build -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} ./services/${svc}
+                # build context 必须是仓库根目录 —— 镜像需要 COPY shared/
+                docker build -f services/${svc}/Dockerfile \
+                  -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} .
                 docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG}
                 # 同时打 latest 标签
                 docker tag ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} \

@@ -1,0 +1,62 @@
+"""认证服务 - FastAPI 入口"""
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+from app.config import settings
+from shared.common.exception_handler import register_exception_handlers
+
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# 这个服务负责签发 token —— 密钥没配好就不能启动，
+# 否则会用 shared 里的兜底密钥 dev-secret-change-me 签出可被任意伪造的 token。
+_WEAK_SECRETS = {"", "dev-secret-change-me", "change_me_to_a_random_secret_string"}
+if settings.JWT_SECRET in _WEAK_SECRETS:
+    raise RuntimeError(
+        "JWT_SECRET 未配置或仍是默认值，auth-service 拒绝启动。"
+        "请在 .env 中设置一个足够随机的 JWT_SECRET（例：openssl rand -hex 32）。"
+    )
+
+if settings.DEV_MODE:
+    logger.warning("AUTH_DEV_MODE=true：send-code 会在响应体里回传验证码，生产环境必须关闭！")
+
+app = FastAPI(
+    title="MedAgent - 认证服务",
+    description="手机号验证码登录 / 用户名密码登录 / 当前用户信息",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+register_exception_handlers(app)
+
+from app.api.auth import router as auth_router
+app.include_router(auth_router)
+
+from app.api.users import router as users_router
+app.include_router(users_router)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=settings.SERVICE_PORT)

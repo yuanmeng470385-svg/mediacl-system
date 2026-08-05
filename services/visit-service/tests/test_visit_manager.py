@@ -137,7 +137,7 @@ class FakeTingwu:
 
 # ---------- fake async clients ----------
 
-async def _fake_specialist_ok(specialist_id, question, user_id, session_id=None):
+async def _fake_specialist_ok(specialist_id, question, user_id, session_id=None, auth_token=None):
     return {"answer": json.dumps({
         "summary": "本次拜访讨论了产品疗效和价格问题，医生持中性态度",
         "key_points": ["价格讨论", "疗效认可"],

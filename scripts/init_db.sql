@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name VARCHAR(100) NOT NULL,
     phone VARCHAR(20),
     email VARCHAR(100),
+    password_hash VARCHAR(255),             -- bcrypt；NULL = 未设置密码，禁止密码登录
     role VARCHAR(20) NOT NULL,              -- admin / manager / rep / compliance / medical / finance
     region VARCHAR(50),
     manager_id BIGINT REFERENCES users(id),
@@ -18,6 +19,8 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 CREATE INDEX IF NOT EXISTS idx_users_manager ON users(manager_id);
+-- 手机号登录要求手机号唯一（仅约束非空值，允许多个用户不填手机号）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone) WHERE phone IS NOT NULL;
 
 -- 2. 产品表
 CREATE TABLE IF NOT EXISTS products (
@@ -205,9 +208,10 @@ CREATE INDEX IF NOT EXISTS idx_compliance_blocks_time ON compliance_blocks(block
 
 -- ==================== 种子数据 ====================
 
--- 管理员账号 (密码: admin123, 实际应使用 hash)
-INSERT INTO users (username, full_name, role, status)
-VALUES ('admin', '系统管理员', 'admin', 'active')
+-- 管理员账号（password_hash 故意留空 —— 仓库里不放默认口令）
+-- 设置密码：python scripts/seed_admin.py
+INSERT INTO users (username, full_name, phone, role, status)
+VALUES ('admin', '系统管理员', '13800000000', 'admin', 'active')
 ON CONFLICT (username) DO NOTHING;
 
 -- 示例产品

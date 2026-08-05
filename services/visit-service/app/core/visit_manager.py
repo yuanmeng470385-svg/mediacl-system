@@ -101,7 +101,15 @@ class VisitManager:
     def _get_history(self, db: Session, hcp_id: int, limit: int = 3) -> List[Dict]:
         try:
             rows = db.execute(_HISTORY_SQL, {"hcp_id": hcp_id, "limit": limit}).mappings().all()
-            return [dict(r) for r in rows]
+            history = []
+            for r in rows:
+                row = dict(r)
+                # datetime 不可 JSON 序列化（prompt 里 json.dumps）→ 转 isoformat
+                for k, v in row.items():
+                    if isinstance(v, datetime):
+                        row[k] = v.isoformat()
+                history.append(row)
+            return history
         except Exception as e:
             logger.warning(f"读取互动历史失败: {e}")
             return []
@@ -115,15 +123,24 @@ class VisitManager:
             logger.warning(f"查询数字专员失败: {e}")
             return None
 
-    async def _call_specialist(self, specialist_id: Optional[int], prompt: str, user_id: int) -> Dict:
-        """调 A 生成内容；未找到专员或 A 不可用时降级"""
+    async def _call_specialist(
+        self, specialist_id: Optional[int], prompt: str, user_id: int,
+        auth_token: Optional[str] = None,
+    ) -> Dict:
+        """调 A 生成内容；未找到专员或 A 不可用时降级。
+
+        auth_token：当前用户 JWT 原样透传（chat 接口网关要求 JWT，不带则 401 → 永久 degraded）
+        """
         if not specialist_id:
             return {"answer": "", "blocked": False, "degraded": True, "error": "未找到该产品的数字专员（需先在 specialist-service 配置）"}
-        return await chat_with_specialist(specialist_id, prompt, user_id)
+        return await chat_with_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
 
     # ==================== 拜访前：准备包 ====================
 
-    async def prepare_visit(self, db: Session, hcp_id: int, user_id: int, product_id: int) -> Dict:
+    async def prepare_visit(
+        self, db: Session, hcp_id: int, user_id: int, product_id: int,
+        auth_token: Optional[str] = None,
+    ) -> Dict:
         """生成拜访准备包：医生画像 + 历史互动 → 调 A 生成推荐话题/红线提醒/开场白"""
         hcp = self._get_hcp(db, hcp_id)
         if not hcp:
@@ -151,7 +168,7 @@ class VisitManager:
 输出 JSON 格式。"""
 
         specialist_id = self._resolve_specialist(db, product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id)
+        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
 
         recommendations = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
         return {
@@ -264,11 +281,16 @@ class VisitManager:
         visit_id: int,
         user_id: int,
         full_transcript: Optional[str] = None,
+        auth_token: Optional[str] = None,
     ) -> Dict:
         """结束拜访：调 A 生成结构化记录 → 合规审核 → 审计日志"""
         record = VisitRepo.get(db, visit_id)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+
+        # 状态锁（S4）：已结束的拜访不能重复 end —— 防止覆盖已生成的结构化记录/证据
+        if record.ai_summary:
+            raise BusinessError(f"拜访已结束，不能重复结束: visit_id={visit_id}")
 
         if full_transcript:
             record.conversation_transcript = full_transcript
@@ -295,7 +317,7 @@ class VisitManager:
 }}"""
 
         specialist_id = self._resolve_specialist(db, record.product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id)
+        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
         structured = _parse_json_content(result.get("answer", ""))
 
         if structured:
@@ -354,7 +376,10 @@ class VisitManager:
         logger.info(f"拜访结束: visit_id={visit_id} duration={duration}min sentiment={sentiment}")
         return record.to_dict()
 
-    async def follow_up(self, db: Session, visit_id: int, user_id: int) -> Dict:
+    async def follow_up(
+        self, db: Session, visit_id: int, user_id: int,
+        auth_token: Optional[str] = None,
+    ) -> Dict:
         """生成跟进建议：基于拜访记录 + 医生信息 → 调 A"""
         record = VisitRepo.get(db, visit_id)
         if not record:
@@ -378,7 +403,7 @@ class VisitManager:
 }}"""
 
         specialist_id = self._resolve_specialist(db, record.product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id)
+        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
         parsed = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
 
         await write_audit_log(

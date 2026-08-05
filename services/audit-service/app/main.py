@@ -8,6 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.config import settings
+
+# 审计服务强制使用专用低权账号（AUDIT_DATABASE_URL，见 002_audit_immutable.sql）。
+# shared/common/db_session.py 在 import 时读 DATABASE_URL，这里必须在挂载路由前覆盖，
+# 否则审计服务会用 medagent 账号连接、从而绕过 REVOKE 约束。
+os.environ["DATABASE_URL"] = settings.DATABASE_URL
+
 from shared.common.exception_handler import register_exception_handlers
 
 logging.basicConfig(

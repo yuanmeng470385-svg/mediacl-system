@@ -4,12 +4,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from shared.common.response import success, error, ParamError
-from shared.common.auth import get_current_user
+from shared.common.auth import get_current_user, require_roles
+
+# 合规规则管理端点（增/改/禁/重载）仅限合规相关人员 —— rep 不得改规则（S6 RBAC）
+RULE_ADMIN_ROLES = ("admin", "manager", "compliance")
 from shared.common.db_session import get_db
+from shared.common.internal_auth import require_internal_key
 from shared.common.pagination import paginate, PaginationParams
 from sqlalchemy.orm import Session
 
 from app.core.checker import get_checker
+from app.services.audit_client import write_audit_log
 from shared.models.compliance import ComplianceRule, ComplianceBlock
 
 router = APIRouter(prefix="/api/v1/compliance", tags=["compliance"])
@@ -21,7 +26,11 @@ checker = get_checker()
 # ==================== 合规检查（核心接口） ====================
 
 @router.post("/check")
-async def check_content(request: dict):
+async def check_content(
+    request: dict,
+    db: Session = Depends(get_db),
+    _internal: bool = Depends(require_internal_key),
+):
     """
     合规检查 — 所有微服务都调这个接口
 
@@ -48,6 +57,30 @@ async def check_content(request: dict):
         raise ParamError("content 不能为空")
 
     result = checker.check(content, context)
+
+    # 拦截记录入库（compliance_blocks）—— 之前无写入方，拦截记录页恒为空、拦截率无数据
+    violations = result.get("violations") or []
+    if violations:
+        for v in violations:
+            try:
+                db.add(ComplianceBlock(
+                    user_id=context.get("user_id"),
+                    service_name=context.get("service_name") or context.get("type"),
+                    content=content[:500],  # 截断防表膨胀，展示用
+                    rule_code=v.get("rule_code"),
+                    rule_name=v.get("rule_name"),
+                    severity=v.get("severity"),
+                    action=v.get("action"),
+                    context=context,
+                ))
+            except Exception as exc:  # 拦截记录失败不影响检查结果
+                logger.error(f"拦截记录入库失败: {exc}")
+        try:
+            db.commit()
+        except Exception as exc:
+            logger.error(f"拦截记录入库失败: {exc}")
+            db.rollback()
+
     return success(result)
 
 
@@ -85,7 +118,7 @@ async def list_rules(
 @router.post("/rules")
 async def create_rule(
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """新增合规规则"""
@@ -103,6 +136,11 @@ async def create_rule(
     db.commit()
     db.refresh(rule)
     logger.info(f"新增合规规则: {rule.rule_code} by user {current_user['id']}")
+    await write_audit_log(
+        user_id=current_user["id"], action="rule_create",
+        resource_type="compliance_rule", resource_id=str(rule.id),
+        after_value=rule.to_dict(),
+    )
     return success(rule.to_dict())
 
 
@@ -110,7 +148,7 @@ async def create_rule(
 async def update_rule(
     rule_id: int,
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """编辑合规规则"""
@@ -118,20 +156,28 @@ async def update_rule(
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
 
-    for field in ["rule_name", "rule_type", "content", "severity", "action", "description", "enabled"]:
+    changed_fields = ["rule_name", "rule_type", "content", "severity", "action", "description", "enabled"]
+    before_value = {f: getattr(rule, f) for f in changed_fields if f in request}
+    for field in changed_fields:
         if field in request:
             setattr(rule, field, request[field])
     rule.version = (rule.version or 0) + 1
 
     db.commit()
     logger.info(f"更新合规规则: {rule.rule_code} v{rule.version}")
+    await write_audit_log(
+        user_id=current_user["id"], action="rule_update",
+        resource_type="compliance_rule", resource_id=str(rule.id),
+        before_value=before_value,
+        after_value={f: getattr(rule, f) for f in before_value},
+    )
     return success(rule.to_dict())
 
 
 @router.delete("/rules/{rule_id}")
 async def delete_rule(
     rule_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """禁用合规规则（软删除，不物理删除）"""
@@ -141,20 +187,33 @@ async def delete_rule(
     rule.enabled = False
     db.commit()
     logger.info(f"禁用合规规则: {rule.rule_code}")
+    await write_audit_log(
+        user_id=current_user["id"], action="rule_disable",
+        resource_type="compliance_rule", resource_id=str(rule.id),
+        before_value={"enabled": True},
+        after_value={"enabled": False},
+    )
     return success(None, "规则已禁用")
 
 
 # ==================== 规则热更新 & 测试 ====================
 
 @router.post("/rules/reload")
-async def reload_rules(current_user: dict = Depends(get_current_user)):
+async def reload_rules(current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES))):
     """热更新规则缓存（不重启服务）"""
+    before = len(checker.rules)
     checker.reload()
+    await write_audit_log(
+        user_id=current_user["id"], action="rules_reload",
+        resource_type="compliance_rule",
+        before_value={"rules": before},
+        after_value={"rules": len(checker.rules)},
+    )
     return success({"reloaded_rules": len(checker.rules)})
 
 
 @router.post("/rules/test")
-async def test_rule(request: dict, current_user: dict = Depends(get_current_user)):
+async def test_rule(request: dict, current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES))):
     """测试规则：输入文本，查看命中哪些规则"""
     content = request.get("content", "")
     rule_code = request.get("rule_code")

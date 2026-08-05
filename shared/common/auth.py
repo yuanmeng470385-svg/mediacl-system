@@ -69,6 +69,30 @@ async def get_current_user(
     }
 
 
+def require_roles(*roles: str):
+    """角色校验依赖（S6 RBAC）。
+
+    用法：
+        from shared.common.auth import require_roles
+        @router.put("/rules/{rule_id}")
+        async def update_rule(
+            rule_id: int,
+            current_user: dict = Depends(require_roles("admin", "manager")),
+        ):
+    未登录 → 401（get_current_user 兜底）；角色不符 → 403（code 3000）。
+    角色表（init_db.sql）：admin / manager / rep / compliance / medical / finance。
+    """
+    async def _checker(current_user: dict = Depends(get_current_user)) -> dict:
+        if current_user.get("role") not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": 3000, "message": f"无权限：需要角色 {'/'.join(roles)}", "data": None},
+            )
+        return current_user
+
+    return _checker
+
+
 def _parse_expires(expires_in: str) -> timedelta:
     """解析过期时间字符串"""
     unit = expires_in[-1]

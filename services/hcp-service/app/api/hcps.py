@@ -4,7 +4,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError
-from shared.common.auth import get_current_user
+from shared.common.auth import get_current_user, require_roles
+
+# 医生库维护端点（S6 RBAC）：写操作限 admin/manager
+HCP_ADMIN_ROLES = ("admin", "manager")
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from app.models.hcp import Hcp
@@ -105,7 +108,7 @@ async def get_hcp_interactions(
 @router.post("")
 async def create_hcp(
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """新增医生档案"""
@@ -120,7 +123,7 @@ async def create_hcp(
 async def update_hcp(
     hcp_id: int,
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """编辑医生档案（仅更新传入字段）"""
@@ -136,7 +139,7 @@ async def update_hcp(
 @router.post("/batch-import")
 async def batch_import_hcps(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """Excel 批量导入医生档案
@@ -173,7 +176,7 @@ async def batch_import_hcps(
 async def add_hcp_tags(
     hcp_id: int,
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """添加标签 {"tags": ["KOL", "学术型"]}"""
@@ -189,7 +192,7 @@ async def add_hcp_tags(
 async def remove_hcp_tags(
     hcp_id: int,
     request: dict,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """删除标签 {"tags": ["KOL"]}"""
