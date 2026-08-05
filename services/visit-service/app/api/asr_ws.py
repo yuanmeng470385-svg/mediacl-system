@@ -12,9 +12,11 @@
 
 鉴权：token 走 query 参数（WebSocket 握手无法带 Authorization 头）；
 归属校验沿用 S4 规则（仅本人或 admin）。
-NLS_APPKEY 未配置时自动降级为 MockRealtimeAsrClient（模拟增量文本，可联调）。
+fail-closed：NLS_APPKEY 未配置且未显式 NLS_MOCK=1 时拒绝转写（不降级 Mock 污染证据库）；
+显式 NLS_MOCK=1 时允许 Mock 联调，但 Mock 文本不落库。
 """
 
+import asyncio
 import json
 import logging
 
@@ -33,12 +35,18 @@ logger = logging.getLogger(__name__)
 
 
 def _get_asr_client():
-    """NLS_APPKEY 已配置 → 真实客户端；否则 Mock（开发/联调）"""
+    """NLS_APPKEY 已配置 → 真实客户端；否则抛错（fail-closed，不降级 Mock 污染证据库）。
+
+    显式开发模式：NLS_MOCK=1 时允许 Mock（文本不落库，见 ws 处理器）。
+    """
     import os
-    if os.getenv("NLS_APPKEY"):
-        return RealtimeAsrClient()
-    logger.warning("NLS_APPKEY 未配置，实时转写使用 Mock 客户端（模拟文本）")
-    return MockRealtimeAsrClient()
+    app_key = os.getenv("NLS_APPKEY", "")
+    if app_key:
+        return RealtimeAsrClient(app_key=app_key), False
+    if os.getenv("NLS_MOCK") == "1":
+        logger.error("NLS_MOCK=1 显式启用 Mock 实时转写（仅开发联调，文本不落库）")
+        return MockRealtimeAsrClient(), True
+    raise RuntimeError("实时转写未配置：缺少 NLS_APPKEY（NLS 管控台项目 Appkey）。拒绝降级 Mock，防止假转写污染拜访证据。")
 
 
 @router.websocket("/ws/visits/{visit_id}/asr")
@@ -67,7 +75,12 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         await websocket.accept()
         await websocket.send_json({"type": "ready", "visit_id": visit_id})
 
-        asr = _get_asr_client()
+        try:
+            asr, is_mock = _get_asr_client()
+        except RuntimeError as exc:
+            await websocket.send_json({"type": "error", "message": str(exc)})
+            await websocket.close(code=4500)  # 服务端未配置
+            return
 
         async def on_sentence(text: str, index: int, is_final: bool):
             # 回推增量/断句给 App
@@ -76,23 +89,29 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             })
             # 断句完成：追加到拜访记录 + 实时合规检查
             if is_final:
-                rec = VisitRepo.get(db, visit_id)
-                if rec:
-                    rec.conversation_transcript = (rec.conversation_transcript or "") + text + "\n"
-                    db.commit()
-                try:
-                    compliance = await check_compliance(
-                        text,
-                        {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
-                    )
-                    if compliance.get("blocked"):
-                        await websocket.send_json({
-                            "type": "compliance",
-                            "blocked": True,
-                            "violations": compliance.get("violations", []),
-                        })
-                except Exception as exc:
-                    logger.error(f"实时合规检查失败: {exc}")
+                # fail-closed：Mock 会话的文本绝不落库（防止假转写污染证据库）
+                if is_mock:
+                    logger.warning("Mock 转写文本不落库: %s", text[:50])
+                else:
+                    rec = VisitRepo.get(db, visit_id)
+                    if rec:
+                        rec.conversation_transcript = (rec.conversation_transcript or "") + text + "\n"
+                        db.commit()
+                async def _check_later():
+                    try:
+                        compliance = await check_compliance(
+                            text,
+                            {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
+                        )
+                        if compliance.get("blocked"):
+                            await websocket.send_json({
+                                "type": "compliance",
+                                "blocked": True,
+                                "violations": compliance.get("violations", []),
+                            })
+                    except Exception as exc:
+                        logger.error("实时合规检查失败: %s", exc)
+                asyncio.create_task(_check_later())  # 不阻塞转写流（<2s 承诺）
 
         await asr.start(on_sentence=on_sentence)
 
@@ -120,6 +139,9 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             logger.info(f"客户端断开: visit_id={visit_id}")
         finally:
             await asr.close()
-            await websocket.send_json({"type": "completed"})
+            try:
+                await websocket.send_json({"type": "completed"})
+            except Exception:
+                pass  # 客户端已断开
     finally:
         db.close()

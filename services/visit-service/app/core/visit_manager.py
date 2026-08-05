@@ -305,10 +305,15 @@ class VisitManager:
         # 异议识别（规则 + 语义，语义不可用自动降级）
         objection_result = self.detector.detect(text_content)
 
-        # 追加转写 + 记录合规标记
+        # 追加转写 + 累积合规标记（不整句覆盖，保留全部违规证据）
         record.conversation_transcript = (record.conversation_transcript or "") + text_content + "\n"
-        flags = {"violations": compliance.get("violations", []), "blocked": compliance.get("blocked", False)}
-        record.compliance_flags = flags
+        existing_flags = record.compliance_flags or {"violations": []}
+        existing_violations = existing_flags.get("violations") or []
+        existing_violations.extend(compliance.get("violations", []))
+        record.compliance_flags = {
+            "violations": existing_violations,
+            "blocked": existing_flags.get("blocked", False) or compliance.get("blocked", False),
+        }
         db.commit()
 
         await write_audit_log(
