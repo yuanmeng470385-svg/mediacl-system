@@ -37,7 +37,10 @@ register_exception_handlers(app)
 
 # 挂载路由
 from app.api.specialists import router as specialists_router
+from app.api import conversations
 app.include_router(specialists_router)
+app.include_router(conversations.router)
+app.include_router(conversations.favorites_router)
 
 
 @app.get("/health")

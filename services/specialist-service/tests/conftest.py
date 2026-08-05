@@ -2,4 +2,5 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+# 本文件位于 services/specialist-service/tests/，需上溯三级到仓库根
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))

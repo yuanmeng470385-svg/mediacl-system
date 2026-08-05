@@ -146,39 +146,24 @@ async def get_specialist_stats(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """专员使用统计"""
+    """专员使用统计（对话数 + 满意度）"""
     from app.models.conversation import Conversation
+    from app.models.feedback import ConversationFeedback
     from sqlalchemy import func
+    from app.api.conversations import compute_satisfaction
+
+    specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not specialist:
+        raise HTTPException(status_code=404, detail="专员不存在")
     total = db.query(func.count(Conversation.id)).filter(
         Conversation.specialist_id == specialist_id
     ).scalar()
-    return success({"total_conversations": total})
-
-
-# ==================== 反馈 & 收藏 ====================
-
-@router.post("/{specialist_id}/feedback")
-async def submit_feedback(
-    specialist_id: int,
-    request: dict,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """点赞/点踩反馈"""
-    rating = request.get("rating")  # "up" or "down"
-    message = request.get("message", "")
-    logger.info(f"用户 {current_user['id']} 对专员 {specialist_id} 反馈: {rating} - {message}")
-    return success(None, "反馈已记录")
-
-
-@router.post("/{specialist_id}/favorite")
-async def toggle_favorite(
-    specialist_id: int,
-    request: dict,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """收藏/取消收藏"""
-    action = request.get("action", "add")  # "add" or "remove"
-    logger.info(f"用户 {current_user['id']} 对专员 {specialist_id} 收藏: {action}")
-    return success(None, f"已{action}")
+    positive = db.query(func.count(ConversationFeedback.id)).filter(
+        ConversationFeedback.specialist_id == specialist_id,
+        ConversationFeedback.rating == 1,
+    ).scalar()
+    negative = db.query(func.count(ConversationFeedback.id)).filter(
+        ConversationFeedback.specialist_id == specialist_id,
+        ConversationFeedback.rating == -1,
+    ).scalar()
+    return success({"total_conversations": total, **compute_satisfaction(positive or 0, negative or 0)})
