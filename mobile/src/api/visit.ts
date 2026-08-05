@@ -88,18 +88,6 @@ export const visitAPI = {
     );
   },
 
-  /** 编辑拜访记录 */
-  async update(
-    visitId: number,
-    data: Partial<Pick<VisitRecord, 'status' | 'notes'>>
-  ): Promise<void> {
-    return apiClient.request(
-      'PUT',
-      `/api/v1/visits/${visitId}`,
-      data
-    );
-  },
-
   /** 生成跟进建议 */
   async followUp(visitId: number): Promise<{
     follow_up_plan: string;

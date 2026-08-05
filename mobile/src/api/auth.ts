@@ -33,6 +33,11 @@ export const authAPI = {
     return apiClient.request<User>('GET', '/api/v1/auth/profile');
   },
 
+  /** 读取本地 token（AuthContext 校验登录态用） */
+  async getToken(): Promise<string | null> {
+    return apiClient.getToken();
+  },
+
   /** 退出登录 */
   async logout(): Promise<void> {
     await apiClient.clearToken();
