@@ -119,6 +119,36 @@ class DocumentManager:
 
         return self.repo.update_status(doc_id, "ready", reviewer_id)
 
+    def approve_without_bailian(self, doc_id: int, reviewer_id: int):
+        """离线上架：仅本地正文入库 + 向量化，跳过百炼导入（种子/演示/无百炼凭证场景）"""
+        from app.services.document_processor import extract_text, chunk_text
+        doc = self.repo.get(doc_id)
+        if not doc:
+            raise BusinessError("文档不存在", code=4001)
+        if doc.status not in ("draft", "rejected"):
+            raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
+        if not doc.file_url:
+            raise BusinessError("文档无 file_url", code=4001)
+        import tempfile
+        suffix = os.path.splitext(doc.file_url)[1]
+        fd, local_path = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
+        try:
+            self.oss.download_to_local(doc.file_url, local_path)
+            text = extract_text(local_path)
+        finally:
+            if os.path.exists(local_path):
+                os.unlink(local_path)
+        if text:
+            doc.content = text[:100000]
+            if self.dashvector.is_configured():
+                chunks = chunk_text(text)
+                self.dashvector.upsert_chunks(
+                    doc_id, doc.title or "", chunks,
+                    fields={"product_id": str(doc.product_id or ""), "doc_type": doc.doc_type or ""},
+                )
+        return self.repo.update_status(doc_id, "ready", reviewer_id)
+
     def reject_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)
         if not doc:
