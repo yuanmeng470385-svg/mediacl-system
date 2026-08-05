@@ -1,7 +1,7 @@
 """审计日志客户端 — 调 D 的审计服务（AI 画像生成等行为留痕）"""
 import os
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import httpx
 
 from shared.common.internal_auth import internal_headers
@@ -17,6 +17,8 @@ async def write_audit_log(
     action: str = "",
     resource_type: Optional[str] = None,
     resource_id: Optional[str] = None,
+    before_value: Any = None,
+    after_value: Any = None,
     ai_involved: bool = False,
     ai_model: Optional[str] = None,
     ai_prompt: Optional[str] = None,
@@ -26,24 +28,31 @@ async def write_audit_log(
     **kwargs
 ) -> Optional[int]:
     """写入审计日志（失败不影响业务）"""
+    payload = {
+        "service_name": service_name,
+        "user_id": user_id,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "ai_involved": ai_involved,
+        "ai_model": ai_model,
+        "ai_prompt": ai_prompt,
+        "ai_response": ai_response,
+        "compliance_result": compliance_result,
+        "request_id": request_id,
+    }
+    # before_value/after_value 可选透传（供画像更新等场景留痕）：为 None 时不携带，
+    # 保持既有 payload 形态（参照 compliance-service / auth-service 的透传模式）
+    if before_value is not None:
+        payload["before_value"] = before_value
+    if after_value is not None:
+        payload["after_value"] = after_value
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{GATEWAY_URL}/api/v1/audit/log",
                 headers=internal_headers(),
-                json={
-                    "service_name": service_name,
-                    "user_id": user_id,
-                    "action": action,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "ai_involved": ai_involved,
-                    "ai_model": ai_model,
-                    "ai_prompt": ai_prompt,
-                    "ai_response": ai_response,
-                    "compliance_result": compliance_result,
-                    "request_id": request_id,
-                }
+                json=payload,
             )
             resp.raise_for_status()
             return resp.json().get("data", {}).get("id")

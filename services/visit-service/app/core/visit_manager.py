@@ -121,7 +121,10 @@ async def _push_profile_update(hcp_id: int, structured: dict, visit_id: int) -> 
         updates["prescription_preference"] = {"noted_objections": [str(o)[:200] for o in objections[:5]]}
     sentiment = structured.get("sentiment")
     if sentiment:
-        updates["influence_level"] = sentiment
+        # 情绪（positive/neutral/negative）记入画像备注，与 noted_objections 并列；
+        # influence_level 语义不同（high/medium/low），画像更新不写入
+        pref = updates.setdefault("prescription_preference", {})
+        pref["noted_sentiment"] = sentiment
     if not updates:
         return True
     try:
