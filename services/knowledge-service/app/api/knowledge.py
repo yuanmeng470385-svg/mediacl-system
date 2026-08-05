@@ -31,22 +31,35 @@ def _manager(db: Session) -> DocumentManager:
     return DocumentManager(db)
 
 
+def validate_search_request(request: dict) -> dict:
+    query = (request.get("query") or "").strip()
+    if not query:
+        raise ParamError("query 不能为空")
+    try:
+        top_k = int(request.get("top_k", 10))
+    except (TypeError, ValueError):
+        raise ParamError("top_k 必须是整数")
+    if top_k < 1 or top_k > 50:
+        raise ParamError("top_k 必须在 1-50 之间")
+    return {"query": query, "top_k": top_k}
+
+
 @router.post("/search")
 async def search_knowledge(
     request: dict,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = (request.get("query") or "").strip()
-    if not query:
-        raise ParamError("query 不能为空")
+    data = validate_search_request(request)
     results, source = _manager(db).search(
-        query=query,
+        query=data["query"],
         product_id=request.get("product_id"),
         doc_type=request.get("doc_type"),
-        top_k=int(request.get("top_k", 10)),
+        top_k=data["top_k"],
     )
-    return success({"results": results, "source": source})
+    return success({"results": results, "source": source,
+                    "empty": not results and source != "bailian",
+                    "message": "知识库暂无已上架文档，请先上传并审核文档" if not results and source != "bailian" else None})
 
 
 @router.post("/upload")
@@ -170,6 +183,48 @@ async def review_document(
         after_value={"approved": approved, "status": doc.status},
     )
     return success(doc.to_dict())
+
+
+@router.post("/search-test")
+async def search_test(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """检索测试：同一 query 并行调多个后端对比（各自独立容错）"""
+    import time
+    data = validate_search_request(request)
+    backends = request.get("backends") or ["dashvector", "bailian", "local"]
+    manager = _manager(db)
+    from app.services.dashvector_client import DashVectorClient
+    from app.services.es_client import EsClient
+
+    def _run(backend: str) -> dict:
+        start = time.time()
+        try:
+            if backend == "dashvector":
+                if not manager.dashvector.is_configured():
+                    return {"backend": "dashvector", "error": "DashVector 未配置", "results": []}
+                results = manager._hybrid_search(data["query"], request.get("product_id"), request.get("doc_type"), data["top_k"])
+                return {"backend": "dashvector", "results": results, "elapsed_ms": int((time.time() - start) * 1000)}
+            if backend == "bailian":
+                results = manager.bailian.search(query=data["query"], top_k=data["top_k"])
+                return {"backend": "bailian", "results": results, "elapsed_ms": int((time.time() - start) * 1000)}
+            if backend == "local":
+                results = manager.repo.local_search(query=data["query"], top_k=data["top_k"])
+                return {"backend": "local", "results": results, "elapsed_ms": int((time.time() - start) * 1000)}
+            if backend == "es":
+                es = EsClient()
+                if not es.is_configured():
+                    return {"backend": "es", "error": "ES 未配置（ES_URL）", "results": []}
+                return {"backend": "es", "results": es.search(data["query"], data["top_k"]), "elapsed_ms": int((time.time() - start) * 1000)}
+            return {"backend": backend, "error": f"未知后端 {backend}", "results": []}
+        except Exception as exc:
+            logger.error("search-test 后端 %s 失败: %s", backend, exc)
+            return {"backend": backend, "error": str(exc), "results": []}
+
+    outputs = [_run(b) for b in backends]
+    return success({"query": data["query"], "backends": outputs})
 
 
 @router.post("/feedback")

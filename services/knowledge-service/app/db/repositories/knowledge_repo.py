@@ -89,38 +89,39 @@ class KnowledgeRepository:
         self.db.refresh(doc)
         return doc
 
-    def local_search(
-        self,
-        query: str,
-        product_id: Optional[int] = None,
-        doc_type: Optional[str] = None,
-        top_k: int = 10,
-    ) -> List[dict]:
+    def local_search(self, query, product_id=None, doc_type=None, top_k=10):
+        """本地关键词检索（PostgreSQL 全文检索：标题+正文 tsvector，ts_rank 排序）"""
+        from sqlalchemy import func
         q = self.db.query(KnowledgeDocument).filter(KnowledgeDocument.status == "ready")
         if product_id:
             q = q.filter(KnowledgeDocument.product_id == product_id)
         if doc_type:
             q = q.filter(KnowledgeDocument.doc_type == doc_type)
+
+        ts_expr = func.to_tsvector(
+            "simple",
+            func.coalesce(KnowledgeDocument.title, "") + " " + func.coalesce(KnowledgeDocument.content, ""),
+        )
+        ts_query = func.plainto_tsquery("simple", query)
         keyword = f"%{query}%"
         q = q.filter(
             or_(
                 KnowledgeDocument.title.ilike(keyword),
                 KnowledgeDocument.content.ilike(keyword),
+                ts_expr.op("@@")(ts_query),
             )
         )
-        docs = q.limit(top_k).all()
+        docs = q.order_by(func.ts_rank(ts_expr, ts_query).desc()).limit(top_k).all()
         results = []
         for doc in docs:
             content = doc.content or ""
             title = doc.title or ""
-            score = 0.9 if query.lower() in title.lower() else 0.6
-            results.append(
-                {
-                    "title": title,
-                    "content": content[:500],
-                    "evidence_level": doc.evidence_level,
-                    "score": score,
-                    "doc_id": doc.id,
-                }
-            )
+            score = 1.0 if (query.lower() in title.lower() or (doc.content and query in doc.content)) else 0.7
+            results.append({
+                "title": title,
+                "content": content[:500],
+                "evidence_level": doc.evidence_level,
+                "score": score,
+                "doc_id": doc.id,
+            })
         return results

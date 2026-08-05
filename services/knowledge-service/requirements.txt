@@ -18,6 +18,8 @@ python-docx>=1.0.0
 python-pptx>=0.6.0
 # DashVector SDK
 dashvector>=1.0.0
+# Elasticsearch（可选：ES_URL 配置时启用，未配置自动降级 PG FTS）
+elasticsearch>=8.0.0
 # 向量化（embedding）
 dashscope>=1.20.0
 # OSS SDK
