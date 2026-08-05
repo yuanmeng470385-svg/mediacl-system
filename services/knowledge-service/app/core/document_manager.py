@@ -80,10 +80,12 @@ class DocumentManager:
                     chunks = chunk_text(text)
                     if self.dashvector.is_configured():
                         try:
+                            fields = {"doc_type": doc.doc_type or ""}
+                            if doc.product_id is not None:
+                                fields["product_id"] = int(doc.product_id)
                             self.dashvector.upsert_chunks(
                                 doc_id, doc.title or "", chunks,
-                                fields={"product_id": str(doc.product_id or ""),
-                                        "doc_type": doc.doc_type or ""},
+                                fields=fields,
                             )
                             logger.info("document %s 向量化 %d chunks → DashVector", doc_id, len(chunks))
                         except Exception as exc:
@@ -141,17 +143,17 @@ class DocumentManager:
 
         merged = {}
         for r in vector_results:
-            key = r["doc_id"]
+            key = str(r["doc_id"])  # doc_id 统一为 str，避免与 local 的 int 键错位导致加权失效
             merged[key] = {"title": r["title"], "content": r["content"],
                            "doc_id": key, "score": 0.7 * r["score"] / vec_max,
                            "backend": "dashvector"}
         for r in keyword_results:
-            key = r["doc_id"]
+            key = str(r["doc_id"])
             if key in merged:
                 merged[key]["score"] += 0.3 * r["score"] / kw_max
             else:
                 merged[key] = {"title": r["title"], "content": r["content"],
-                               "doc_id": key, "score": 0.3 * r["score"] / kw_max,
+                               "doc_id": r["doc_id"], "score": 0.3 * r["score"] / kw_max,
                                "backend": "local"}
         ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
         return ranked[:top_k]
