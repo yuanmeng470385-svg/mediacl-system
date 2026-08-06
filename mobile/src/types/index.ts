@@ -66,6 +66,10 @@ export interface ChatResponse {
   request_id: string;
   latency_ms: number;
   blocked: boolean;
+  /** 反馈/收藏的主键（assistant 行 id）。入库失败时为 null */
+  conversation_id?: number | null;
+  /** blocked 为 true 时的违规明细 */
+  violations?: { rule_code: string; description: string }[];
 }
 
 export interface ConversationMessage {

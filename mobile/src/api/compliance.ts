@@ -1,5 +1,9 @@
 /**
  * 合规 API
+ *
+ * 注意：不提供 checkContent —— /api/v1/compliance/check 在网关 INTERNAL_PATHS
+ * 中（auth_middleware.py:42），需 X-Internal-Key，客户端调用恒 403。
+ * 问题合规预检由服务端 answer_generator.py 在 chat 流程内完成。
  */
 import { apiClient } from './client';
 import type { ComplianceRule } from '../types';
@@ -10,19 +14,6 @@ export const complianceAPI = {
     return apiClient.request<ComplianceRule[]>(
       'GET',
       '/api/v1/compliance/rules'
-    );
-  },
-
-  /** 合规文本检查 */
-  async checkContent(content: string, context?: Record<string, any>): Promise<{
-    blocked: boolean;
-    violations: { rule_code: string; description: string; severity: string }[];
-    risk_level: 'none' | 'low' | 'medium' | 'high';
-  }> {
-    return apiClient.request(
-      'POST',
-      '/api/v1/compliance/check',
-      { content, context }
     );
   },
 };

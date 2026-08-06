@@ -44,13 +44,13 @@ export const specialistAPI = {
     );
   },
 
-  /** 获取会话历史 */
+  /** 获取会话历史（后端挂在 specialists 路由下） */
   async getConversationHistory(
     sessionId: string
   ): Promise<ConversationMessage[]> {
     return apiClient.request<ConversationMessage[]>(
       'GET',
-      `/api/v1/conversations/${sessionId}`
+      `/api/v1/specialists/conversations/${sessionId}`
     );
   },
 
@@ -65,32 +65,28 @@ export const specialistAPI = {
     return apiClient.request('GET', `/api/v1/specialists/${id}/stats`);
   },
 
-  /** 对话反馈（点赞/点踩） */
+  /** 对话反馈（点赞/点踩）—— 挂 conversation_id，非 specialist_id */
   async sendFeedback(
-    specialistId: number,
-    data: {
-      request_id: string;
-      rating: 'like' | 'dislike';
-      comment?: string;
-    }
-  ): Promise<void> {
+    conversationId: number,
+    rating: 1 | -1,
+    comment?: string
+  ): Promise<{ feedback_id: number }> {
+    const body: { rating: 1 | -1; comment?: string } = { rating };
+    if (comment) body.comment = comment;
     return apiClient.request(
       'POST',
-      `/api/v1/specialists/${specialistId}/feedback`,
-      data
+      `/api/v1/conversations/${conversationId}/feedback`,
+      body
     );
   },
 
-  /** 收藏/取消收藏 */
+  /** 收藏/取消收藏（后端是 toggle，无 body） */
   async toggleFavorite(
-    specialistId: number,
-    requestId: string,
-    favorite: boolean
-  ): Promise<void> {
+    conversationId: number
+  ): Promise<{ is_favorite: boolean }> {
     return apiClient.request(
       'POST',
-      `/api/v1/specialists/${specialistId}/favorite`,
-      { request_id: requestId, favorite }
+      `/api/v1/conversations/${conversationId}/favorite`
     );
   },
 };

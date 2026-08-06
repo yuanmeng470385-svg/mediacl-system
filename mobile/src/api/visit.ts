@@ -11,7 +11,7 @@ import type {
 } from '../types';
 
 export const visitAPI = {
-  /** 拜访前准备——获取准备包 */
+  /** 拜访前准备——获取准备包（后端收 snake_case） */
   async prepareVisit(params: {
     hcpId: number;
     productId?: number;
@@ -19,7 +19,7 @@ export const visitAPI = {
     return apiClient.request<VisitPrepareData>(
       'POST',
       '/api/v1/visits/pre-visit',
-      params
+      { hcp_id: params.hcpId, product_id: params.productId },
     );
   },
 
@@ -78,8 +78,8 @@ export const visitAPI = {
     page_size?: number;
     status?: string;
     hcp_id?: number;
-    start_date?: string;
-    end_date?: string;
+    date_from?: string;
+    date_to?: string;
   }): Promise<PaginatedResponse<VisitRecord>> {
     return apiClient.request<PaginatedResponse<VisitRecord>>(
       'GET',
