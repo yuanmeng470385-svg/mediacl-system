@@ -60,11 +60,10 @@ async def submit_feedback(
 @router.post("/{conversation_id}/favorite")
 async def toggle_favorite(
     conversation_id: int,
-    request: dict,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """收藏/取消收藏（toggle）"""
+    """收藏/取消收藏（toggle，无 body）"""
     conv = _get_conv_or_404(db, conversation_id)
     _assert_conv_owner(conv, current_user)
     existing = db.query(ConversationFavorite).filter(
