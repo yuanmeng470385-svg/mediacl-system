@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import AdminLayout from './layouts/AdminLayout';
+import { AuthProvider } from './context/AuthContext';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const SpecialistList = lazy(() => import('./pages/Specialist/SpecialistList'));
@@ -33,7 +34,8 @@ export default function App() {
       }}
     >
       <AntApp>
-        <BrowserRouter>
+        <AuthProvider>
+          <BrowserRouter>
           <Suspense fallback={<Loading />}>
             <Routes>
               <Route element={<AdminLayout />}>
@@ -51,7 +53,8 @@ export default function App() {
               </Route>
             </Routes>
           </Suspense>
-        </BrowserRouter>
+          </BrowserRouter>
+        </AuthProvider>
       </AntApp>
     </ConfigProvider>
   );
