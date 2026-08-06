@@ -4,14 +4,14 @@ from typing import Optional
 from datetime import datetime, timedelta
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func as sqlfunc, desc
 import openpyxl
 
 from shared.common.response import success, ParamError
-from shared.common.auth import get_current_user
+from shared.common.auth import require_roles
 from shared.common.db_session import get_db
 from shared.common.internal_auth import require_internal_key
 from shared.common.pagination import paginate
@@ -23,6 +23,9 @@ router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 logger = logging.getLogger(__name__)
 
 audit_logger = get_audit_logger()
+
+# 审计数据查看/导出角色：审计日志含全量用户操作记录，仅管理者与合规专员可见（rep 等不开放）
+AUDIT_VIEW_ROLES = ("admin", "manager", "compliance")
 
 
 # ==================== 写入审计日志（内部接口） ====================
@@ -62,7 +65,7 @@ async def write_log(
 @router.get("/logs")
 async def search_logs(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*AUDIT_VIEW_ROLES)),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user_id: Optional[int] = Query(None),
@@ -108,7 +111,7 @@ async def search_logs(
 async def get_log_detail(
     log_id: int,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*AUDIT_VIEW_ROLES)),
 ):
     """查看单条日志详情"""
     log_entry = db.query(AuditLog).filter(AuditLog.id == log_id).first()
@@ -122,8 +125,9 @@ async def get_log_detail(
 @router.post("/export")
 async def export_report(
     request: dict,
+    http_request: Request,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*AUDIT_VIEW_ROLES)),
 ):
     """
     导出审计报告（Excel 格式）
@@ -189,6 +193,23 @@ async def export_report(
     output.seek(0)
     filename = f"audit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
+    # 导出行为本身入审计（直接写本服务审计引擎，非 HTTP 调用，无角色/递归问题）
+    audit_logger.log(
+        db,
+        service_name="audit-service",
+        user_id=current_user["id"],
+        action="audit_report_export",
+        resource_type="audit_report",
+        after_value={
+            "start_time": request.get("start_time"),
+            "end_time": request.get("end_time"),
+            "service_name": request.get("service_name"),
+            "risk_level": request.get("risk_level"),
+            "rows": len(logs),
+        },
+        client_ip=_client_ip(http_request),
+    )
+
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -201,7 +222,7 @@ async def export_report(
 @router.get("/stats")
 async def audit_stats(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*AUDIT_VIEW_ROLES)),
     days: int = Query(30, description="统计最近 N 天"),
 ):
     """审计统计数据"""
@@ -249,6 +270,14 @@ async def audit_stats(
 
 
 # ==================== 辅助 ====================
+
+def _client_ip(request: Request) -> Optional[str]:
+    """取真实来源 IP。网关转发时以 X-Forwarded-For 首段为准。"""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
+
 
 def _log_to_dict(log: AuditLog) -> dict:
     return {
