@@ -262,13 +262,25 @@ class ComplianceChecker:
                 temperature=0.0,
                 max_tokens=800,
             )
+            # S7 fail-closed 校验：LLM 响应异常（choices 为空 / message 或 content 为
+            # None/空白 —— 内容过滤、拒答、截断后空消息等）都视为"无有效输出"。
+            # 显式抛 ValueError（已在下方 fail-closed 元组内），统一收敛成 R999 拦截。
+            if (not response.choices or not response.choices[0].message
+                    or not response.choices[0].message.content):
+                raise ValueError("语义审核无有效输出（choices 为空或 message.content 为 None/空白）")
             raw = response.choices[0].message.content.strip()
+            if not raw:
+                raise ValueError("语义审核无有效输出（content 为空白）")
             # 清理可能的 markdown 代码块包裹
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("\n", 1)[0]
             parsed = json.loads(raw)
+            # S7 fail-closed 校验：JSON 合法但形状不对（[]、字符串、violations 非 list 等）
+            # 同样按 R999 拦截 —— 不能让校验类异常滑入下方 except Exception 造成 fail-open
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("violations"), list):
+                raise ValueError("语义审核输出形状异常（非 {\"violations\": [...]} 结构）")
             violations = []
-            for v in parsed.get("violations", []):
+            for v in parsed["violations"]:
                 rule = next((r for r in semantic_rules if r["id"] == v["rule_code"]), None)
                 if rule:
                     violations.append({
@@ -281,16 +293,17 @@ class ComplianceChecker:
                     })
             return violations
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-            # 输出不是合法 JSON：多半是提示注入生效（内容诱导模型输出非 JSON）
-            # 或 max_tokens 截断 —— 这两种情况都 fail-closed，按 reject 拦截
-            logger.error(f"LLM 语义审核输出无法解析（疑似提示注入或截断），按违规拦截: {e}")
+            # 输出不是合法 JSON / 形状不对 / 无有效输出：多半是提示注入生效（内容诱导
+            # 模型输出非 JSON）、max_tokens 截断或内容过滤拒答 —— 全部 fail-closed，
+            # 按 reject 拦截
+            logger.error(f"LLM 语义审核无有效输出或输出无法解析（疑似提示注入/截断/拒答），按违规拦截: {e}")
             return [{
                 "rule_code": "R999",
                 "rule_name": "AI 审核异常",
                 "severity": "high",
                 "action": "reject",
                 "matched_text": "",
-                "reason": "语义审核输出无法解析，按违规拦截",
+                "reason": "语义审核无有效输出或输出无法解析，按违规拦截",
             }]
         except Exception as e:
             # 网络/API 错误 → 维持降级策略 fail-open，避免阻塞业务

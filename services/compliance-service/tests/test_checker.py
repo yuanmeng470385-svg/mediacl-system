@@ -102,6 +102,30 @@ class TestSemanticCheck:
             chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=lambda **kw: choices))
         )
 
+    @staticmethod
+    def _fake_qwen_none_content():
+        """构造 message.content=None 的假客户端（内容过滤/拒答/截断后空消息场景）"""
+        import types
+        choices = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=None))]
+        )
+        return types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=lambda **kw: choices))
+        )
+
+    @staticmethod
+    def _fake_qwen_network_error():
+        """构造调用即抛 httpx 网络异常的假客户端（模拟 API 不可达）"""
+        import types
+        import httpx
+
+        def _raise_network_error(**kw):
+            raise httpx.ConnectError("connection refused")
+
+        return types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=_raise_network_error))
+        )
+
     def setup_method(self):
         self.checker = ComplianceChecker()
         # 用正常内容绕开 keyword/regex 关，只测语义关
@@ -137,3 +161,41 @@ class TestSemanticCheck:
         )
         codes = [v["rule_code"] for v in result["violations"]]
         assert "R004" in codes
+
+    def test_semantic_none_content_fails_closed(self):
+        """S7 fail-closed：LLM 返回 content=None（内容过滤/拒答/截断空消息）
+        此前漏进 except Exception 走 fail-open —— 必须 R999 拦截"""
+        self.checker.qwen_client = self._fake_qwen_none_content()
+        result = self.checker.check(self.safe_content, {"type": "chat"})
+        codes = [v["rule_code"] for v in result["violations"]]
+        assert "R999" in codes
+        assert result["blocked"] is True
+
+    @pytest.mark.parametrize("raw", [
+        "[]",                       # JSON 合法但顶层是 list
+        '"字符串"',                 # JSON 合法但顶层是 string
+        '{"violations": {}}',       # violations 不是 list
+        '{"other": 1}',             # 缺 violations 键
+    ])
+    def test_semantic_wrong_shape_fails_closed(self, raw):
+        """S7 fail-closed：json.loads 成功但形状不对（非 dict / violations 非 list）
+        此前 parsed.get 抛 AttributeError 落入 except Exception fail-open —— 必须 R999 拦截"""
+        self.checker.qwen_client = self._fake_qwen(raw)
+        result = self.checker.check(self.safe_content, {"type": "chat"})
+        codes = [v["rule_code"] for v in result["violations"]]
+        assert "R999" in codes
+        assert result["blocked"] is True
+
+    def test_semantic_legal_empty_violations_passes(self):
+        """S7：LLM 返回合法 {\"violations\": []} → 正常合规放行，不误拦截"""
+        self.checker.qwen_client = self._fake_qwen('{"violations": []}')
+        result = self.checker.check(self.safe_content, {"type": "chat"})
+        assert result["blocked"] is False
+        assert result["violations"] == []
+
+    def test_semantic_network_error_fails_open(self):
+        """网络/API 错误（httpx 连接异常）→ 维持 fail-open 降级，不阻塞业务"""
+        self.checker.qwen_client = self._fake_qwen_network_error()
+        result = self.checker.check(self.safe_content, {"type": "chat"})
+        assert result["blocked"] is False
+        assert result["violations"] == []
