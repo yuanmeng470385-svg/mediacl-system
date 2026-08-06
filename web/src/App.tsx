@@ -12,6 +12,7 @@ const SpecialistList = lazy(() => import('./pages/Specialist/SpecialistList'));
 const SpecialistForm = lazy(() => import('./pages/Specialist/SpecialistForm'));
 const KnowledgeList = lazy(() => import('./pages/Knowledge/KnowledgeList'));
 const ComplianceList = lazy(() => import('./pages/Compliance/ComplianceList'));
+const ComplianceBlocks = lazy(() => import('./pages/Compliance/Blocks'));
 const AuditList = lazy(() => import('./pages/Audit/AuditList'));
 const DoctorList = lazy(() => import('./pages/Doctor/DoctorList'));
 const DoctorDetail = lazy(() => import('./pages/Doctor/DoctorDetail'));
@@ -54,6 +55,7 @@ export default function App() {
                   <Route path="specialist/create" element={<SpecialistForm />} />
                   <Route path="knowledge/list" element={<KnowledgeList />} />
                   <Route path="compliance/list" element={<ComplianceList />} />
+                  <Route path="compliance/blocks" element={<ComplianceBlocks />} />
                   <Route path="audit/list" element={<AuditList />} />
                   <Route path="doctor/list" element={<DoctorList />} />
                   <Route path="doctor/:id" element={<DoctorDetail />} />

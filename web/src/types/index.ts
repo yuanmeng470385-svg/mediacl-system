@@ -106,6 +106,36 @@ export interface RuleTestResult {
   total_rules_tested: number;
 }
 
+// ========== 合规拦截记录 ==========
+// 字段与 compliance-service list_blocks / block_detail 对齐
+export interface ComplianceBlock {
+  id: number;
+  user_id: number | null;
+  service_name: string;
+  content: string;
+  rule_code: string;
+  rule_name: string;
+  severity: string;
+  action: string;
+  blocked_at: string | null;
+  /** 详情接口独有：完整上下文（列表接口不含） */
+  context?: Record<string, unknown> | null;
+}
+
+/** 热力图聚合点：区域（或降级维度 service）× 日期 */
+export interface BlocksHeatmapPoint {
+  region: string;
+  date: string;
+  count: number;
+}
+
+export interface BlocksHeatmapStats {
+  /** region = join users 表取区域；service = users 不可达时按 service_name 兜底 */
+  dimension: 'region' | 'service';
+  days: number;
+  items: BlocksHeatmapPoint[];
+}
+
 // ========== 审计日志 ==========
 // 字段与 audit-service `_log_to_dict` 对齐
 export interface AuditLog {

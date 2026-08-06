@@ -317,6 +317,83 @@ async def test_rule(request: dict, current_user: dict = Depends(require_roles(*R
 
 # ==================== 拦截记录 ====================
 
+@router.get("/blocks/stats")
+async def blocks_stats(
+    days: int = Query(7, ge=1, le=90, description="统计最近 N 天（仪表盘热力图）"),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """合规拦截聚合：区域 × 日期 热力图数据（驾驶舱"风险热力图"数据源）。
+
+    区域维度：compliance_blocks.user_id join users.region 获得 ——
+    shared.models.user.User 各服务共用，且 compliance-service 与 auth-service
+    使用同一 shared/common/db_session.py（同一 DATABASE_URL，同库直连），
+    直接可 join；若独立库部署导致 users 不可达（ProgrammingError 等），
+    自动降级为 service_name 维度兜底（注意 M31：service_name 实为内容类型
+    user_input/ai_output，兜底值仅供参考），dimension 字段告知前端实际维度。
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import func as sqlfunc
+    from shared.models.user import User
+
+    since = datetime.utcnow() - timedelta(days=days)
+    dimension = "region"
+    try:
+        rows = (
+            db.query(
+                sqlfunc.coalesce(User.region, "未分配").label("region"),
+                sqlfunc.date(ComplianceBlock.blocked_at).label("date"),
+                sqlfunc.count(ComplianceBlock.id),
+            )
+            .outerjoin(User, ComplianceBlock.user_id == User.id)
+            .filter(ComplianceBlock.blocked_at >= since)
+            .group_by(User.region, sqlfunc.date(ComplianceBlock.blocked_at))
+            .all()
+        )
+        items = [{"region": r[0] or "未知", "date": str(r[1]), "count": r[2]} for r in rows]
+    except Exception as exc:
+        # 降级路径：users 表不可达（独立库部署）时按 service_name 维度聚合
+        logger.warning("blocks/stats join users 失败，降级为 service 维度: %s", exc)
+        dimension = "service"
+        rows = (
+            db.query(
+                sqlfunc.coalesce(ComplianceBlock.service_name, "unknown").label("svc"),
+                sqlfunc.date(ComplianceBlock.blocked_at).label("date"),
+                sqlfunc.count(ComplianceBlock.id),
+            )
+            .filter(ComplianceBlock.blocked_at >= since)
+            .group_by(ComplianceBlock.service_name, sqlfunc.date(ComplianceBlock.blocked_at))
+            .all()
+        )
+        items = [{"region": r[0] or "未知", "date": str(r[1]), "count": r[2]} for r in rows]
+
+    return success({"dimension": dimension, "days": days, "items": items})
+
+
+@router.get("/blocks/{block_id}")
+async def get_block_detail(
+    block_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """拦截记录详情：完整内容 + 上下文（列表接口 content 截断到 200 字、不含 context）"""
+    block = db.query(ComplianceBlock).filter(ComplianceBlock.id == block_id).first()
+    if not block:
+        raise ParamError("拦截记录不存在")
+    return success({
+        "id": block.id,
+        "user_id": block.user_id,
+        "service_name": block.service_name,
+        "content": block.content or "",
+        "rule_code": block.rule_code,
+        "rule_name": block.rule_name,
+        "severity": block.severity,
+        "action": block.action,
+        "context": block.context,
+        "blocked_at": block.blocked_at.isoformat() if block.blocked_at else None,
+    })
+
+
 @router.get("/blocks")
 async def list_blocks(
     page: int = Query(1, ge=1),

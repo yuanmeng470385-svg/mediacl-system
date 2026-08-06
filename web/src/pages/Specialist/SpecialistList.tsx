@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProTable, ModalForm } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { Button, Tag, Space, Row, Col, App } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin } from 'antd';
+import { PlusOutlined, BarChartOutlined } from '@ant-design/icons';
 import StatCard from '../../components/StatCard';
 import SpecialistForm from './SpecialistForm';
 import { specialistAPI } from '../../services/specialist';
-import type { Specialist } from '../../types';
+import type { Specialist, SpecialistStats } from '../../types';
 
 const STATUS_MAP: Record<string, { color: string; text: string }> = {
   draft: { color: 'default', text: '草稿' },
@@ -30,12 +30,56 @@ function toPayload(values: Record<string, unknown>): Record<string, unknown> {
   return payload;
 }
 
+/** 专员数据抽屉：使用量 + 满意度（需求 2.2.1 专员数据看板） */
+function SpecialistDataDrawer({ specialist, onClose }: { specialist: Specialist | null; onClose: () => void }) {
+  const [stats, setStats] = useState<SpecialistStats | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!specialist) return;
+    setLoading(true);
+    setStats(null);
+    specialistAPI.stats(specialist.id)
+      .then((res) => setStats(res.data.data))
+      .catch(() => setStats(null))
+      .finally(() => setLoading(false));
+  }, [specialist]);
+
+  return (
+    <Drawer
+      title={specialist ? `数据看板：${specialist.name}` : '数据看板'}
+      width={520}
+      open={!!specialist}
+      onClose={onClose}
+    >
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
+      ) : stats ? (
+        <Descriptions column={1} bordered size="small">
+          <Descriptions.Item label="总对话数">{stats.total_conversations}</Descriptions.Item>
+          <Descriptions.Item label="反馈总数">{stats.total_feedback}</Descriptions.Item>
+          <Descriptions.Item label="满意度">
+            {stats.satisfaction_rate == null ? '暂无反馈' : `${stats.satisfaction_rate}%`}
+          </Descriptions.Item>
+        </Descriptions>
+      ) : (
+        <Empty description="统计加载失败" />
+      )}
+      <div style={{ marginTop: 16, color: '#8c8c8c', fontSize: 12, lineHeight: 1.8 }}>
+        注：后端暂未提供专员反馈列表接口（GET /feedback 或 GET /conversations?specialist_id= 均不存在），
+        此处仅展示聚合统计（GET /specialists/&#123;id&#125;/stats，满意度为 0-100 百分数）；反馈明细列表待后端补接口后接入。
+      </div>
+    </Drawer>
+  );
+}
+
 export default function SpecialistList() {
   const actionRef = useRef<ActionType>();
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Specialist | null>(null);
   // 聚合卡片：全部/在线 总数（来自列表接口 total，非硬编码假数）
   const [counts, setCounts] = useState<{ total: number; active: number } | null>(null);
+  const [dataView, setDataView] = useState<Specialist | null>(null);
   const { message } = App.useApp();
 
   const loadCounts = useCallback(async () => {
@@ -106,9 +150,10 @@ export default function SpecialistList() {
     },
     { title: '创建时间', dataIndex: 'created_at', width: 170 },
     {
-      title: '操作', width: 150,
+      title: '操作', width: 180,
       render: (_, r) => (
         <Space>
+          <a onClick={() => { setDataView(r); }}>数据</a>
           <a onClick={() => { setEditing(r); setFormOpen(true); }}>编辑</a>
           <a
             style={{ color: r.status === 'active' ? '#ff4d4f' : '#52c41a' }}
@@ -151,6 +196,7 @@ export default function SpecialistList() {
           </Button>,
         ]}
       />
+      <SpecialistDataDrawer specialist={dataView} onClose={() => setDataView(null)} />
       <ModalForm
         title={editing ? '编辑专员' : '新增专员'}
         open={formOpen}

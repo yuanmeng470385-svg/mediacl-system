@@ -1,5 +1,8 @@
 import client from './client';
-import type { ApiResponse, PaginatedResponse, ComplianceRule, ComplianceStats, RuleTestResult } from '../types';
+import type {
+  ApiResponse, PaginatedResponse, ComplianceRule, ComplianceStats, RuleTestResult,
+  ComplianceBlock, BlocksHeatmapStats,
+} from '../types';
 
 export const complianceAPI = {
   list: (params?: { page?: number; page_size?: number; rule_type?: string; enabled?: boolean }) =>
@@ -23,10 +26,13 @@ export const complianceAPI = {
   stats: () =>
     client.get<ApiResponse<ComplianceStats>>('/compliance/stats'),
 
-  blocks: (params?: { page?: number; page_size?: number; rule_code?: string }) =>
-    client.get<PaginatedResponse<{
-      id: number; user_id: number | null; service_name: string; content: string;
-      rule_code: string; rule_name: string; severity: string;
-      action: string; blocked_at: string;
-    }>>('/compliance/blocks', { params }),
+  blocks: (params?: { page?: number; page_size?: number; user_id?: number; rule_code?: string }) =>
+    client.get<PaginatedResponse<ComplianceBlock>>('/compliance/blocks', { params }),
+
+  blockDetail: (id: number) =>
+    client.get<ApiResponse<ComplianceBlock>>(`/compliance/blocks/${id}`),
+
+  /** 热力图聚合（区域 × 近 N 天拦截量），维度失败时后端自动降级为 service */
+  blocksStats: (params?: { days?: number }) =>
+    client.get<ApiResponse<BlocksHeatmapStats>>('/compliance/blocks/stats', { params }),
 };

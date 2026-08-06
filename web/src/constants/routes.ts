@@ -4,6 +4,7 @@ export const ROUTES = {
   SPECIALIST_CREATE: '/specialist/create',
   KNOWLEDGE_LIST: '/knowledge/list',
   COMPLIANCE_LIST: '/compliance/list',
+  COMPLIANCE_BLOCKS: '/compliance/blocks',
   AUDIT_LIST: '/audit/list',
   DOCTOR_LIST: '/doctor/list',
   DOCTOR_DETAIL: '/doctor/:id',

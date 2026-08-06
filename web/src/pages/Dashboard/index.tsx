@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react';
-import { Row, Col, Card, Empty } from 'antd';
-import { Column, Line } from '@ant-design/charts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Row, Col, Card, Empty, Switch, Button, Space, Tag, Tooltip } from 'antd';
+import { Column, Line, Heatmap } from '@ant-design/charts';
+import { ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
 import StatCard from '../../components/StatCard';
 import { complianceAPI } from '../../services/compliance';
 import { auditAPI } from '../../services/audit';
 import { userAPI } from '../../services/user';
+import type { AuditLog } from '../../types';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+
+dayjs.extend(utc);
 
 /** 仪表盘全部接真实后端接口；无数据源的口径显示空态，不再 Math.random()/硬编码 */
 
@@ -22,6 +28,55 @@ interface ServiceHealth {
   status: 'up' | 'down';
 }
 
+const ACTION_TEXT: Record<string, string> = {
+  chat_response: 'AI 对话',
+  login: '登录',
+  logout: '登出',
+  user_create: '新增用户',
+  user_update: '编辑用户',
+  rule_create: '新增规则',
+  rule_update: '编辑规则',
+  rule_disable: '禁用规则',
+  rules_reload: '规则热更新',
+  specialist_create: '新增专员',
+  specialist_update: '编辑专员',
+  specialist_disable: '停用专员',
+  audit_report_export: '导出审计报告',
+};
+
+function actionText(action: string): string {
+  return ACTION_TEXT[action] ?? action;
+}
+
+/** 实时动态条目：时间 / 用户 / 操作类型 / 服务 */
+function RealtimeFeed({ logs, userMap }: { logs: AuditLog[]; userMap: Map<string, string> }) {
+  if (logs.length === 0) {
+    return <Empty description="暂无审计动态" style={{ padding: 30 }} />;
+  }
+  return (
+    <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+      {logs.map((log) => (
+        <div
+          key={log.id}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', borderBottom: '1px solid #f0f0f0' }}
+        >
+          <ThunderboltOutlined style={{ color: '#1677ff', fontSize: 12 }} />
+          <span style={{ fontSize: 12, color: '#8c8c8c', flexShrink: 0 }}>
+            {log.timestamp ? dayjs.utc(log.timestamp).local().format('MM-DD HH:mm:ss') : '—'}
+          </span>
+          <span style={{ fontSize: 13, flexShrink: 0 }}>
+            {log.user_id != null ? (userMap.get(String(log.user_id)) ?? `用户 #${log.user_id}`) : '系统'}
+          </span>
+          <span style={{ fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {actionText(log.action ?? '')}
+          </span>
+          <Tag style={{ flexShrink: 0, marginInlineEnd: 0 }}>{log.service_name ?? '—'}</Tag>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const [activeUsers, setActiveUsers] = useState(0);          // users 表总数
   const [conversations, setConversations] = useState(0);      // audit: action=chat_response
@@ -33,10 +88,42 @@ export default function Dashboard() {
   const [services, setServices] = useState<ServiceHealth[]>([]);
   const [blocksLoaded, setBlocksLoaded] = useState(false);
 
+  // 热力图：区域 × 近 7 天 合规拦截量
+  const [heatmapData, setHeatmapData] = useState<{ region: string; date: string; count: number }[]>([]);
+  const [heatmapDimension, setHeatmapDimension] = useState<'region' | 'service' | null>(null);
+
+  // 实时动态：审计日志倒序 10 条
+  const [realtimeLogs, setRealtimeLogs] = useState<AuditLog[]>([]);
+  const [autoPoll, setAutoPoll] = useState(true);
+  const [realtimeLoading, setRealtimeLoading] = useState(false);
+  const [userMap, setUserMap] = useState<Map<string, string>>(new Map());
+  const timerRef = useRef<number | null>(null);
+
+  const loadRealtime = async () => {
+    try {
+      setRealtimeLoading(true);
+      const res = await auditAPI.list({ page: 1, page_size: 10 });
+      setRealtimeLogs(res.data.data.items ?? []);
+    } catch {
+      /* 轮询失败静默，保持上一次数据 */
+    } finally {
+      setRealtimeLoading(false);
+    }
+  };
+
   useEffect(() => {
     // 用户总数（users 表）
     userAPI.list({ page: 1, page_size: 1 })
       .then((r) => setActiveUsers(r.data.data?.total ?? 0))
+      .catch(() => {});
+
+    // 用户 ID → 姓名映射（实时动态 / 拦截记录页展示用）
+    userAPI.list({ page: 1, page_size: 100 })
+      .then((r) => {
+        const map = new Map<string, string>();
+        (r.data.data?.items ?? []).forEach((u: any) => map.set(String(u.id), u.full_name || u.username));
+        setUserMap(map);
+      })
       .catch(() => {});
 
     // 对话量（审计里 chat_response 的次数，后端筛选参数是 action）
@@ -63,7 +150,7 @@ export default function Dashboard() {
         setBlocksLoaded(true);
         const items = r.data.data?.items ?? [];
         const byRule = new Map<string, number>();
-        items.forEach((b: any) => {
+        items.forEach((b) => {
           const key = `${b.rule_code ?? '未知'}-${b.rule_name ?? ''}`;
           byRule.set(key, (byRule.get(key) ?? 0) + 1);
         });
@@ -75,6 +162,14 @@ export default function Dashboard() {
         );
       })
       .catch(() => setBlocksLoaded(true));
+
+    // 热力图：区域 × 近 7 天拦截量（后端 join users；降级 service 维度时前端标注）
+    complianceAPI.blocksStats({ days: 7 })
+      .then((r) => {
+        setHeatmapData(r.data.data?.items ?? []);
+        setHeatmapDimension(r.data.data?.dimension ?? null);
+      })
+      .catch(() => setHeatmapData([]));
 
     // 服务健康（网关 /health 聚合，vite 代理 /health → 网关；M46 真探活 status）
     fetch('/health')
@@ -92,7 +187,39 @@ export default function Dashboard() {
         }
       })
       .catch(() => setServices([]));
+
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current);
+    };
   }, []);
+
+  // 实时动态：首次加载 + 5 秒轮询（开关可关）
+  useEffect(() => {
+    loadRealtime();
+    if (autoPoll) {
+      timerRef.current = window.setInterval(loadRealtime, 5000);
+    } else if (timerRef.current !== null) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current);
+    };
+  }, [autoPoll]);
+
+  const heatmapChart = useMemo(
+    () => (heatmapData.length > 0 ? (
+      <Heatmap
+        data={heatmapData}
+        xField="date"
+        yField="region"
+        colorField="count"
+        height={300}
+        tooltip={{ title: (d: any) => `${d.region} · ${d.date}` }}
+      />
+    ) : null),
+    [heatmapData],
+  );
 
   return (
     <PageContainer header={{ title: '仪表盘', subTitle: '业务总览与系统监控' }}>
@@ -134,6 +261,40 @@ export default function Dashboard() {
             ) : (
               <Empty description="暂无风险数据" style={{ padding: 60 }} />
             )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} lg={14}>
+          <Card
+            title="风险热力图（区域 × 近 7 天拦截量）"
+            variant="borderless"
+            extra={heatmapDimension === 'service' ? (
+              <Tooltip title="users 表不可达，已按服务（service_name）维度兜底聚合">
+                <Tag color="orange">服务维度兜底</Tag>
+              </Tooltip>
+            ) : null}
+          >
+            {heatmapChart ?? <Empty description="暂无拦截数据（compliance_blocks 尚未有写入方）" style={{ padding: 60 }} />}
+          </Card>
+        </Col>
+        <Col xs={24} lg={10}>
+          <Card
+            title="实时动态"
+            variant="borderless"
+            extra={
+              <Space size={8}>
+                <span style={{ fontSize: 12, color: '#8c8c8c' }}>5s 自动刷新</span>
+                <Switch size="small" checked={autoPoll} onChange={setAutoPoll} />
+                <Button
+                  size="small" icon={<ReloadOutlined />} loading={realtimeLoading}
+                  onClick={loadRealtime}
+                >刷新</Button>
+              </Space>
+            }
+          >
+            <RealtimeFeed logs={realtimeLogs} userMap={userMap} />
           </Card>
         </Col>
       </Row>
