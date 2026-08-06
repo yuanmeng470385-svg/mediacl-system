@@ -9,6 +9,7 @@ import logging
 
 from app.config import settings
 from shared.common.exception_handler import register_exception_handlers
+from shared.common.request_id_middleware import RequestIDMiddleware
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -29,6 +30,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# X-Request-ID 链路（需求 7.1）：从请求头读取网关透传的 ID 写入 context，
+# 服务内日志/审计 get_request_id() 取用；无头时生成（服务直连场景兜底）
+app.add_middleware(RequestIDMiddleware)
 
 register_exception_handlers(app)
 

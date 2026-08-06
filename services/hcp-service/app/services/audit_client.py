@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 import httpx
 
 from shared.common.internal_auth import internal_headers
+from shared.common.context import get_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ async def write_audit_log(
     **kwargs
 ) -> Optional[int]:
     """写入审计日志（失败不影响业务）"""
+    # 链路追踪（需求 7.1）：调用方未显式传 request_id 时从 context 取
+    # （RequestIDMiddleware 已写入），审计记录可关联到全链路 ID
+    if request_id is None:
+        request_id = get_request_id() or None
     payload = {
         "service_name": service_name,
         "user_id": user_id,

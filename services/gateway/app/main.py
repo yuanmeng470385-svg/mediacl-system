@@ -28,6 +28,7 @@ import os as _os
 from app.config import settings
 from app.core.auth_middleware import AuthMiddleware
 from app.core.rate_limiter import RateLimiter
+from shared.common.request_id_middleware import RequestIDMiddleware
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
@@ -56,7 +57,7 @@ app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
 # 2. JWT 认证
 app.add_middleware(AuthMiddleware)
 
-# 3. CORS（最外层：跨域预检先过）
+# 3. CORS（跨域预检先过）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -64,6 +65,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 4. X-Request-ID（最外层：最先执行，生成/校验链路 ID 并注入 scope，
+#    proxy 转发时合并进上游请求头 —— 网关是唯一入口，上下游自然贯穿）。
+#    OPTIONS 预检与 WS 握手直接透传（中间件内部处理，见 request_id_middleware.py）。
+app.add_middleware(RequestIDMiddleware)
 
 # ==================== 路由映射 ====================
 
@@ -251,6 +257,11 @@ async def proxy(request: Request, path: str):
             headers = dict(request.headers)
             headers.pop("host", None)
             headers.pop("content-length", None)
+            # X-Request-ID：以 RequestIDMiddleware 校验后的 scope 值为准覆盖
+            # （客户端原始超长/恶意值不透传上游），保证全链路同一 ID
+            rid = request.scope.get("x-request-id")
+            if rid:
+                headers["x-request-id"] = rid
 
             start_time = time.time()
             response = await client.request(

@@ -17,6 +17,8 @@ import os
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from shared.common.context import get_request_id, set_request_id
+
 # 与 JWT_SECRET 的 "dev-secret-change-me" 同模式：检测到默认值就拒绝启动
 DEFAULT_INTERNAL_API_KEY = "change-me-internal-key"
 # .env.example 的模板占位值 —— 照抄模板部署时必须同样被拒绝，
@@ -44,8 +46,19 @@ def get_internal_api_key() -> str:
 
 
 def internal_headers() -> dict:
-    """服务间 HTTP 调用统一携带的请求头"""
-    return {"X-Internal-Key": get_internal_api_key()}
+    """服务间 HTTP 调用统一携带的请求头。
+
+    - X-Internal-Key：内部调用鉴权
+    - X-Request-ID：链路追踪（需求 7.1）—— 优先取当前 context 的 request_id
+      （网关透传后各服务 RequestIDMiddleware 已 set），context 为空
+      （后台任务等场景）则生成并写入 context，链内后续调用同一 ID。
+      一处改动覆盖所有内部客户端（compliance_client / audit_client 等）。
+    """
+    rid = get_request_id() or set_request_id()
+    return {
+        "X-Internal-Key": get_internal_api_key(),
+        "X-Request-ID": rid,
+    }
 
 
 async def require_internal_key(request: Request) -> None:

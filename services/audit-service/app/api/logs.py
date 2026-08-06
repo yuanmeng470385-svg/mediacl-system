@@ -33,6 +33,7 @@ AUDIT_VIEW_ROLES = ("admin", "manager", "compliance")
 @router.post("/log")
 async def write_log(
     request: dict,
+    raw_request: Request,
     db: Session = Depends(get_db),
     _internal: bool = Depends(require_internal_key),
 ):
@@ -54,6 +55,10 @@ async def write_log(
             "request_id": "uuid"
         }
     """
+    # 链路 ID 兜底（需求 7.1）：body 未带 request_id 时以内部调用头
+    # X-Request-ID 为准（internal_headers() 保证必带），审计记录可全链路关联
+    if not request.get("request_id"):
+        request["request_id"] = raw_request.headers.get("x-request-id")
     log_id = audit_logger.log(db, **request)
     if log_id:
         return success({"id": log_id})

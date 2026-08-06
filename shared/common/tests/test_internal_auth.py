@@ -49,6 +49,19 @@ def test_accepts_strong_key(monkeypatch):
 
 
 def test_internal_headers_carry_key(monkeypatch):
-    """internal_headers 携带配置的密钥（守卫通过后）"""
+    """internal_headers 携带配置的密钥 + 链路 X-Request-ID（守卫通过后）"""
     monkeypatch.setenv("INTERNAL_API_KEY", "strong-test-internal-key-456")
-    assert internal_auth.internal_headers() == {"X-Internal-Key": "strong-test-internal-key-456"}
+    headers = internal_auth.internal_headers()
+    assert headers["X-Internal-Key"] == "strong-test-internal-key-456"
+    # 链路追踪（需求 7.1）：context 为空时生成合法 UUID 并写入 context
+    import uuid
+    assert uuid.UUID(headers["X-Request-ID"])
+    assert internal_auth.get_request_id() == headers["X-Request-ID"]
+
+
+def test_internal_headers_reuse_context_request_id(monkeypatch):
+    """context 已有 request_id（网关透传后中间件 set）→ 内部调用同链传递"""
+    monkeypatch.setenv("INTERNAL_API_KEY", "strong-test-internal-key-456")
+    internal_auth.set_request_id("chain-rid-abc")
+    headers = internal_auth.internal_headers()
+    assert headers["X-Request-ID"] == "chain-rid-abc"
