@@ -118,6 +118,15 @@ export default function ChatScreen() {
       .catch((e) => Alert.alert('提示', e.message || '操作失败'));
   };
 
+  // 语音转写需在拜访流程中使用（ASR WS 校验真实 visit_id），聊天页仅提示入口
+  const handleVoice = useCallback(() => {
+    Alert.alert(
+      '语音转写',
+      '语音转写需在拜访流程中使用。\n（NLS 识别通道待配置后可用）',
+      [{ text: '知道了' }]
+    );
+  }, []);
+
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
     const isSystem = item.role === 'system';
@@ -204,7 +213,7 @@ export default function ChatScreen() {
       />
 
       <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.voiceBtn}>
+        <TouchableOpacity style={styles.voiceBtn} onPress={handleVoice}>
           <Icon name={ActionIcons.mic} size={22} color={Colors.textSecondary} />
         </TouchableOpacity>
         <TextInput

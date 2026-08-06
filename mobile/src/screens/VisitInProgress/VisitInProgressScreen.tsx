@@ -11,6 +11,9 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { visitAPI } from '../../api/visit';
+import { apiClient } from '../../api/client';
+import { connectAsr } from '../../services/asr';
+import { startRecording, stopRecording, readWavPcm } from '../../services/recorder';
 import Icon from '../../components/Icon';
 import { ActionIcons, StatusIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -35,6 +38,10 @@ export default function VisitInProgressScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [sending, setSending] = useState(false);
   const [showRedLine, setShowRedLine] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
+  const asrSessionRef = useRef<ReturnType<typeof connectAsr> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -82,6 +89,62 @@ export default function VisitInProgressScreen() {
     addTranscript(samples[speaker][Math.floor(Math.random() * 3)], speaker);
   };
 
+  // 真实录音 → 推流 ASR 转写（结果走 addTranscript → 异议/合规检测 → 落库）
+  const handleVoice = useCallback(async () => {
+    if (transcribing) return;
+    if (!recording) {
+      try {
+        await startRecording();
+        setRecording(true);
+      } catch (e: any) {
+        Alert.alert('提示', '无法开始录音：' + (e.message || '麦克风不可用'));
+      }
+      return;
+    }
+    // 停止录音 → 推流转写
+    setRecording(false);
+    setTranscribing(true);
+    try {
+      const wavPath = await stopRecording();
+      const pcm = await readWavPcm(wavPath);
+      if (pcm.length === 0) {
+        setTranscribing(false);
+        Alert.alert('提示', '未检测到有效录音');
+        return;
+      }
+      const token = (await apiClient.getToken()) || '';
+      const CHUNK = 16 * 1024;
+      const session = connectAsr(visitId, token, {
+        onReady: () => {
+          for (let i = 0; i < pcm.length; i += CHUNK) {
+            session.sendAudioChunk(pcm.subarray(i, i + CHUNK));
+          }
+          session.stop();
+        },
+        // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"
+        onSentence: (text) => setLiveText(text),
+        onCompliance: () => {},
+        onError: (msg) => {
+          setLiveText('');
+          setTranscribing(false); // 服务端 error 帧后即断开（无 completed 帧），必须复位防按钮卡死
+          Alert.alert('语音转写', msg.includes('NLS') ? 'NLS 识别通道未配置，暂不可用' : msg);
+        },
+        onCompleted: async (fullText) => {
+          asrSessionRef.current = null;
+          setTranscribing(false);
+          setLiveText('');
+          if (fullText && fullText.trim()) {
+            await addTranscript(fullText.trim(), 'rep'); // 走异议/合规检测 + 落库
+          }
+        },
+      });
+      asrSessionRef.current = session;
+    } catch (e: any) {
+      setTranscribing(false);
+      Alert.alert('提示', '转写失败：' + (e.message || '请重试'));
+    }
+  }, [recording, transcribing, visitId, addTranscript]);
+
   return (
     <View style={styles.container}>
       {/* 头部 */}
@@ -114,7 +177,7 @@ export default function VisitInProgressScreen() {
                 <Icon name="microphone" size={36} color={Colors.textHint} />
               </View>
               <Text style={styles.placeholderText}>
-                点击底部按钮模拟语音输入{'\n'}开始录音后将实时转写对话内容
+                点击底部按钮录音，实时转写对话内容
               </Text>
             </View>
           )}
@@ -189,8 +252,25 @@ export default function VisitInProgressScreen() {
         </View>
       )}
 
+      {/* 转写中提示行 */}
+      {(transcribing || liveText) && (
+        <View style={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, backgroundColor: Colors.primarySurface }}>
+          <Text style={{ fontSize: FontSize.xs, color: Colors.primary }}>
+            {transcribing ? '转写中：' + (liveText || '...') : '点击停止录音'}
+          </Text>
+        </View>
+      )}
+
       {/* 底部操作栏 */}
       <View style={styles.bottomBar}>
+        <TouchableOpacity
+          style={[styles.simBtn, recording && { backgroundColor: Colors.danger }]}
+          onPress={handleVoice}
+          disabled={sending || transcribing}
+        >
+          <Icon name={recording ? 'stop-circle' : 'microphone'} size={16} color={Colors.textWhite} />
+          <Text style={styles.simBtnText}>{recording ? '停止录音' : '录音'}</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.simBtn} onPress={() => simulateInput('rep')} disabled={sending}>
           <Icon name="account-voice" size={16} color={Colors.textWhite} />
           <Text style={styles.simBtnText}>代表说</Text>
