@@ -99,6 +99,9 @@ adb logcat -s ReactNativeJS:V
 
 ## 3. 后端冒烟验证（先于真机，快速定位后端问题）
 
+> **一键冒烟**：`python scripts/smoke_runbook.py`（登录 → 专员 → 对话 → R001 → R003 → 审计全走网关；密钥从根 .env 读，验证码走 DEV_MODE 回传）。
+> 实测基线（2026-08-06，第四批修复后）：8 服务健康 ✓ 登录 ✓ 专员分页契约 ✓ R001/R003 真实命中 ✓ 审计 request_id 贯穿 ✓；专员对话在百炼 App 未发布时自动降级 qwen ✓（见 6.2）。
+
 ```bash
 # 1. 健康检查（8 个服务都 200）
 curl -s localhost:8000/health        # 网关（现在会真探活各服务，看 services 字段）
@@ -196,6 +199,7 @@ curl -s "localhost:8000/api/v1/audit/logs?page_size=3" -H "Authorization: $T"
 | 5 | iOS 首次构建（本机无 Xcode，未验证过） | mobile/ios | Mac 上 `pod install` + Xcode 构建；moduleName 已对齐但未实测 |
 | 6 | iOS 真机访问后端需 HTTPS/ATS 例外 | mobile/ios Info.plist | 或改用局域网 IP + ATS 白名单 |
 | 7 | 百炼 App 侧 prompt 是否输出【证据等级】标记 | 百炼控制台 | 不输出则 `evidence_level` 恒 None（已知限制） |
+| 8 | 百炼 App 发布状态 | 百炼控制台 | **2026-08-06 实测：App（mm_cd1af…）未发布时 WS 协议全程正常但 RespondingContent text 为空**。已修：空答案按失败走 qwen 降级（`answer_generator.py`，commit 908af39）。**发布 App 后重测对话，应不再出现降级 warning** |
 
 ---
 
@@ -226,6 +230,7 @@ curl -s "localhost:8000/api/v1/audit/logs?page_size=3" -H "Authorization: $T"
 | ASR 能连但一直不出字 | 麦克风权限未给；或长音频突发推流丢帧（见 5.3） |
 | 审计页看不到数据 | 角色非 admin/manager/compliance（已加角色限制）；或 AUDIT_DATABASE_URL 未配（002 后写入静默失败——启动前必查） |
 | 知识库检索空 | 文档未 ready（需审核通过）；knowledge-base 无内容（当前空库属预期） |
+| 对话 answer 为空 | **已修（908af39）**：百炼空答案按失败降级 qwen，用户拿到 qwen 回答；若看到"百炼调用失败/返回空答案"降级 warning → 去百炼控制台确认 App 已发布、知识库有已过审文档 |
 
 ### 6.3 快速回滚点
 - 说话人分离异常 → 去掉 `NLS_SPEAKER_ENABLED` 重启 visit-service 即回退（帧缺省 rep，移动端无标签，向后兼容）
