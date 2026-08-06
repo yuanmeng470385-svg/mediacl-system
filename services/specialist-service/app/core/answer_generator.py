@@ -95,6 +95,10 @@ class AnswerGenerator:
                 session_id=session_id,
             )
             answer = bailian_result.get("text", "")
+            if not answer.strip():
+                # 百炼"成功"但未产出内容（App 未发布/无检索结果/空回答）——
+                # 视为调用失败走 qwen 降级，避免下游对空 content 报 400 且用户拿到空答案
+                raise BailianException("百炼返回空答案（App 未发布或无检索结果）")
             citations = bailian_result.get("citations", [])
             session_id = bailian_result.get("dialog_id", session_id)
             ai_prompt = question
@@ -224,6 +228,8 @@ class AnswerGenerator:
                     citations = frame.get("citations", [])
                     session_id = frame.get("dialog_id", session_id)
                     ai_response = answer
+            if not answer.strip():
+                raise BailianException("百炼返回空答案（App 未发布或无检索结果）")
         except BailianException as e:
             logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
             answer = self._fallback_generate(question, specialist)
