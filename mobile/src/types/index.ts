@@ -205,10 +205,10 @@ export interface ContentItem {
   id: number;
   title: string;
   type: 'literature' | 'guideline' | 'manual' | 'news';
-  summary: string;
-  source: string;
-  publish_date: string;
-  evidence_level: string;
+  summary?: string;
+  source?: string;
+  publish_date?: string;
+  evidence_level?: string;
   file_url?: string;
-  tags: string[];
+  tags?: string[];
 }

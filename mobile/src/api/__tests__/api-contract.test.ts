@@ -7,6 +7,7 @@ import { visitAPI } from '../visit';
 import { specialistAPI } from '../specialist';
 import { complianceAPI } from '../compliance';
 import { hcpAPI } from '../hcp';
+import { contentAPI } from '../content';
 
 const okResponse = (data: any = {}) => ({
   json: async () => ({ code: 0, message: 'success', data }),
@@ -134,5 +135,22 @@ describe('hcpAPI', () => {
     const c = lastCall();
     expect(c.url).toContain('/api/v1/hcps');
     expect(c.url).toContain('name=');
+  });
+});
+
+describe('contentAPI', () => {
+  it('getDocuments 发 GET /api/v1/knowledge/documents 且透传 doc_type', async () => {
+    await contentAPI.getDocuments({ page: 1, page_size: 50, doc_type: 'guideline' });
+    const c = lastCall();
+    expect(c.url).toContain('/api/v1/knowledge/documents');
+    expect(c.url).toContain('doc_type=guideline');
+    expect(c.method).toBe('GET');
+  });
+
+  it('getDocument 发 GET /api/v1/knowledge/documents/{id}', async () => {
+    await contentAPI.getDocument(7);
+    const c = lastCall();
+    expect(c.url).toContain('/api/v1/knowledge/documents/7');
+    expect(c.method).toBe('GET');
   });
 });

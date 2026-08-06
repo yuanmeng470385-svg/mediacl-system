@@ -68,7 +68,7 @@ export default function ContentScreen() {
     const matchSearch =
       !searchText ||
       item.title.includes(searchText) ||
-      item.tags.some((t) => t.includes(searchText));
+      (item.tags ?? []).some((t) => t.includes(searchText));
     return matchTab && matchSearch;
   });
 
@@ -97,7 +97,7 @@ export default function ContentScreen() {
           <Text style={styles.cardDate}>{item.publish_date}</Text>
         </View>
         <View style={styles.tagRow}>
-          {item.tags.map((tag, i) => (
+          {(item.tags ?? []).map((tag, i) => (
             <View key={i} style={styles.tag}>
               <Text style={styles.tagText}>{tag}</Text>
             </View>
