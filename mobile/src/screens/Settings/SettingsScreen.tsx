@@ -2,10 +2,13 @@
  * 设置页 - 个人资料 / 团队 / 关于
  */
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import { useAuth } from '../../store/AuthContext';
+
+const APP_VERSION: string = require('../../package.json').version;
 
 const sections = [
   { title: '个人资料', items: [
@@ -19,12 +22,13 @@ const sections = [
   { title: '通用', items: [
     { icon: 'translate', label: '语言', desc: '简体中文' },
     { icon: 'palette', label: '主题', desc: '临床精准 / 浅色' },
-    { icon: 'information', label: '关于 MedAgent', desc: 'v1.0.0' },
+    { icon: 'information', label: '关于 MedAgent', desc: 'v' + APP_VERSION },
   ]},
 ];
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
+  const { user, logout } = useAuth();
 
   return (
     <View style={styles.container}>
@@ -36,6 +40,19 @@ export default function SettingsScreen() {
         <View style={{ width: 24 }} />
       </View>
       <ScrollView contentContainerStyle={styles.content}>
+        <View style={[styles.card, Shadow.card, { marginBottom: Spacing.md, padding: Spacing.lg }]}>
+          <Text style={styles.label}>{user?.name || '未登录'}</Text>
+          <Text style={styles.desc}>{(user?.department || '—') + ' · ' + (user?.region || '—') + ' · ' + (user?.role || '—')}</Text>
+        </View>
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, { marginBottom: Spacing.lg, alignItems: 'center', padding: Spacing.lg }]}
+          onPress={() => Alert.alert('退出登录', '确定要退出当前账号吗？', [
+            { text: '取消', style: 'cancel' },
+            { text: '退出', style: 'destructive', onPress: logout },
+          ])}
+        >
+          <Text style={{ color: Colors.danger, fontSize: FontSize.md }}>退出登录</Text>
+        </TouchableOpacity>
         {sections.map((section, si) => (
           <View key={si}>
             <Text style={styles.sectionTitle}>{section.title}</Text>
