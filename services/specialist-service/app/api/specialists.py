@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError
 from shared.common.auth import get_current_user, require_roles
+from shared.common.pagination import PaginationParams, paginate
 from app.services.audit_client import write_audit_log
 from shared.common.db_session import get_db
 from app.models.specialist import Specialist
@@ -17,14 +18,22 @@ logger = logging.getLogger(__name__)
 
 @router.get("")
 async def list_specialists(
+    page: int = 1,
+    page_size: int = 20,
+    status: str = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """专员列表"""
-    specialists = db.query(Specialist).filter(
-        Specialist.status == "active"
-    ).all()
-    return success([s.to_dict() for s in specialists])
+    """专员列表（分页；status 可选过滤，缺省返回全部状态 —— web 需看 draft/disabled，mobile 展示时自行过滤）"""
+    p = PaginationParams(page=page, page_size=page_size)
+    q = db.query(Specialist)
+    if status:
+        q = q.filter(Specialist.status == status)
+    total = q.count()
+    items = q.order_by(Specialist.created_at.desc()).offset(p.offset).limit(p.limit).all()
+    return success(paginate(
+        [s.to_dict() for s in items], total=total, page=p.page, page_size=p.page_size
+    ))
 
 
 @router.get("/{specialist_id}")
@@ -179,8 +188,10 @@ async def get_specialist_stats(
     specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在")
+    # 每轮对话落库 user+assistant 两行 —— 只按 role='user' 计数避免双倍
     total = db.query(func.count(Conversation.id)).filter(
-        Conversation.specialist_id == specialist_id
+        Conversation.specialist_id == specialist_id,
+        Conversation.role == "user",
     ).scalar()
     positive = db.query(func.count(ConversationFeedback.id)).filter(
         ConversationFeedback.specialist_id == specialist_id,
@@ -190,7 +201,7 @@ async def get_specialist_stats(
         ConversationFeedback.specialist_id == specialist_id,
         ConversationFeedback.rating == -1,
     ).scalar()
-    return success({"total_conversations": total, **compute_satisfaction(positive or 0, negative or 0)})
+    return success({"total_conversations": total or 0, **compute_satisfaction(positive or 0, negative or 0)})
 
 
 SPECIALIST_UPDATE_FIELDS = {

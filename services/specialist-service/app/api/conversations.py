@@ -110,11 +110,15 @@ async def toggle_favorite(
 
 
 def compute_satisfaction(positive: int, negative: int) -> dict:
-    """满意度统计（纯函数）"""
+    """满意度统计（纯函数）。
+
+    satisfaction_rate 语义为 0-100 百分数（web 直接显示 %），
+    无反馈时返回 None。0.0~1.0 旧语义已在 2026-08-06 对齐为 0-100。
+    """
     total = positive + negative
     if total == 0:
         return {"total_feedback": 0, "satisfaction_rate": None}
-    return {"total_feedback": total, "satisfaction_rate": round(positive / total, 4)}
+    return {"total_feedback": total, "satisfaction_rate": round(positive / total * 100)}
 
 
 @favorites_router.get("")

@@ -11,13 +11,13 @@ def test_compute_satisfaction_empty():
 
 
 def test_compute_satisfaction_rates():
-    r = compute_satisfaction(3, 1)  # 3 赞 1 踩
+    r = compute_satisfaction(3, 1)  # 3 赞 1 踩 → 75%
     assert r["total_feedback"] == 4
-    assert r["satisfaction_rate"] == 0.75
+    assert r["satisfaction_rate"] == 75
 
 
 def test_compute_satisfaction_all_negative():
-    assert compute_satisfaction(0, 2)["satisfaction_rate"] == 0.0
+    assert compute_satisfaction(0, 2)["satisfaction_rate"] == 0
 
 
 class FakeConv:
