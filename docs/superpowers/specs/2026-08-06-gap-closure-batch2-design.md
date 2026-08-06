@@ -99,11 +99,13 @@ mobile 侧：
 
 - 新增 `app/api/chat_ws.py`（或并入 specialists.py）：`/ws/specialists/{specialist_id}/chat?token=<JWT>`
   - 鉴权：query token，`verify_token` 失败关 4401（复用 visit ASR 模式；若 specialist 无 verify_token 工具则从 shared 引入）
-  - 客户端→服务端：Text JSON，仅支持 `{"type":"stop"}`（中止流式，可后续发新消息）
+  - 客户端→服务端：Text JSON
+    - `{"type":"question","text":"...","session_id":"..."}` 首帧必发（问题由此传递；URL 只带 specialist_id）
+    - `{"type":"stop"}`（可选，中止当前流式生成）
   - 服务端→客户端（send 加锁防 websockets>=12 ConcurrencyError，沿用 asr_ws.py send_lock 模式）：
-    - `{"type":"start","conversation_id":...}` 会话建立（复用 `_persist_conversation` 先建会话）
-    - `{"type":"delta","text":"..."}` 百炼 RespondingContent 增量文本（bailian_client 需暴露流式回调或新增 `chat_stream()` 方法，REST `chat()` 保留复用流式内部实现）
-    - `{"type":"done","text":"<全文>","conversation_id":...}` 结束
+    - `{"type":"start","request_id":...}` 收到 question 后开始生成（conversation_id 无法在生成前给出——落库需完整答案，由 done 帧携带）
+    - `{"type":"delta","text":"..."}` 百炼 RespondingContent 增量文本（bailian_client 需新增 `chat_stream()` 方法，REST `chat()` 保留复用流式内部实现）
+    - `{"type":"done","text":"<全文>","session_id":...,"conversation_id":...,"citations":[...]}` 结束（conversation_id 由 `_persist_conversation` 在生成完成后落库返回）
     - `{"type":"error","message":...}` 后关 4500
   - 落库：沿用 `_persist_conversation`；feedback/favorite 仍走 REST（不动）
 - 单测：`tests/test_chat_ws.py`，mock 百炼（扩展现有 `_FakeWs` 模式）覆盖 delta 顺序、done 落库、error 路径
@@ -118,10 +120,10 @@ mobile 侧：
 
 ### 3.3 mobile 流式客户端（mobile/）
 
-- 新建 `mobile/src/services/wsChat.ts`：RN 内置 WebSocket（**零新依赖**）——连接 `/api/v1/specialists/{id}/chat/ws`（走网关 8000）、帧处理（start/delta/done/error）、断线自动降级 REST（调用现有 specialist.chat POST）、事件回调；单测 mock WebSocket
-- ChatScreen.tsx：发送消息改优先 WS 流式（delta 逐字追加显示，替换现有整条 POST 返回的渲染路径）；WS 连不上或 error → 自动降级现有 REST 路径；流式状态机（sending/streaming/done/error）
+- 新建 `mobile/src/services/wsChat.ts`：RN 内置 WebSocket（**零新依赖**）——连接 `/api/v1/specialists/{id}/chat/ws?token=...`（走网关 8000）、发送 question 帧、帧处理（start/delta/done/error）、断线自动降级 REST（调用现有 specialist.chat POST）、事件回调；单测 mock WebSocket
+- ChatScreen.tsx：发送消息改优先 WS 流式（连接后发 question 帧，delta 逐字追加显示，替换现有整条 POST 返回的渲染路径）；WS 连不上、error 或 8s 内未收到 start → 自动降级现有 REST 路径；流式状态机（sending/streaming/done/error）
 - REST chat 路径保留作 fallback，现有契约测试不破坏
-- 会话创建逻辑：现有 chat 接口负责 conversation_id 返回；WS start 帧也带 conversation_id，二者兼容（以 start 帧为准）
+- 会话创建逻辑：现有 chat 接口负责 conversation_id 返回；WS 的 conversation_id 由 done 帧携带（反馈/收藏以 done 帧为准）
 
 ---
 
