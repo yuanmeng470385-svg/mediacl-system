@@ -62,6 +62,11 @@ cd services/compliance-service && python -m pytest tests/ -v
 # 运行 A 的 AI 评估（需要真实百炼 App）
 cd services/specialist-service && python tests/eval_specialist.py --app-id <百炼AppId>
 
+# 联调冒烟（runbook 第 3 节：登录/专员/对话/R001/R003/审计，全走网关）
+python scripts/smoke_runbook.py            # 需根 .env 的 INTERNAL_API_KEY + AUTH_DEV_MODE=true（验证码响应回传）
+# 百炼 WS 协议探针（诊断 App 发布状态/返回帧：直连 dump Started→Listening→RespondingContent）
+python scripts/probe_bailian_ws.py [app_id]
+
 # 全部 8 个服务同时启动
 docker-compose up -d
 
@@ -229,6 +234,8 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 降级：百炼不可用时走通义千问直调（`qwen_client.py`，OpenAI 兼容接口），300 字符限制，不含知识库检索。需要 `BAILIAN_API_KEY`（与 `DASHSCOPE_API_KEY` 不同）。
 
+**空答案兜底（2026-08-06 实测修复，commit 908af39）**：百炼 App **未发布**/知识库无内容时 WS 协议全程正常（Listening → 回声 → RespondingContent）但 `RespondingContent.text` 为空——`chat()` 无异常返回空串。`AnswerGenerator.generate/generate_stream` 现在对空答案抛 `BailianException` 统一走 qwen 降级（此前会空回答 + 合规审核对空 content 报 400）。排查：`python scripts/probe_bailian_ws.py` 直连 dump 帧；App 发布后降级 warning 应消失。
+
 **聊天 WS 流式链路（2026-08-06 三批实施后，REST `/chat` 保留为降级）**：
 - specialist：`BailianClient.chat_stream()`（逐帧 yield delta/done）→ `AnswerGenerator.generate_stream()`（合规预检 → 流式 → 答案合规审核 → 审计 → done 帧，字段与 REST 返回一致 + type）→ WS 端点 `/ws/specialists/{id}/chat?token=JWT`（`app/api/chat_ws.py`：token 无效关 4401、专员不存在关 4404、question 空/超时/异常关 4500；`start → delta* → done` 帧，done 前 `_persist_conversation` 落库并带 conversation_id；send 统一加锁防 ConcurrencyError）。
 - gateway：`/api/v1/specialists/{id}/chat/ws` 双向透传代理（token 原样转发，网关不重复鉴权——WS scope 不经 BaseHTTPMiddleware）。
@@ -273,7 +280,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 ## Real-time ASR（实时转写）
 
-> 配齐 NLS/百炼 key 后的真机联调步骤、待确认点与排障手册见 `docs/real-device-runbook.md`（真机需把 mobile 三个 host 常量从 10.0.2.2 改为宿主机局域网 IP）。
+> 配齐 NLS/百炼 key 后的真机联调步骤、待确认点与排障手册见 `docs/real-device-runbook.md`（真机需把 mobile 三个 host 常量从 10.0.2.2 改为宿主机局域网 IP）。第 3 节后端冒烟基线已于 2026-08-06 实测回写（一键复跑：`python scripts/smoke_runbook.py`）。
 
 实时转写链路已改用**阿里云实时语音识别**（听悟是离线批处理+3s 轮询，达不到方案的 <2s）：
 
@@ -300,10 +307,16 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~knowledge 审核流卡死/上传无校验/未上架泄露/ES 从未写入~~（ES 索引接线、驳回清索引、白名单+50MB、角色可见性）
 - ~~dev/prod compose 审计写入失效~~（AUDIT_DATABASE_URL + :? 强校验）、~~deploy.yml 分支永不触发~~、~~e2e/debug 脚本过时~~、~~requirements.txt.tmp 残留~~
 
+已修（2026-08-06 真机联调冒烟，commit 908af39/b7d2183）：
+- ~~百炼空答案绕过降级~~（App 未发布时 RespondingContent.text 空 → 空回答 + 合规 400；现抛 BailianException 走 qwen 降级）
+- 冒烟基线已建立（`scripts/smoke_runbook.py` 可一键复跑）：8 服务健康 / DEV_MODE 验证码登录 / 专员分页契约 / R001·R003 真实命中 / 审计 request_id 贯穿 —— 全部通过
+
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
 - 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
-- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
+- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
+- **百炼 App 未发布**（`mm_cd1af9fc5bf1444ebc50c5a8fe4e`）：真实 key 已配，但 2026-08-06 冒烟确认 App 未发布 → 对话恒降级 qwen（citations 空）。控制台发布并绑定已过审知识库后重跑 `smoke_runbook.py`，降级 warning 应消失
+- 真机端到端未跑（模拟器无麦克风；`client.ts`/`asr.ts`/`wsChat.ts` 三处 host 需改局域网 IP，见 runbook 2.4）——聊天 REST 已冒烟通过
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - 网关限流为单进程内存版（--workers 2 时每 worker 独立限额）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
