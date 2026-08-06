@@ -147,7 +147,7 @@ GET  /api/v1/auth/me          (Bearer token)                        → user    
 - 验证码一次性、5 分钟过期、60 秒重发冷却、单码最多校验 5 次。
 - `users.password_hash` 为 NULL 表示未设密码，任何密码都登录不了。用 `scripts/seed_admin.py` 设置。
 - `profile`/`me` 每次从库里重读用户，被停用的账号即便持有有效 token 也会被拒。
-- 短信通道可插拔（`app/services/sms.py`）：默认 `console` 只写日志；阿里云通道待补短信签名和模板 CODE。
+- 短信通道可插拔（`app/services/sms.py`）：默认 `console` 只写日志；阿里云通道已实现（`AliyunSmsSender` 走 dysmsapi，缺 `AUTH_SMS_SIGN_NAME`/`AUTH_SMS_TEMPLATE_CODE` 或 `ALIYUN_ACCESS_KEY_ID`/`SECRET` 时构造即抛 `SmsSendError` fail-fast；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效，模板变量固定为 `{"code": ...}`）。
 
 ## Service-to-Service Communication
 
@@ -228,6 +228,11 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 降级：百炼不可用时走通义千问直调（`qwen_client.py`，OpenAI 兼容接口），300 字符限制，不含知识库检索。需要 `BAILIAN_API_KEY`（与 `DASHSCOPE_API_KEY` 不同）。
 
+**聊天 WS 流式链路（2026-08-06 三批实施后，REST `/chat` 保留为降级）**：
+- specialist：`BailianClient.chat_stream()`（逐帧 yield delta/done）→ `AnswerGenerator.generate_stream()`（合规预检 → 流式 → 答案合规审核 → 审计 → done 帧，字段与 REST 返回一致 + type）→ WS 端点 `/ws/specialists/{id}/chat?token=JWT`（`app/api/chat_ws.py`：token 无效关 4401、专员不存在关 4404、question 空/超时/异常关 4500；`start → delta* → done` 帧，done 前 `_persist_conversation` 落库并带 conversation_id；send 统一加锁防 ConcurrencyError）。
+- gateway：`/api/v1/specialists/{id}/chat/ws` 双向透传代理（token 原样转发，网关不重复鉴权——WS scope 不经 BaseHTTPMiddleware）。
+- mobile：`mobile/src/services/wsChat.ts` 走网关 8000（question 帧缓冲到 onopen 后发送）；`ChatScreen` 流式渲染增量气泡，8s 未收到 start 自动降级 REST（specialistAPI.sendMessage），blocked/violations 按 REST 同款拼装展示。
+
 ## Frontend — web/（Web 管理后台）
 
 Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 代理到网关 `localhost:8000`（`vite.config.ts`），生产由反代同路径转发。
@@ -237,9 +242,6 @@ Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-desi
 API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。
 
 **已知问题（页面存在 ≠ 功能已实现）**：
-- 仪表盘图表是 `Math.random()`/硬编码假数据（`web/src/pages/Dashboard/index.tsx`），无真实统计接口。
-- 用户管理页调 `/api/v1/users`，**网关与后端均无此路由**，打开必失败。
-- 知识库"通过/驳回"传 `{action: 'approve'|'reject'}`，后端 `knowledge.py` 读的是布尔 `approved` → 点"通过"实际执行驳回。
 - 部分操作（系统配置保存、上传等）只弹 toast，无真实调用。
 
 ## Frontend — mobile/（React Native 移动端）
@@ -258,10 +260,10 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
 
-**已知问题（2026-08-06 实测后）**：
-- "实时转写"仍是假功能：无录音权限/音频库，`VisitInProgressScreen` 的录音按钮是写死台词的模拟按钮（原生工程已齐，录音库/NLS_APPKEY 待接）。
-- ContentScreen（学术内容）用 `MOCK_CONTENT`；VisitDetail / Profile / Settings / NotificationSettings / HelpCenter 五屏零后端调用。
-- mobile 无 WebSocket 客户端（ASR WS、聊天流式都未接）。
+**已知问题（2026-08-06 三批实施后）**：
+- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮仅提示（无拜访上下文，避免伪造 visit）。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测。
+- HelpCenter 屏仍零后端调用（其余四屏已接真实数据/持久化）。
+- 聊天 WS 流式已接（走网关 8000），未配真实百炼 key 时未做模拟器端到端冒烟。
 - iOS 未实际构建验证（本机无 Xcode；moduleName 已对齐，首次构建需实测）。
 
 ## Real-time ASR（实时转写）
@@ -271,7 +273,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 服务端：`visit-service/app/services/realtime_asr.py`（`RealtimeAsrClient`：AK/SK 签名换 NLS 临时 Token → `wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1?token=` → StartTranscription → 二进制 PCM 推流 → SentenceBegin/ResultChanged/SentenceEnd 事件；`enable_intermediate_result=true` 实时出字）。未配置 `NLS_APPKEY` 自动降级 `MockRealtimeAsrClient`（模拟文本，可联调）。
 - WS 端点：`/ws/visits/{visit_id}/asr?token=<JWT>`（移动端推 PCM → 增量 JSON 回推 → 断句落库 conversation_transcript → 每句实时合规检查并回推 compliance 事件）。**注意 WS 不走网关**（网关 proxy 不支持升级），直连 visit-service:8002。
 - 听悟客户端保留用于拜访后归档（完整音频离线转写）。
-- 移动端接入点：录音 → PCM(16k/16bit/mono) 分片推 WS；`{"type":"stop"}` 结束。（原生工程已齐，但移动端录音库/权限与 WS 客户端仍未接入，见 mobile 已知问题。）
+- 移动端接入点（已接，2026-08-06）：`react-native-audio-record` 录 WAV(16k/16bit/mono) → `readWavPcm` 跳过 44 字节头 → 16KB 分片经 `mobile/src/services/asr.ts` 推 WS（"录完再推"，非流式——audio-record 无流式回调）；`{"type":"stop"}` 结束；sentence 帧增量回填输入区，completed 帧回传末句全文走 `addTranscript` 落库。NLS_APPKEY 未配时服务端 fail-closed（error 帧 + 关 4500，不落假文本）。
 
 ## Known Gaps（后端已知缺口，勿误以为已实现）
 
@@ -279,11 +281,13 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 已修（2026-08-05~06）：~~citations 恒空~~（百炼 extra_info.docs 解析引用溯源）、~~feedback/favorite 是桩~~（conversation_feedback/favorites 真落库，实测点赞 2 行 + 收藏 1 行含问答快照）、~~规则热更新只读 YAML~~（DB 规则加载，DB 覆盖 YAML + TTL 60s 重载）、~~移动端无法构建~~（RN 0.75.0 原生工程 + api 契约修复 7 处 + 契约测试 11 用例 + Pixel_7 实测全链路）、~~chat 无 conversation_id~~（前端反馈/收藏拿不到主键）、~~mobile 三处响应形状错位~~（specialist 纯数组、compliance 分页对象+字段名、favorite 必填 body 422）。
 
+已修（2026-08-06 三批实施，23 提交本地未 push）：~~web 无登录页~~（AuthProvider + 登录页 + 路由守卫 + 401 跳转）、~~mobile 五屏零后端调用~~（VisitDetail/Profile/Settings 接真实接口、NotificationSettings AsyncStorage 持久化；HelpCenter 除外）、~~ContentScreen MOCK_CONTENT~~（接 knowledge API + 新增文档详情页）、~~移动端无录音/无 WS 客户端~~（录音库 + 权限 + asr.ts/wsChat.ts + 拜访页录音转写接线 + 聊天流式）、~~短信通道仅 ConsoleSender~~（AliyunSmsSender dysmsapi 真实现，缺配置 fail-fast，4 测试全 mock）、~~聊天一次性返回~~（specialist WS 端点 + 网关 WS 代理 + mobile 流式渲染 + 8s 降级 REST，question 帧缓冲到 onopen 发送）。
+
 **仍为假数据/未实现（勿误以为已做）**：
-- web 无登录页（App.tsx 直接进 AdminLayout）+ 部分增删改假动作（系统配置保存、上传等只弹 toast）
-- 移动端无录音（`VisitInProgressScreen` 模拟按钮），NLS_APPKEY 未配；mobile 无 WS 客户端
-- ContentScreen `MOCK_CONTENT`；VisitDetail/Profile/Settings/NotificationSettings/HelpCenter 五屏零后端调用
-- 短信通道仍 ConsoleSender（只写日志，验证码捞 `logs/native/auth-service.log`）
+- web 部分增删改假动作（系统配置保存、上传等只弹 toast）
+- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key）
+- HelpCenter 屏零后端调用
+- 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - `knowledge-base/` 空目录（方案要求 100-300 篇文献）、ES 真实实例未接（ES_URL 配置才启用）
 - X-Request-ID 链路未贯穿；REQUESTS 计数器无 .inc() 接线（http_requests_total 恒 0）
 
