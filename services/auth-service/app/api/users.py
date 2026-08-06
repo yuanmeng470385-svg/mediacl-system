@@ -111,6 +111,8 @@ async def update_user(
     changed = {k: v for k, v in request.items() if k in UPDATEABLE_FIELDS and v is not None}
     if changed.get("role") is not None and changed["role"] not in VALID_ROLES:
         raise ParamError(f"role 不合法，可选：{'/'.join(sorted(VALID_ROLES))}")
+    # 变更前快照：须在 setattr 之前取（user 对象随后被原地修改）
+    before_values = {f: getattr(user, f) for f in changed}
     for field, value in changed.items():
         setattr(user, field, value)
     db.commit()
@@ -119,7 +121,7 @@ async def update_user(
     await write_audit_log(
         user_id=current_user["id"], action="user_update",
         resource_type="user", resource_id=str(user_id),
-        before_value={f: None for f in changed},
+        before_value=before_values,
         after_value=changed,
     )
     return success(user.to_dict())
