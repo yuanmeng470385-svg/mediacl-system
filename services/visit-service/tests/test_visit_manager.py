@@ -151,6 +151,22 @@ async def _fake_specialist_ok(specialist_id, question, user_id, session_id=None,
     }), "blocked": False, "session_id": "test-session"}
 
 
+async def _fake_specialist_fail(specialist_id, question, user_id, session_id=None, auth_token=None):
+    """AI 不可用 → 降级"""
+    return {"answer": "", "blocked": False, "degraded": True, "error": "AI 服务不可用"}
+
+
+async def _fake_specialist_previsit(specialist_id, question, user_id, session_id=None, auth_token=None):
+    """pre-visit：按固定 schema 输出推荐内容"""
+    return {"answer": json.dumps({
+        "suggested_topics": ["指南更新", "适应症扩展", "医保政策"],
+        "red_lines": ["不得夸大疗效"],
+        "opening_remarks": "张主任您好，今天想和您交流最新的临床数据",
+        "materials": ["III期研究摘要", "医保政策文件"],
+        "last_follow_up": "发送安全性长期随访数据",
+    }), "blocked": False, "session_id": "test-session"}
+
+
 async def _fake_compliance_ok(content, context=None):
     return {"blocked": False, "violations": [], "risk_level": "none"}
 
@@ -199,12 +215,13 @@ def test_prepare_visit_no_hcp():
 
 
 def test_start_visit():
-    """开始拜访 → 创建记录，返回 id + status=in_progress"""
+    """开始拜访 → 创建记录，返回 id + visit_id 别名 + status=in_progress"""
     from app.core.visit_manager import VisitManager
     mgr = VisitManager(tingwu=FakeTingwu())
     db = FakeDb()
     result = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     assert "id" in result
+    assert result["visit_id"] == result["id"]  # 移动端契约：读取 visit_id
     assert result["status"] == "in_progress"
 
 
@@ -237,6 +254,7 @@ def test_end_visit_generates_record():
     asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效和价格"))
     result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
     assert result["status"] == "completed"
+    assert result["visit_id"] == visit_id  # 移动端契约：读取 visit_id
     assert result["ai_summary"]
     assert "本次拜访" in result["ai_summary"]
     assert result["sentiment"] == "neutral"
@@ -270,3 +288,147 @@ def test_follow_up():
     result = asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
     assert result["visit_id"] == visit_id
     assert "follow_up" in result
+
+
+# ---------- 修复 3：pre-visit 推荐内容 schema 化 ----------
+
+def test_parse_recommendations_plain_json():
+    """英文键 JSON 直接解析"""
+    from app.core.visit_manager import _parse_recommendations
+    raw = json.dumps({
+        "suggested_topics": ["指南更新", "适应症扩展", "医保政策"],
+        "red_lines": ["不得承诺疗效"],
+        "opening_remarks": "张主任您好",
+        "materials": ["III期文献"],
+        "last_follow_up": "发送安全性数据",
+    })
+    r = _parse_recommendations(raw)
+    assert r["suggested_topics"] == ["指南更新", "适应症扩展", "医保政策"]
+    assert r["red_lines"] == ["不得承诺疗效"]
+    assert r["opening_remarks"] == "张主任您好"
+    assert r["materials"] == ["III期文献"]
+    assert r["last_follow_up"] == "发送安全性数据"
+
+
+def test_parse_recommendations_markdown_fence():
+    """剥离 markdown 代码围栏"""
+    from app.core.visit_manager import _parse_recommendations
+    raw = '```json\n{"suggested_topics": ["话题A", "话题B", "话题C"], "red_lines": [], "opening_remarks": "开场", "materials": [], "last_follow_up": ""}\n```'
+    r = _parse_recommendations(raw)
+    assert r["suggested_topics"] == ["话题A", "话题B", "话题C"]
+    assert r["opening_remarks"] == "开场"
+
+
+def test_parse_recommendations_chinese_keys():
+    """中文键归一化为固定 schema 英文键"""
+    from app.core.visit_manager import _parse_recommendations
+    raw = json.dumps({
+        "推荐话题": ["话题A", "话题B"],
+        "红线提醒": ["红线1"],
+        "开场白建议": "您好张医生",
+        "材料": ["文献包"],
+        "上次未完成的跟进项": "发资料",
+    })
+    r = _parse_recommendations(raw)
+    assert r["suggested_topics"] == ["话题A", "话题B"]
+    assert r["red_lines"] == ["红线1"]
+    assert r["opening_remarks"] == "您好张医生"
+    assert r["materials"] == ["文献包"]
+    assert r["last_follow_up"] == "发资料"
+
+
+def test_parse_recommendations_invalid_returns_empty_structure():
+    """解析失败 / 形状不对 → 返回空结构，不泄漏原始文本"""
+    from app.core.visit_manager import _parse_recommendations
+    empty = {"suggested_topics": [], "red_lines": [], "opening_remarks": "", "materials": [], "last_follow_up": ""}
+    bad_inputs = [
+        "",
+        None,
+        "这不是JSON",
+        "```json\n{broken\n```",
+        "[1, 2, 3]",
+        '{"suggested_topics": "字符串不是列表"}',
+        '{"推荐话题": 123}',
+    ]
+    for bad in bad_inputs:
+        assert _parse_recommendations(bad) == empty, f"输入 {bad!r} 应返回空结构"
+
+
+def test_prepare_visit_returns_structured_recommendations():
+    """pre-visit AI 输出按固定 schema 解析返回"""
+    from app.core.visit_manager import VisitManager
+    vm_module.chat_with_specialist = _fake_specialist_previsit
+    try:
+        db = FakeDb()
+        mgr = VisitManager(tingwu=FakeTingwu())
+        result = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=1, product_id=1))
+        recs = result["recommendations"]
+        assert recs["suggested_topics"] == ["指南更新", "适应症扩展", "医保政策"]
+        assert recs["red_lines"] == ["不得夸大疗效"]
+        assert recs["opening_remarks"].startswith("张主任")
+        assert "content" not in recs  # 不再回退为原始文本
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
+def test_prepare_visit_ai_garbage_returns_empty_structure():
+    """AI 输出不可解析 → 返回空结构而非原始文本"""
+    from app.core.visit_manager import VisitManager
+
+    async def _fake_specialist_garbage(specialist_id, question, user_id, session_id=None, auth_token=None):
+        return {"answer": "随便一段话", "blocked": False, "degraded": False, "session_id": "s"}
+
+    vm_module.chat_with_specialist = _fake_specialist_garbage
+    try:
+        db = FakeDb()
+        mgr = VisitManager(tingwu=FakeTingwu())
+        result = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=1, product_id=1))
+        assert result["recommendations"] == {
+            "suggested_topics": [], "red_lines": [], "opening_remarks": "", "materials": [], "last_follow_up": "",
+        }
+        assert "随便一段话" not in json.dumps(result["recommendations"], ensure_ascii=False)
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
+# ---------- 修复 4：end_visit AI 降级不锁死，可重试 ----------
+
+def test_end_visit_ai_failure_writes_placeholder_then_retry():
+    """AI 失败写占位串 → 不算已结束，可再次 end 重试，成功后覆盖占位串"""
+    from app.core.visit_manager import VisitManager, AI_SUMMARY_PLACEHOLDER
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效和价格"))
+
+    vm_module.chat_with_specialist = _fake_specialist_fail
+    try:
+        result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert result["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+        # 占位串不算已结束 → 再次 end 不抛"已结束"，允许重试
+        result2 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert result2["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+
+        # AI 恢复后重试成功 → 占位串被真实总结覆盖
+        vm_module.chat_with_specialist = _fake_specialist_ok
+        result3 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert result3["ai_summary"] != AI_SUMMARY_PLACEHOLDER
+        assert "本次拜访" in result3["ai_summary"]
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
+def test_end_visit_no_duplicate_after_success():
+    """成功结束后再次 end → 抛业务错误（不可重复覆盖）"""
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    try:
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert False, "应抛 BusinessError"
+    except Exception as e:
+        assert "已结束" in str(e)

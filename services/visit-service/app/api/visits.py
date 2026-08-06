@@ -1,6 +1,6 @@
 """陪访助手服务 API 路由"""
 import logging
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError
@@ -23,6 +23,30 @@ def _auth_token(raw_request: Request) -> Optional[str]:
     if header.startswith("Bearer "):
         return header[7:]
     return None
+
+
+def _to_int_param(value, field_name: str) -> int:
+    """请求参数转 int，非法输入抛 ParamError(1000) 而非 500"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ParamError(f"{field_name} 必须是整数")
+
+
+def _attach_hcp_name(db: Session, record: dict) -> dict:
+    """给单条记录 dict 附上 hcp_name（hcps 表只读直查）"""
+    hcp_id = record.get("hcp_id")
+    record["hcp_name"] = VisitRepo.hcp_names(db, [hcp_id]).get(hcp_id) if hcp_id else None
+    return record
+
+
+def _attach_hcp_names(db: Session, items: List[dict]) -> List[dict]:
+    """批量给记录 dict 附上 hcp_name —— 一次查全部相关医生，避免 N+1"""
+    ids = {it.get("hcp_id") for it in items if it.get("hcp_id")}
+    names = VisitRepo.hcp_names(db, ids)
+    for it in items:
+        it["hcp_name"] = names.get(it.get("hcp_id"))
+    return items
 
 
 def _get_visit_or_404(db: Session, visit_id: int) -> VisitRecord:
@@ -69,7 +93,8 @@ async def pre_visit(
     if not product_id:
         raise ParamError("product_id 不能为空")
     result = await _visit_manager.prepare_visit(
-        db, hcp_id=int(hcp_id), user_id=current_user["id"], product_id=int(product_id),
+        db, hcp_id=_to_int_param(hcp_id, "hcp_id"), user_id=current_user["id"],
+        product_id=_to_int_param(product_id, "product_id"),
         auth_token=_auth_token(raw_request),
     )
     return success(result)
@@ -94,7 +119,8 @@ async def start_visit(
     if not product_id:
         raise ParamError("product_id 不能为空")
     result = await _visit_manager.start_visit(
-        db, hcp_id=int(hcp_id), user_id=current_user["id"], product_id=int(product_id)
+        db, hcp_id=_to_int_param(hcp_id, "hcp_id"), user_id=current_user["id"],
+        product_id=_to_int_param(product_id, "product_id"),
     )
     return success(result)
 
@@ -170,7 +196,7 @@ async def get_visit(
 ):
     """拜访详情"""
     record = _assert_visit_owner(db, visit_id, current_user)
-    return success(record.to_dict())
+    return success(_attach_hcp_name(db, record.to_dict()))
 
 
 @router.get("")
@@ -199,7 +225,8 @@ async def list_visits(
         user_id=user_id, hcp_id=hcp_id, product_id=product_id,
         status=status, date_from=date_from, date_to=date_to,
     )
-    return success(paginate([i.to_dict() for i in items], total, p.page, p.page_size))
+    records = _attach_hcp_names(db, [i.to_dict() for i in items])
+    return success(paginate(records, total, p.page, p.page_size))
 
 
 @router.put("/{visit_id}")

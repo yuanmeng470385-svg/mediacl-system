@@ -34,6 +34,10 @@ from app.core.objection_detector import ObjectionDetector
 
 logger = logging.getLogger(__name__)
 
+# AI 总结失败时的占位串：记录 ai_summary = 占位串 不等于"已结束"，
+# end_visit 可再次调用重试（重试成功覆盖占位串），避免记录永久锁死
+AI_SUMMARY_PLACEHOLDER = "（AI 总结生成失败，拜访尚未结束，可重试结束拜访）"
+
 # 同库直读 hcps / digital_specialists（数据属于 hcp-service / specialist-service，此处只读）
 _HCP_SQL = text("""
     SELECT id, name, hospital, department, title, specialty, region, tags
@@ -104,6 +108,63 @@ def _parse_follow_up_items(items: list, visit_id: int, user_id: int) -> list:
             "channel": channel or None,
         })
     return parsed
+
+
+# pre-visit 推荐内容的固定 schema（空结构：AI 输出不可用时兜底，绝不透传原始文本）
+EMPTY_RECOMMENDATIONS = {
+    "suggested_topics": [],
+    "red_lines": [],
+    "opening_remarks": "",
+    "materials": [],
+    "last_follow_up": "",
+}
+
+# 中英文键归一化：canonical 键 ← 各别名（模型可能输出任一语言）
+_RECOMMENDATION_KEY_ALIASES = {
+    "suggested_topics": ("suggested_topics", "推荐话题", "建议话题", "topics"),
+    "red_lines": ("red_lines", "红线提醒", "红线", "合规红线"),
+    "opening_remarks": ("opening_remarks", "开场白建议", "开场白"),
+    "materials": ("materials", "材料", "所需材料", "资料"),
+    "last_follow_up": ("last_follow_up", "上次未完成的跟进项", "上次未完成跟进项", "跟进项"),
+}
+
+
+def _parse_recommendations(content: str) -> dict:
+    """解析 pre-visit AI 输出的推荐内容（固定 schema）
+
+    健壮化：剥离 markdown 代码围栏；JSON 解析失败 / 形状不对 → 返回空结构
+    （而非把原始文本塞给前端）；兼容中文键与英文键两套命名。
+    """
+    if not content:
+        return dict(EMPTY_RECOMMENDATIONS)
+    text_content = content.strip()
+    if text_content.startswith("```"):
+        text_content = text_content[3:]
+        if text_content.endswith("```"):
+            text_content = text_content[:-3]
+        text_content = text_content.strip()
+        if text_content.startswith("json"):
+            text_content = text_content[4:].strip()
+    try:
+        parsed = json.loads(text_content)
+    except json.JSONDecodeError:
+        return dict(EMPTY_RECOMMENDATIONS)
+    if not isinstance(parsed, dict):
+        return dict(EMPTY_RECOMMENDATIONS)
+
+    out = dict(EMPTY_RECOMMENDATIONS)
+    for canonical, aliases in _RECOMMENDATION_KEY_ALIASES.items():
+        value = None
+        for alias in aliases:
+            if alias in parsed:
+                value = parsed[alias]
+                break
+        if canonical in ("suggested_topics", "red_lines", "materials"):
+            if isinstance(value, list):
+                out[canonical] = [str(v) for v in value if v]
+        elif isinstance(value, str):
+            out[canonical] = value
+    return out
 
 
 async def _push_profile_update(hcp_id: int, structured: dict, visit_id: int) -> bool:
@@ -223,18 +284,23 @@ class VisitManager:
 历史互动（最近 {len(history)} 次）：
 {json.dumps(history, ensure_ascii=False, indent=2)}
 
-请生成：
-1. 3-5 个推荐话题
-2. 1-2 个红线提醒（合规）
-3. 1 段开场白建议
-4. 上次未完成的跟进项
+请生成：3-5 个推荐话题、1-2 个红线提醒（合规）、1 段开场白建议、
+拜访需带的材料、以及上次未完成的跟进项。
 
-输出 JSON 格式。"""
+必须严格按以下 JSON schema 输出（只输出 JSON，不要 markdown 代码块，
+不要任何额外文字），suggested_topics 保持 3-5 个：
+{{
+  "suggested_topics": ["话题1", "话题2", "话题3"],
+  "red_lines": ["红线提醒1"],
+  "opening_remarks": "开场白建议",
+  "materials": ["需带材料1"],
+  "last_follow_up": "上次未完成的跟进项"
+}}"""
 
         specialist_id = self._resolve_specialist(db, product_id)
         result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
 
-        recommendations = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
+        recommendations = _parse_recommendations(result.get("answer", ""))
         return {
             "hcp_profile": hcp,
             "history": history,
@@ -263,7 +329,9 @@ class VisitManager:
             resource_type="visit", resource_id=str(record.id),
         )
         logger.info(f"拜访开始: visit_id={record.id} hcp_id={hcp_id} user_id={user_id}")
-        return record.to_dict()
+        result = record.to_dict()
+        result["visit_id"] = record.id  # 移动端契约：读取 visit_id
+        return result
 
     async def process_transcript(
         self,
@@ -357,8 +425,9 @@ class VisitManager:
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
 
-        # 状态锁（S4）：已结束的拜访不能重复 end —— 防止覆盖已生成的结构化记录/证据
-        if record.ai_summary:
+        # 状态锁（S4）：已结束的拜访不能重复 end —— 防止覆盖已生成的结构化记录/证据。
+        # AI 失败时写入的是占位串（AI_SUMMARY_PLACEHOLDER），不算已结束，允许重试覆盖
+        if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
             raise BusinessError(f"拜访已结束，不能重复结束: visit_id={visit_id}")
 
         if full_transcript:
@@ -397,12 +466,13 @@ class VisitManager:
             follow_up = structured.get("follow_up_suggestions", [])
             sentiment = structured.get("sentiment", "neutral")
             next_plan = structured.get("next_visit_plan", {})
-        elif result.get("error"):
-            ai_summary = f"（AI 总结暂不可用：{result['error']}）"
-            key_points = interests = objections = follow_up = []
-            sentiment, next_plan = "neutral", {}
         else:
-            ai_summary = result.get("answer", "")
+            # AI 失败 / 输出不可解析 → 写占位串（不等于"已结束"），允许再次 end 重试
+            logger.warning(
+                "AI 总结不可用，写入占位串可重试: visit_id=%s error=%s",
+                visit_id, result.get("error") or "AI 输出无法解析",
+            )
+            ai_summary = AI_SUMMARY_PLACEHOLDER
             key_points = interests = objections = follow_up = []
             sentiment, next_plan = "neutral", {}
 
@@ -446,7 +516,9 @@ class VisitManager:
         if structured:
             await _push_profile_update(record.hcp_id, structured, visit_id)
         logger.info(f"拜访结束: visit_id={visit_id} duration={duration}min sentiment={sentiment}")
-        return record.to_dict()
+        result = record.to_dict()
+        result["visit_id"] = record.id  # 移动端契约：读取 visit_id
+        return result
 
     async def follow_up(
         self, db: Session, visit_id: int, user_id: int,

@@ -49,6 +49,30 @@ def test_rule_competition_objection():
     assert any(o["type"] == "competition" for o in result["objections"])
 
 
+def test_rule_competition_no_false_positive_on_usage_phrases():
+    """'患者用药后'等高频短语不再误报竞品异议（需比较语境）"""
+    det = ObjectionDetector(qwen=FakeQwenFail())
+    result = det.detect("患者用药后应观察不良反应，定期复查肝功能")
+    types = {o["type"] for o in result["objections"]}
+    assert "competition" not in types
+    # 另一个高频误报场景：比如/比索洛尔（裸"比"不参与匹配）
+    result2 = det.detect("比如用这个药做联合治疗，比索洛尔也能联用")
+    types2 = {o["type"] for o in result2["objections"]}
+    assert "competition" not in types2
+
+
+def test_rule_competition_comparison_context_still_detected():
+    """带比较语境的竞品异议仍能命中"""
+    det = ObjectionDetector(qwen=FakeQwenFail())
+    result = det.detect("这个药不如别家的，患者反馈差别明显")
+    types = {o["type"] for o in result["objections"]}
+    assert "competition" in types
+    # 用药 + 比较词（正向顺序）
+    result2 = det.detect("用药效果和另一家差不多，患者更认可那边的数据")
+    types2 = {o["type"] for o in result2["objections"]}
+    assert "competition" in types2
+
+
 def test_rule_efficacy_objection():
     det = ObjectionDetector(qwen=FakeQwenFail())
     result = det.detect("这个药不太有效果，病人反馈一般")
