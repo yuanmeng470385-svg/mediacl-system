@@ -42,12 +42,20 @@ export default function VisitInProgressScreen() {
   const [transcribing, setTranscribing] = useState(false);
   const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
   const asrSessionRef = useRef<ReturnType<typeof connectAsr> | null>(null);
+  const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
     timerRef.current = setInterval(() => setElapsed((prev) => prev + 1), 1000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, []);
+
+  // 卸载清理：停止录音（释放麦克风）、关闭 ASR WS，避免原生层持续录音与孤儿会话
+  useEffect(() => () => {
+    if (recordingRef.current) stopRecording().catch(() => {});
+    asrSessionRef.current?.close();
+    asrSessionRef.current = null;
   }, []);
 
   const formatTime = (seconds: number) => {
@@ -96,6 +104,7 @@ export default function VisitInProgressScreen() {
       try {
         await startRecording();
         setRecording(true);
+        recordingRef.current = true;
       } catch (e: any) {
         Alert.alert('提示', '无法开始录音：' + (e.message || '麦克风不可用'));
       }
@@ -103,6 +112,7 @@ export default function VisitInProgressScreen() {
     }
     // 停止录音 → 推流转写
     setRecording(false);
+    recordingRef.current = false;
     setTranscribing(true);
     try {
       const wavPath = await stopRecording();
@@ -279,7 +289,7 @@ export default function VisitInProgressScreen() {
           <Icon name="doctor" size={16} color={Colors.primary} />
           <Text style={styles.simBtnTextHcp}>医生说</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit}>
+        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing}>
           <Icon name="stop-circle-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.endBtnText}>结束</Text>
         </TouchableOpacity>
