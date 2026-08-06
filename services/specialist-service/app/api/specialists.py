@@ -121,6 +121,11 @@ async def chat_with_specialist(
 
     session_id = request.get("session_id")
 
+    # IDOR 防护：续传他人会话（session_id）统一 404，不泄露 session 是否存在
+    if session_id:
+        from app.api.conversations import assert_session_owner
+        assert_session_owner(db, session_id, current_user["id"])
+
     # 调用答案生成器
     generator = AnswerGenerator()
     result = await generator.generate(
@@ -148,6 +153,9 @@ async def get_conversation_history(
 ):
     """获取会话历史"""
     from app.models.conversation import Conversation
+    from app.api.conversations import assert_session_owner
+    # IDOR 防护：他人 session 统一 404，不泄露 session 是否存在
+    assert_session_owner(db, session_id, current_user["id"])
     messages = db.query(Conversation).filter(
         Conversation.session_id == session_id
     ).order_by(Conversation.created_at).all()

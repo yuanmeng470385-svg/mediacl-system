@@ -31,6 +31,22 @@ def _assert_conv_owner(conv: Conversation, current_user: dict):
         raise HTTPException(status_code=403, detail="无权操作该对话")
 
 
+def assert_session_owner(db: Session, session_id: str, user_id: int):
+    """校验会话归属（IDOR 防护）：conversations 表中该 session 至少有一条属于该用户。
+
+    不满足 → 404（统一 404 不泄露 session 是否存在）；session_id 为空直接通过（新建会话）。
+    会话历史读取 / REST chat 续传 / WS question 帧续传共用此校验。
+    """
+    if not session_id:
+        return
+    owned = db.query(Conversation).filter(
+        Conversation.session_id == session_id,
+        Conversation.user_id == user_id,
+    ).first()
+    if not owned:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+
 @router.post("/{conversation_id}/feedback")
 async def submit_feedback(
     conversation_id: int,

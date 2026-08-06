@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from shared.common.auth import verify_token
 from shared.common.db_session import get_db
 from app.core.answer_generator import AnswerGenerator
+from app.api.conversations import assert_session_owner
 
 router = APIRouter(tags=["chat-ws"])
 logger = logging.getLogger(__name__)
@@ -89,6 +90,15 @@ async def chat_ws(
         await send({"type": "error", "message": "question 不能为空"})
         await websocket.close(code=4500)
         return
+
+    # IDOR 防护：question 帧带 session_id 时校验归属，续传他人会话关 4404（不泄露存在性）
+    if session_id:
+        try:
+            assert_session_owner(db, session_id, user_id)
+        except HTTPException:
+            await send({"type": "error", "message": "无权访问该会话"})
+            await websocket.close(code=4404)
+            return
 
     generator = get_generator_factory()()
     stop_event = asyncio.Event()
