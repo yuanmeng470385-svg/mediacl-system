@@ -190,7 +190,10 @@ def _login_by_code(db: Session, store: CodeStore, phone: str, code: str):
         raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
 
     if exhausted:
-        raise AuthError("验证码错误次数过多，请重新获取")
+        # 对外文案与通用登录失败完全一致：exhausted 只会出现在"手机号已注册
+        # 且验证码在存"的路径上，文案差异会泄露注册状态，真实原因只进 debug 日志
+        logger.debug(f"验证码尝试次数已用尽，需重新获取 phone={phone}")
+        raise AuthError(_ERR_CODE_LOGIN)
     if not codes_equal(stored, code):
         raise AuthError(_ERR_CODE_LOGIN)
 

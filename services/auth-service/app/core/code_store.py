@@ -37,6 +37,10 @@ class CodeStore(ABC):
         """
         消耗一次校验机会。
 
+        语义：单个验证码最多可校验 max_attempts 次。第 1..max_attempts 次
+        （含最后一次）都返回 exhausted=False，可正常校验；第 max_attempts 次
+        之后（即下一次调用）才返回 exhausted=True，验证码随之作废。
+
         Returns:
             (code, exhausted)
             code      — 当前存储的验证码，不存在/已过期则为 None
@@ -92,9 +96,11 @@ class RedisCodeStore(CodeStore):
                 return None, False
             data = json.loads(raw)
             data["attempts"] = int(data.get("attempts", 0)) + 1
-            if data["attempts"] >= max_attempts:
+            if data["attempts"] > max_attempts:
+                # 已超过上限：作废验证码，本次调用起报告 exhausted
                 self._redis.delete(_key(phone))
                 return data.get("code"), True
+            # 第 max_attempts 次（最后一次机会）仍允许校验，下次调用才作废
             # 保留剩余 TTL，不因为一次失败而延长有效期
             remaining = self._redis.ttl(_key(phone))
             self._redis.setex(_key(phone), max(remaining, 1), json.dumps(data))
@@ -133,7 +139,7 @@ class MemoryCodeStore(CodeStore):
             self._codes.pop(phone, None)
             return None, False
         entry["attempts"] += 1
-        if entry["attempts"] >= max_attempts:
+        if entry["attempts"] > max_attempts:
             self._codes.pop(phone, None)
             return entry["code"], True
         return entry["code"], False

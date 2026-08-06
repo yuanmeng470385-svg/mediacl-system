@@ -7,6 +7,8 @@
   - 停用账号不能登录、不能用旧 token 取 profile
   - 存储不可用时不放行（fail-closed）
   - 错误信息不区分"用户不存在"和"凭证错误"
+  - 用户管理端点防提权：role 变更仅限 admin、禁止自改 role/status、
+    停用/降级即时生效（旧 token 也以库为准）
 
 不依赖真实 Redis / PostgreSQL：CodeStore 用内存实现，DB 用 SQLite。
 """
@@ -22,7 +24,8 @@ os.environ["AUTH_DEV_MODE"] = "true"
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import BigInteger, create_engine
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -36,6 +39,14 @@ from app.core.security import hash_password
 from app.main import app
 
 # ---------- 测试替身 ----------
+
+# SQLite 只对 INTEGER PRIMARY KEY 自增，而模型主键是 BigInteger（PG 的
+# BIGSERIAL）。在 SQLite 方言下把 BigInteger 编译成 INTEGER，API 创建用户时
+# 才能拿到自增 id（显式给 id 的 fixture 行不受影响，PG 编译路径也不受影响）。
+@compiles(BigInteger, "sqlite")
+def _compile_bigint_for_sqlite(type_, compiler, **kw):
+    return "INTEGER"
+
 
 # StaticPool：内存 SQLite 每条连接都是独立的库，必须复用同一条连接，
 # 否则 fixture 建的表在请求处理线程里看不到
@@ -215,17 +226,38 @@ class TestLoginByCode:
         assert r.status_code == 401
 
     def test_尝试次数用尽后验证码作废(self):
+        """5 次全错 → 验证码作废，第 6 次起任何输入（包括正确码）都被拒"""
+        _send_code(ACTIVE_PHONE)
+        real_code = _issued_code(ACTIVE_PHONE)
+        for _ in range(5):
+            assert client.post("/api/v1/auth/login",
+                               json={"phone": ACTIVE_PHONE, "code": "000000"}).status_code == 401
+        # 第 6 次输对也进 exhausted，且文案与通用登录失败一致
+        r = client.post("/api/v1/auth/login", json={"phone": ACTIVE_PHONE, "code": real_code})
+        assert r.status_code == 401
+        assert r.json()["message"] == "手机号或验证码错误"
+
+    def test_第5次输对验证码仍可登录(self):
+        """上限内（含第 5 次）输对验证码应放行 —— 回归 off-by-one"""
         _send_code(ACTIVE_PHONE)
         real_code = _issued_code(ACTIVE_PHONE)
         for _ in range(4):
+            assert client.post("/api/v1/auth/login",
+                               json={"phone": ACTIVE_PHONE, "code": "000000"}).status_code == 401
+        r = client.post("/api/v1/auth/login", json={"phone": ACTIVE_PHONE, "code": real_code})
+        assert r.status_code == 200
+        assert r.json()["data"]["token"]
+
+    def test_用尽后与通用登录失败响应文案一致(self):
+        """exhausted 只会发生在"已注册且验证码在存"，文案差异会泄露注册状态"""
+        _send_code(ACTIVE_PHONE)
+        for _ in range(5):
             client.post("/api/v1/auth/login", json={"phone": ACTIVE_PHONE, "code": "000000"})
-        # 第 5 次触发上限
-        r = client.post("/api/v1/auth/login", json={"phone": ACTIVE_PHONE, "code": "000000"})
-        assert r.status_code == 401
-        assert "次数过多" in r.json()["message"]
-        # 此后即使输对了也不行
-        assert client.post("/api/v1/auth/login",
-                           json={"phone": ACTIVE_PHONE, "code": real_code}).status_code == 401
+        exhausted = client.post("/api/v1/auth/login",
+                                json={"phone": ACTIVE_PHONE, "code": "000000"})
+        generic = client.post("/api/v1/auth/login", json={"phone": UNKNOWN_PHONE, "code": "000000"})
+        assert exhausted.json()["message"] == generic.json()["message"]
+        assert "次数过多" not in exhausted.json()["message"]
 
     def test_未注册手机号与错误验证码返回同样的信息(self):
         """错误信息不能泄露账号是否存在"""
@@ -307,3 +339,126 @@ class TestCurrentUser:
         db.close()
         r = client.get("/api/v1/auth/profile", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 401
+
+
+# ==================== 用户管理安全（防提权 / 防自锁死 / 停用即时生效） ====================
+
+class TestUserManagementSecurity:
+    """users 端点安全回归：role 变更仅限 admin、禁止自改 role/status、
+    停用/降级即时生效（持有未过期 token 也以库为准，返回 403 code 3000）。"""
+
+    @pytest.fixture()
+    def seeded_managers(self, fresh_state):
+        """在基础 3 个用户（id 1-3）之外补 admin 与两个 manager（显式 id）"""
+        db = TestSession()
+        db.add_all([
+            User(id=10, username="admin01", full_name="管理员", phone="13800000010",
+                 role="admin", status="active", password_hash=hash_password(PASSWORD)),
+            User(id=11, username="mgr01", full_name="经理一", phone="13800000011",
+                 role="manager", status="active", password_hash=hash_password(PASSWORD)),
+            User(id=12, username="mgr02", full_name="经理二", phone="13800000012",
+                 role="manager", status="active", password_hash=hash_password(PASSWORD)),
+        ])
+        db.commit()
+        db.close()
+        yield
+
+    def _auth(self, username):
+        r = client.post("/api/v1/auth/login",
+                        json={"username": username, "password": PASSWORD})
+        assert r.status_code == 200, r.text
+        return {"Authorization": f"Bearer {r.json()['data']['token']}"}
+
+    def test_manager不能创建admin账号(self, seeded_managers):
+        """manager 创建用户时传 role=admin → 403 code 3000，且用户不应被创建"""
+        r = client.post("/api/v1/users", headers=self._auth("mgr01"),
+                        json={"username": "mgr_makes_admin", "full_name": "新管理员",
+                              "role": "admin"})
+        assert r.status_code == 403
+        assert r.json()["code"] == 3000
+        db = TestSession()
+        try:
+            assert db.query(User).filter(User.username == "mgr_makes_admin").first() is None
+        finally:
+            db.close()
+
+    def test_manager传任何role都拒绝(self, seeded_managers):
+        """manager 传 role 一律拒绝，不只是 admin：传 manager/rep 同样 403"""
+        for role in ("manager", "rep"):
+            r = client.post("/api/v1/users", headers=self._auth("mgr01"),
+                            json={"username": f"mgr_makes_{role}", "full_name": "新员工",
+                                  "role": role})
+            assert r.status_code == 403, f"role={role}"
+            assert r.json()["code"] == 3000
+
+    def test_manager不传role可创建默认rep(self, seeded_managers):
+        """manager 不碰 role 字段时原有能力保留：创建默认 rep 成功"""
+        r = client.post("/api/v1/users", headers=self._auth("mgr01"),
+                        json={"username": "mgr_makes_rep", "full_name": "新代表"})
+        assert r.status_code == 200
+        assert r.json()["data"]["role"] == "rep"
+
+    def test_manager不能把自己role改成admin(self, seeded_managers):
+        """水平提权路径：manager 把自己 role 改成 admin → 403 code 3000"""
+        r = client.put("/api/v1/users/11", headers=self._auth("mgr01"),
+                       json={"role": "admin"})
+        assert r.status_code == 403
+        assert r.json()["code"] == 3000
+
+    def test_manager不能改别人的role(self, seeded_managers):
+        """manager 把别的 manager 改成 admin 同样被拒"""
+        r = client.put("/api/v1/users/12", headers=self._auth("mgr01"),
+                       json={"role": "admin"})
+        assert r.status_code == 403
+        assert r.json()["code"] == 3000
+
+    def test_admin可以把manager提升为admin(self, seeded_managers):
+        """正向：admin 改别人的 role 不受限"""
+        r = client.put("/api/v1/users/11", headers=self._auth("admin01"),
+                       json={"role": "admin"})
+        assert r.status_code == 200
+        assert r.json()["data"]["role"] == "admin"
+
+    def test_admin也不能改自己role或status(self, seeded_managers):
+        """任何人（含 admin）都不能改自己的 role/status：防误操作自锁死"""
+        h = self._auth("admin01")
+        for body in ({"role": "manager"}, {"status": "disabled"}):
+            r = client.put("/api/v1/users/10", headers=h, json=body)
+            assert r.status_code == 403, body
+            assert r.json()["code"] == 3000
+
+    def test_admin可以停用别人(self, seeded_managers):
+        """正向：admin 停用别人不受限（改别人 status 允许）"""
+        r = client.put("/api/v1/users/11", headers=self._auth("admin01"),
+                       json={"status": "disabled"})
+        assert r.status_code == 200
+        assert r.json()["data"]["status"] == "disabled"
+
+    def test_status只接受active或disabled(self, seeded_managers):
+        """status 枚举校验：其他值 → 400 ParamError"""
+        r = client.put("/api/v1/users/11", headers=self._auth("admin01"),
+                       json={"status": "banned"})
+        assert r.status_code == 400
+        assert r.json()["code"] == 1000
+
+    def test_被停用用户持旧token调users端点被拒(self, seeded_managers):
+        """停用即时生效：被停用用户拿未过期 token 调 users 端点 → 403 code 3000"""
+        h = self._auth("mgr01")
+        db = TestSession()
+        db.query(User).filter(User.username == "mgr01").update({"status": "disabled"})
+        db.commit()
+        db.close()
+        r = client.get("/api/v1/users", headers=h)
+        assert r.status_code == 403
+        assert r.json()["code"] == 3000
+
+    def test_被降级用户持旧token调users端点被拒(self, seeded_managers):
+        """降级即时生效：库中 role 与 token 声明不一致 → 403，以库为准"""
+        h = self._auth("mgr01")
+        db = TestSession()
+        db.query(User).filter(User.username == "mgr01").update({"role": "rep"})
+        db.commit()
+        db.close()
+        r = client.put("/api/v1/users/12", headers=h, json={"full_name": "改名"})
+        assert r.status_code == 403
+        assert r.json()["code"] == 3000
