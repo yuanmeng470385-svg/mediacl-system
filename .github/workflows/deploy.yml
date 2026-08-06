@@ -1,8 +1,9 @@
 name: Deploy
 
 on:
+  # 与 ci.yml 保持一致：默认分支是 master（此前写 main 导致流水线永不触发）
   push:
-    branches: [main]
+    branches: [master, develop]
 
 jobs:
   build-and-push:

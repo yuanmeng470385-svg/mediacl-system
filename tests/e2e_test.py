@@ -2,6 +2,11 @@
 """
 端到端联调测试 v2
 全链路：合规检查 → 数字专员对话（合规→百炼→合规→审计）
+
+运行前需本地环境已启动（docker compose up -d 或各服务 uvicorn 直跑）：
+  - .env 中 INTERNAL_API_KEY 已配置（否则合规检查用例跳过 —— 该接口是网关内部路径，
+    必须带 X-Internal-Key，见 services/gateway/app/core/auth_middleware.py INTERNAL_PATHS）
+  - JWT_SECRET 与启动服务所用一致
 """
 import sys, os, json, time, jwt, httpx, asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,16 +14,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GATEWAY = "http://localhost:8000"
-JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret")
+# 与 shared/common/auth.py 的兜底一致（auth.py:24/43，启动端 fail-fast，测试端用同一默认）
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
 
-# 生成正确格式的测试 token (使用 sub 字段)
+# 网关内部路径必须携带 X-Internal-Key；未配置或仍为默认/模板占位值时跳过相关用例并提示，
+# 不要用假 key 硬闯（网关与服务端都会 403）
+INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "")
+_WEAK_INTERNAL_API_KEYS = {"", "change-me-internal-key", "change_me_to_a_random_secret_string"}
+HAS_INTERNAL_KEY = INTERNAL_API_KEY not in _WEAK_INTERNAL_API_KEYS
+
+# 生成正确格式的测试 token (使用 sub 字段，auth.py:66 读取 payload["sub"]）
 payload = {"sub": "1", "username": "admin", "role": "admin",
            "exp": int(time.time()) + 86400, "iat": int(time.time())}
 token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+internal_headers = {"X-Internal-Key": INTERNAL_API_KEY, "Content-Type": "application/json"}
 
 passed = 0
 failed = 0
+skipped = 0
 
 def check(name, condition, detail=""):
     global passed, failed
@@ -28,6 +42,11 @@ def check(name, condition, detail=""):
     else:
         failed += 1
         print(f"  ❌ {name}  {detail}")
+
+def skip(name, reason):
+    global skipped
+    skipped += 1
+    print(f"  ⏭️  跳过 {name}: {reason}")
 
 async def main():
     global passed, failed
@@ -46,23 +65,30 @@ async def main():
                 check(f"{svc} ({port})", False, str(e)[:80])
 
         # ====== Test 2: Compliance Check ======
+        # /api/v1/compliance/check 是网关内部路径（INTERNAL_PATHS），必须带 X-Internal-Key
         print("\n📌 Test 2: 合规检查（正常内容）")
-        r = await client.post(f"{GATEWAY}/api/v1/compliance/check", json={
-            "content": "肺癌靶向药有哪些注意事项",
-            "context": {"user_id": 1, "type": "user_input"}
-        })
-        data = r.json()
-        check("正常内容不拦截", data["data"]["blocked"] == False)
+        if not HAS_INTERNAL_KEY:
+            skip("合规检查（正常内容）", "INTERNAL_API_KEY 未配置或仍是默认值，/api/v1/compliance/check 需 X-Internal-Key，无法调用")
+        else:
+            r = await client.post(f"{GATEWAY}/api/v1/compliance/check", headers=internal_headers, json={
+                "content": "肺癌靶向药有哪些注意事项",
+                "context": {"user_id": 1, "type": "user_input"}
+            })
+            data = r.json()
+            check("正常内容不拦截", data["data"]["blocked"] == False)
 
         # ====== Test 3: Compliance blocks violation ======
         print("\n📌 Test 3: 合规检查（违规内容）")
-        r = await client.post(f"{GATEWAY}/api/v1/compliance/check", json={
-            "content": "这个药保证治好你的病",
-            "context": {"user_id": 1, "type": "user_input"}
-        })
-        data = r.json()
-        check("违规内容被拦截", data["data"]["blocked"] == True)
-        check("检测到违规规则", len(data["data"]["violations"]) > 0)
+        if not HAS_INTERNAL_KEY:
+            skip("合规检查（违规内容）", "INTERNAL_API_KEY 未配置或仍是默认值，/api/v1/compliance/check 需 X-Internal-Key，无法调用")
+        else:
+            r = await client.post(f"{GATEWAY}/api/v1/compliance/check", headers=internal_headers, json={
+                "content": "这个药保证治好你的病",
+                "context": {"user_id": 1, "type": "user_input"}
+            })
+            data = r.json()
+            check("违规内容被拦截", data["data"]["blocked"] == True)
+            check("检测到违规规则", len(data["data"]["violations"]) > 0)
 
         # ====== Test 4: Gateway routing ======
         print("\n📌 Test 4: 网关路由")
@@ -145,6 +171,8 @@ async def main():
     print("\n" + "=" * 60)
     total = passed + failed
     print(f"结果: {passed}/{total} 通过", end="")
+    if skipped:
+        print(f", {skipped} 跳过 ⏭️", end="")
     if failed > 0:
         print(f", {failed} 失败 ❌")
     else:

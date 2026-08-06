@@ -21,6 +21,11 @@ from urllib.parse import quote
 
 import httpx
 
+# 告警规则列表。
+# 注意：只放有真实指标源的规则 —— db_connection_pool_usage（数据库连接池满）曾在此列，
+# 但全仓库没有任何服务导出该指标，规则永远不会触发（永不告警的假规则），已删除。
+# http_requests_total 计数器同样存在无 .inc() 接线的问题（恒 0，见 CLAUDE.md 已知问题），
+# 先修好指标接线再配告警。
 ALERTS = [
     {
         "name": "AI 回答延迟过高",
@@ -35,13 +40,6 @@ ALERTS = [
         "threshold": "0.001|0.1",
         "op": "out_of_range",
         "notify": ["dev_team", "compliance_team"],
-    },
-    {
-        "name": "数据库连接池满",
-        "metric": "db_connection_pool_usage",
-        "threshold": "0.8",
-        "op": ">",
-        "notify": ["dev_team"],
     },
 ]
 

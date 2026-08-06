@@ -1,5 +1,9 @@
 # ARMS 告警规则源文件（与 deploy/arms-monitor.py 的 ALERTS 列表同内容）
 # 单一事实来源的意图：留待后续用本文件替换脚本内硬编码列表；本轮以脚本内列表为准。
+#
+# 注意：只放有真实指标源的规则。db_connection_pool_usage（数据库连接池满）曾在此列，
+# 但全仓库没有任何服务导出该指标，永不触发，已删除；http_requests_total 计数器
+# 无 .inc() 接线（恒 0），指标接线修好前不为其配告警。
 alerts:
   - name: "AI 回答延迟过高"
     metric: "specialist_chat_latency_seconds"
@@ -11,8 +15,3 @@ alerts:
     threshold: "0.001|0.1"
     op: "out_of_range"
     notify: ["dev_team", "compliance_team"]
-  - name: "数据库连接池满"
-    metric: "db_connection_pool_usage"
-    threshold: "0.8"
-    op: ">"
-    notify: ["dev_team"]

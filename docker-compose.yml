@@ -21,6 +21,21 @@ x-internal-urls: &internal-urls
   AUDIT_SERVICE_URL: http://audit-service:8005
   HCP_SERVICE_URL: http://hcp-service:8006
 
+# ==============================================
+# ⚠️ 首次启动后必须手动执行一次 002 审计不可篡改迁移（一次性、有外部前置的操作）：
+#
+#   docker exec -i medagent-postgres psql -U medagent medagent \
+#     -v audit_password='<强密码>' < scripts/migrations/002_audit_immutable.sql
+#
+# 它创建 medagent_audit 低权账号（audit-service 的 AUDIT_DATABASE_URL 指向它），
+# 并把 audit_logs 的 owner 移交 + medagent 降级为非 superuser。
+#
+# 为什么不在 compose 里自动执行：002 需要 psql 变量传密码（仓库不放默认口令），
+# 且执行后 medagent 被 NOSUPERUSER 降级、没有可重跑的安全路径 —— 手动执行可控可审计。
+# 在 002 执行之前不要启动 audit-service（AUDIT_DB_PASSWORD 未配置时 compose 会直接报错
+# 拒绝启动，见下方 :? 强制必填）。
+# ==============================================
+
 services:
   # ==================== 基础设施 ====================
   postgres:
@@ -159,9 +174,11 @@ services:
       - "8005:8005"
     env_file: .env
     environment:
-      # 审计服务用专用低权账号（migrations/002_audit_immutable.sql 创建，仅 INSERT/SELECT）
-      AUDIT_DATABASE_URL: postgresql://medagent_audit:${AUDIT_DB_PASSWORD}@postgres:5432/medagent
       <<: *internal-urls
+      # 审计服务用专用低权账号（migrations/002_audit_immutable.sql 创建，仅 INSERT/SELECT）。
+      # ${AUDIT_DB_PASSWORD:?...} 强制必填：未定义时 compose 直接报错拒绝启动，
+      # 避免用空密码静默连库（否则连不上且 /health 还报健康，难以排查）。
+      AUDIT_DATABASE_URL: postgresql://medagent_audit:${AUDIT_DB_PASSWORD:?AUDIT_DB_PASSWORD 必须设置（= 002_audit_immutable.sql 创建 medagent_audit 时使用的密码）}@postgres:5432/medagent
     depends_on:
       postgres:
         condition: service_healthy

@@ -14,6 +14,15 @@
 --
 -- 配套：audit-service 必须用 medagent_audit 账号连接（AUDIT_DATABASE_URL 环境变量），
 -- 否则写审计会因无 INSERT 权限而静默失败。
+--
+-- ⚠️ 警告：本脚本执行后系统将无 superuser（medagent 被 NOSUPERUSER 降级）！
+--    后续任何需要 superuser 的操作（CREATE EXTENSION、ALTER ROLE、改数据库参数等）
+--    都将没有入口。建议执行本迁移前先保留一个超级用户，例如：
+--       CREATE ROLE medagent_root LOGIN SUPERUSER PASSWORD '<强密码>';
+--    （在 psql -U medagent 下执行；保留后可把后续维护操作切换到 medagent_root，
+--     日常业务仍走 medagent/medagent_audit 低权账号。）
+--   本脚本幂等可重跑，但降级不可逆（无 superuser 后无法再恢复 medagent），
+--   执行前请确认所有依赖 superuser 的初始化工作（CREATE EXTENSION 等）已完成。
 
 \set ON_ERROR_STOP on
 

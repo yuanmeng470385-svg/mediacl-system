@@ -170,6 +170,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_service ON audit_logs(service_name);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
 -- 不可篡改：禁止 UPDATE 和 DELETE
+-- ⚠️ 注意：官方 postgres 镜像把 POSTGRES_USER（默认 medagent）创建为 superuser 且是
+--     audit_logs 的 owner —— superuser/owner 的权限来自 superuser 属性/ownership，
+--     REVOKE 对它们不生效，此句只是"声明意图"。
+--     必须执行 scripts/migrations/002_audit_immutable.sql（一次性手动迁移，见该文件头部用法）
+--     才能真正不可篡改：它创建 medagent_audit 低权账号、把表 owner 移交占位角色、
+--     并将 medagent 降级为非 superuser。002 未执行前审计表仍可被 medagent 随意改写。
 REVOKE UPDATE, DELETE ON audit_logs FROM medagent;
 
 -- 9. 合规规则表

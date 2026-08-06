@@ -2,6 +2,34 @@
 # MedAgent 生产环境 docker-compose
 # 使用阿里云 ACR 镜像，不本地构建
 # ==============================================
+#
+# ⚠️ DB_USER 与 init_db.sql 的 REVOKE 角色一致性：
+#   scripts/init_db.sql:173 `REVOKE ... FROM medagent` 硬编码角色名 medagent。
+#   本文件允许用 ${DB_USER:-medagent} 自定义，若改为其他值：
+#   1) init_db.sql 里的 REVOKE 会因为角色不存在而报错（整个 init 脚本失败）；
+#   2) 002_audit_immutable.sql 里的 REVOKE/GRANT 也是硬编码 medagent，权限收紧失效。
+#   因此默认保持 medagent 不变；确需改名时必须同步修改 init_db.sql 与
+#   scripts/migrations/002_audit_immutable.sql 中的角色名。
+#
+# ⚠️ 002 审计不可篡改迁移（与 dev compose 相同）：首次部署后手动执行一次
+#   docker exec -i medagent-postgres psql -U ${DB_USER:-medagent} medagent \
+#     -v audit_password='<AUDIT_DB_PASSWORD>' < scripts/migrations/002_audit_immutable.sql
+#   执行前 audit-service 无法启动（AUDIT_DATABASE_URL 指向的角色尚不存在，:? 强制必填拦截）。
+#   生产环境审计写入只有在 002 执行后才真正生效（medagent 对 audit_logs 仅 SELECT）。
+
+# 容器内网地址（生产环境 .env 里是 localhost，容器内必须覆盖成 compose 服务名 +
+# 带密码的连接串，否则按模板部署所有服务都连不上 DB/Redis）
+x-internal-urls: &internal-urls
+  DATABASE_URL: postgresql://${DB_USER:-medagent}:${DB_PASSWORD:?DB_PASSWORD 必须设置}@postgres:5432/medagent
+  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD 必须设置}@redis:6379/0
+  GATEWAY_URL: http://gateway:8000
+  AUTH_SERVICE_URL: http://auth-service:8007
+  SPECIALIST_SERVICE_URL: http://specialist-service:8001
+  VISIT_SERVICE_URL: http://visit-service:8002
+  KNOWLEDGE_SERVICE_URL: http://knowledge-service:8003
+  COMPLIANCE_SERVICE_URL: http://compliance-service:8004
+  AUDIT_SERVICE_URL: http://audit-service:8005
+  HCP_SERVICE_URL: http://hcp-service:8006
 
 services:
   postgres:
@@ -55,6 +83,7 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,9 +101,7 @@ services:
     restart: always
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://${DB_USER:-medagent}:${DB_PASSWORD}@postgres:5432/medagent
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      GATEWAY_URL: http://gateway:8000
+      <<: *internal-urls
       AUTH_DEV_MODE: "false"
     depends_on:
       postgres:
@@ -92,6 +119,7 @@ services:
     container_name: medagent-specialist
     restart: always
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -108,6 +136,7 @@ services:
     container_name: medagent-visit
     restart: always
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,6 +153,7 @@ services:
     container_name: medagent-knowledge
     restart: always
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,6 +170,10 @@ services:
     container_name: medagent-compliance
     restart: always
     env_file: .env
+    environment:
+      <<: *internal-urls
+      # 容器内 shared 在 /app/shared，规则文件路径必须显式指定（与 dev compose 一致）
+      RULES_YAML_PATH: /app/shared/compliance-rules/rules.yaml
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,6 +190,12 @@ services:
     container_name: medagent-audit
     restart: always
     env_file: .env
+    environment:
+      <<: *internal-urls
+      # 审计服务用专用低权账号（002_audit_immutable.sql 创建，仅 INSERT/SELECT）。
+      # ${AUDIT_DB_PASSWORD:?...} 强制必填：未定义时 compose 直接报错，避免用空密码静默连库；
+      # 002 未执行时角色尚不存在，audit-service 无法启动 —— 先手动执行 002 再起服务。
+      AUDIT_DATABASE_URL: postgresql://medagent_audit:${AUDIT_DB_PASSWORD:?AUDIT_DB_PASSWORD 必须设置（= 002_audit_immutable.sql 创建 medagent_audit 时使用的密码）}@postgres:5432/medagent
     depends_on:
       postgres:
         condition: service_healthy
@@ -170,6 +210,7 @@ services:
     container_name: medagent-hcp
     restart: always
     env_file: .env
+    environment: *internal-urls
     depends_on:
       postgres:
         condition: service_healthy
