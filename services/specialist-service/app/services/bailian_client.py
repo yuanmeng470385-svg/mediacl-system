@@ -50,123 +50,25 @@ class BailianClient:
                 "finished": True
             }
         """
-        task_id = str(uuid.uuid4())
-        answer_parts = []
-        citations = []
-        dialog_id = session_id
-
         try:
-            async with websockets.connect(
-                self.ws_url,
-                additional_headers={"Authorization": f"Bearer {self.api_key}"},
-                close_timeout=10,
-            ) as ws:
-                # ---- Step 1: Start ----
-                start_msg = {
-                    "header": {"action": "run-task", "task_id": task_id, "streaming": "duplex"},
-                    "payload": {
-                        "task_group": "aigc",
-                        "task": "multimodal-generation",
-                        "function": "generation",
-                        "model": "multimodal-dialog",
-                        "input": {
-                            "directive": "Start",
-                            "workspace_id": self.workspace_id,
-                            "app_id": app_id,
-                        },
-                        "parameters": {
-                            "upstream": {"type": "AudioOnly", "mode": "duplex"},
-                            "client_info": {"user_id": "medagent-user"},
-                        },
-                    },
-                }
-                # 续传之前会话
-                if dialog_id:
-                    start_msg["payload"]["input"]["dialog_id"] = dialog_id
-                await ws.send(json.dumps(start_msg, ensure_ascii=False))
-
-                # ---- Step 2: 等待 Listening 状态 ----
-                for _ in range(20):
-                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
-                    ev = msg.get("payload", {}).get("output", {}).get("event", "")
-                    if ev == "Started":
-                        dialog_id = msg["payload"]["output"].get("dialog_id", dialog_id)
-                    elif ev == "DialogStateChanged":
-                        state = msg["payload"]["output"].get("state", "")
-                        if state == "Listening":
-                            break
-                    elif ev == "Error":
-                        error = msg["payload"]["output"]
-                        raise BailianException(
-                            f"百炼错误 [{error.get('error_code')}]: {error.get('error_message')}"
-                        )
-                else:
-                    raise BailianException("等待 Listening 状态超时")
-
-                # ---- Step 3: 发送文本问题 ----
-                respond_msg = {
-                    "header": {"action": "continue-task", "task_id": task_id, "streaming": "duplex"},
-                    "payload": {
-                        "input": {
-                            "directive": "RequestToRespond",
-                            "dialog_id": dialog_id,
-                            "type": "prompt",
-                            "text": prompt,
-                        }
-                    },
-                }
-                # 传入历史对话
-                if history:
-                    respond_msg["payload"]["parameters"] = {"history": history}
-                await ws.send(json.dumps(respond_msg, ensure_ascii=False))
-
-                # ---- Step 4: 接收回答 ----
-                for _ in range(60):
-                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
-                    ev = msg.get("payload", {}).get("output", {}).get("event", "")
-                    if ev == "RespondingContent":
-                        output = msg["payload"]["output"]
-                        text = output.get("text", "")
-                        finished = output.get("finished", False)
-                        answer_parts.append(text)  # 流式增量，每次是全量
-                        # 引用溯源：解析 extra_info.docs（缺省/结构不符时防御式跳过）
-                        extra_info = output.get("extra_info") or {}
-                        for doc in extra_info.get("docs") or []:
-                            if not isinstance(doc, dict):
-                                continue
-                            title = doc.get("doc_name") or doc.get("title") or doc.get("file_name") or ""
-                            if title and not any(c["title"] == title for c in citations):
-                                citations.append({
-                                    "title": title,
-                                    "url": doc.get("doc_url") or doc.get("url") or "",
-                                    "doc_id": str(doc.get("doc_id") or doc.get("file_id") or ""),
-                                })
-                        if finished:
-                            break
-                    elif ev == "Error":
-                        error = msg["payload"]["output"]
-                        raise BailianException(
-                            f"百炼错误 [{error.get('error_code')}]: {error.get('error_message')}"
-                        )
-                else:
-                    raise BailianException("等待回答完成超时（60 次消息未结束）")
-
-                # ---- Step 5: Stop ----
-                await ws.send(json.dumps({
-                    "header": {"action": "finish-task", "task_id": task_id, "streaming": "duplex"},
-                    "payload": {"input": {"directive": "Stop", "dialog_id": dialog_id}},
-                }, ensure_ascii=False))
-
-                # 取最后一条（全量）作为最终答案
-                final_answer = answer_parts[-1] if answer_parts else ""
-
-                return {
-                    "text": final_answer,
-                    "dialog_id": dialog_id,
-                    "finished": True,
-                    "citations": citations,
-                }
-
+            answer_parts = []
+            citations = []
+            dialog_id = session_id
+            async for frame in self.chat_stream(
+                app_id=app_id, prompt=prompt,
+                session_id=session_id, history=history,
+            ):
+                if frame["type"] == "delta":
+                    answer_parts.append(frame["text"])
+                elif frame["type"] == "done":
+                    dialog_id = frame["dialog_id"]
+                    citations = frame["citations"]
+            return {
+                "text": answer_parts[-1] if answer_parts else "",
+                "dialog_id": dialog_id,
+                "finished": True,
+                "citations": citations,
+            }
         except websockets.exceptions.ConnectionClosed as e:
             raise BailianException(f"WebSocket 连接关闭: {e}")
         except TimeoutError:
@@ -175,6 +77,132 @@ class BailianClient:
             if not isinstance(e, BailianException):
                 raise BailianException(f"百炼调用异常: {e}")
             raise
+
+    async def chat_stream(
+        self,
+        app_id: str,
+        prompt: str,
+        session_id: Optional[str] = None,
+        history: Optional[List[Dict]] = None,
+    ):
+        """流式版 chat()：每帧 yield {"type":"delta","text":...}，末尾 yield done 帧。
+
+        done 帧: {"type":"done","text","dialog_id","citations"}
+        Error 事件抛 BailianException（与 chat() 一致）。
+        """
+        task_id = str(uuid.uuid4())
+        answer_parts = []
+        citations = []
+        dialog_id = session_id
+
+        async with websockets.connect(
+            self.ws_url,
+            additional_headers={"Authorization": f"Bearer {self.api_key}"},
+            close_timeout=10,
+        ) as ws:
+            # ---- Step 1: Start ----
+            start_msg = {
+                "header": {"action": "run-task", "task_id": task_id, "streaming": "duplex"},
+                "payload": {
+                    "task_group": "aigc",
+                    "task": "multimodal-generation",
+                    "function": "generation",
+                    "model": "multimodal-dialog",
+                    "input": {
+                        "directive": "Start",
+                        "workspace_id": self.workspace_id,
+                        "app_id": app_id,
+                    },
+                    "parameters": {
+                        "upstream": {"type": "AudioOnly", "mode": "duplex"},
+                        "client_info": {"user_id": "medagent-user"},
+                    },
+                },
+            }
+            # 续传之前会话
+            if dialog_id:
+                start_msg["payload"]["input"]["dialog_id"] = dialog_id
+            await ws.send(json.dumps(start_msg, ensure_ascii=False))
+
+            # ---- Step 2: 等待 Listening ----
+            for _ in range(20):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
+                ev = msg.get("payload", {}).get("output", {}).get("event", "")
+                if ev == "Started":
+                    dialog_id = msg["payload"]["output"].get("dialog_id", dialog_id)
+                elif ev == "DialogStateChanged":
+                    if msg["payload"]["output"].get("state", "") == "Listening":
+                        break
+                elif ev == "Error":
+                    error = msg["payload"]["output"]
+                    raise BailianException(
+                        f"百炼错误 [{error.get('error_code')}]: {error.get('error_message')}"
+                    )
+            else:
+                raise BailianException("等待 Listening 状态超时")
+
+            # ---- Step 3: 发送文本问题 ----
+            respond_msg = {
+                "header": {"action": "continue-task", "task_id": task_id, "streaming": "duplex"},
+                "payload": {
+                    "input": {
+                        "directive": "RequestToRespond",
+                        "dialog_id": dialog_id,
+                        "type": "prompt",
+                        "text": prompt,
+                    }
+                },
+            }
+            # 传入历史对话
+            if history:
+                respond_msg["payload"]["parameters"] = {"history": history}
+            await ws.send(json.dumps(respond_msg, ensure_ascii=False))
+
+            # ---- Step 4: 接收回答（逐帧 yield）----
+            for _ in range(60):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
+                ev = msg.get("payload", {}).get("output", {}).get("event", "")
+                if ev == "RespondingContent":
+                    output = msg["payload"]["output"]
+                    text = output.get("text", "")
+                    finished = output.get("finished", False)
+                    answer_parts.append(text)  # 流式增量，每次是全量
+                    # 引用溯源：解析 extra_info.docs（缺省/结构不符时防御式跳过）
+                    extra_info = output.get("extra_info") or {}
+                    for doc in extra_info.get("docs") or []:
+                        if not isinstance(doc, dict):
+                            continue
+                        title = doc.get("doc_name") or doc.get("title") or doc.get("file_name") or ""
+                        if title and not any(c["title"] == title for c in citations):
+                            citations.append({
+                                "title": title,
+                                "url": doc.get("doc_url") or doc.get("url") or "",
+                                "doc_id": str(doc.get("doc_id") or doc.get("file_id") or ""),
+                            })
+                    yield {"type": "delta", "text": text}
+                    if finished:
+                        break
+                elif ev == "Error":
+                    error = msg["payload"]["output"]
+                    raise BailianException(
+                        f"百炼错误 [{error.get('error_code')}]: {error.get('error_message')}"
+                    )
+            else:
+                raise BailianException("等待回答完成超时（60 次消息未结束）")
+
+            # ---- Step 5: Stop ----
+            await ws.send(json.dumps({
+                "header": {"action": "finish-task", "task_id": task_id, "streaming": "duplex"},
+                "payload": {"input": {"directive": "Stop", "dialog_id": dialog_id}},
+            }, ensure_ascii=False))
+
+            final_answer = answer_parts[-1] if answer_parts else ""
+            yield {
+                "type": "done",
+                "text": final_answer,
+                "dialog_id": dialog_id,
+                "citations": citations,
+            }
 
 
 class BailianException(Exception):
