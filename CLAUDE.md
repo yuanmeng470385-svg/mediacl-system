@@ -283,13 +283,24 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 已修（2026-08-06 三批实施，23 提交本地未 push）：~~web 无登录页~~（AuthProvider + 登录页 + 路由守卫 + 401 跳转）、~~mobile 五屏零后端调用~~（VisitDetail/Profile/Settings 接真实接口、NotificationSettings AsyncStorage 持久化；HelpCenter 除外）、~~ContentScreen MOCK_CONTENT~~（接 knowledge API + 新增文档详情页）、~~移动端无录音/无 WS 客户端~~（录音库 + 权限 + asr.ts/wsChat.ts + 拜访页录音转写接线 + 聊天流式）、~~短信通道仅 ConsoleSender~~（AliyunSmsSender dysmsapi 真实现，缺配置 fail-fast，4 测试全 mock）、~~聊天一次性返回~~（specialist WS 端点 + 网关 WS 代理 + mobile 流式渲染 + 8s 降级 REST，question 帧缓冲到 onopen 发送）。
 
-**仍为假数据/未实现（勿误以为已做）**：
-- web 部分增删改假动作（系统配置保存、上传等只弹 toast）
-- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key）
-- HelpCenter 屏零后端调用
+已修（2026-08-06 全仓审计三批修复，21 提交本地未 push，详见 docs/audit-report-2026-08-06.md）：
+- ~~移动端拜访全流程断裂~~（start visit_id 契约/end 双调/假摘要删除/transcript 键位/WS 合规接线/VisitRecord 全字段映射）
+- ~~分页契约错位~~（paginate 顶层 total/page/page_size 加法兼容）
+- ~~互动历史两端必崩~~（hcp 返回裸数组 + 两端映射）；~~AI 画像/医生详情字段错位~~（mobile hcp 映射 + web 字段修复 + Android 标签弹窗）
+- ~~会话历史 IDOR~~（归属校验三处）；~~compliance LLM 异常 fail-open~~（R999 收敛）；~~auth 审计客户端缺 before_value 致 PUT /users 500~~
+- ~~INTERNAL_API_KEY 模板值绕过~~、~~网关 JWT_SECRET 默认回退~~（fail-fast）；~~manager 自授 admin~~（仅 admin 改角色 + 禁自改 + users 重读库）；~~验证码 off-by-one/枚举泄露~~；~~pre-visit 跨用户泄露~~；~~审计查询/导出无角色限制~~
+- ~~knowledge/search 双向不可达~~（移出 INTERNAL_PATHS）；~~web 六页假动作~~（专员/合规/审计/用户/知识库/系统配置全部真实接线）；~~合规规则字段无校验~~；~~specialist 列表恒空/stats 双倍~~；~~gateway 限流 user_id 死代码/统一错误格式/WS 关闭码/health 假聚合~~
+- ~~knowledge 审核流卡死/上传无校验/未上架泄露/ES 从未写入~~（ES 索引接线、驳回清索引、白名单+50MB、角色可见性）
+- ~~dev/prod compose 审计写入失效~~（AUDIT_DATABASE_URL + :? 强校验）、~~deploy.yml 分支永不触发~~、~~e2e/debug 脚本过时~~、~~requirements.txt.tmp 残留~~
+
+**仍为假数据/未实现（勿误以为已做，2026-08-06 审计后更新）**：
+- 移动端假数据兜底：专员列表不可用时假专员"小K"、合规手册失败回退写死规则、pre-visit 失败假画像/话题（真实失败应显示错误态——部分已删，仍有残留）
+- 移动端 minor：checkAuth 网络抖动即踢出登录、设置页行无点击行为、语音输入 stub、HelpCenter 屏零后端调用、Hotline 占位
+- 需求级缺口：飞书导入/双向同步、表格/图片 OCR 自动解析（依赖百炼云）、web 风险热力图/实时动态、实时转写说话人分离、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、web 检索测试页/拦截记录页/专员数据展示页、移动端密码登录入口、拜访后"确认完成"提交/分享、关键节点标记、引用资料快捷发送、拜访结束自动创建任务（仅显式 /follow-up）
+- X-Request-ID 链路未贯穿（网关不生成不强制）；REQUESTS 计数器无 .inc() 接线（http_requests_total 恒 0）；听悟 TTS 未接
+- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key；"录完突发推流"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏）
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
-- `knowledge-base/` 空目录（方案要求 100-300 篇文献）、ES 真实实例未接（ES_URL 配置才启用）
-- X-Request-ID 链路未贯穿；REQUESTS 计数器无 .inc() 接线（http_requests_total 恒 0）
+- 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 
 ## Gotchas
 

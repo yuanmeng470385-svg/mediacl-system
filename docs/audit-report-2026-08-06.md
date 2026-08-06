@@ -6,6 +6,41 @@
 
 ---
 
+## 0. 修复状态（2026-08-06 三批修复完成后）
+
+三批修复（21 个提交）已完成，全部服务测试通过（auth 43 / specialist 41 / visit 34 / compliance 39 / audit 12 / gateway 22 / hcp 18 / knowledge 44）、mobile jest 38 全绿、web build 通过。
+
+**已修复（原 Critical 全部 + 安全项 + 大部分 Major）：**
+
+| 项 | 修复要点 |
+|----|---------|
+| 移动端拜访全流程断裂（visit_id/双调 end/假摘要/transcript 键） | mobile api 层映射 + 删假摘要 + WS 合规接线 |
+| 分页契约全局错位 | paginate() 顶层补 total/page/page_size（加法兼容） |
+| 互动历史契约 → 两端必崩 | 后端返回裸数组 + 两端映射 |
+| AI 画像/医生详情字段错位 | mobile hcp api 映射 + web 详情字段修复 + Android 标签弹窗 |
+| 会话历史 IDOR | 归属校验（历史/chat/WS 三处） |
+| compliance LLM 异常形状 fail-open | 显式校验收敛 R999 fail-closed（实测复现修复） |
+| auth audit_client 缺 before_value → PUT /users 500 | 补参数 + 真实 before 快照 |
+| INTERNAL_API_KEY 模板值绕过 / 网关 JWT_SECRET 默认值 | 拒绝集合 + fail-fast |
+| manager 自授 admin / RBAC 不重读库 | 角色变更仅 admin + 禁自改 + users 端点重读库 |
+| 验证码 off-by-one / 枚举泄露 | 第 5 次可验 + exhausted 文案模糊化 |
+| pre-visit 跨用户泄露 | 历史按 user_id 隔离 |
+| 审计查询/导出无角色限制 + 导出自身不入审计 | admin/manager/compliance + 入审计 |
+| knowledge/search 双向不可达 | 移出 INTERNAL_PATHS |
+| 听悟/ES/上传/审核流（M21-M27） | ES 接线、审核流健壮化、上传白名单、访问控制、过滤注入 |
+| web 六页假动作（专员/合规/审计/用户/知识库/系统配置） | 全部真实接线 + 防串台 + 导出下载 |
+| 合规规则字段无校验静默失效 | 枚举/形状校验 + 13 测试 |
+| gateway 收尾（限流执行序/统一错误/WS 关闭码/health 探活） | 全部修复 + 系统配置只读端点 |
+| 部署配置（dev/prod compose 审计失效/DB URL 缺失） | :? 强校验 + 全服务 URL 覆盖 + deploy.yml 分支 |
+| e2e/debug 脚本过时 | X-Internal-Key + sub 契约 |
+| specialist 列表恒空 / stats 双倍计数 | 分页化 + role='user' 计数 |
+
+**仍未修复（功能缺口与剩余 minor，见第 4 节）：**
+- 需求级缺口：飞书导入/同步、表格/OCR 解析（依赖百炼）、风险热力图、实时动态、说话人分离、知识库内容库（100-300 篇文献）、web 检索测试页/拦截记录页/专员数据展示页、移动端密码登录、拜访后确认完成/分享、关键节点标记、语音输入、X-Request-ID 贯穿、ES 真实实例
+- 剩余 minor：mobile 假数据兜底（专员列表/合规/准备包）、checkAuth 网络抖动踢出、设置页死行、监控 http_requests_total 无 .inc()、listen 悟 TTS 未接、任务创建未自动化等
+
+---
+
 ## 1. 总览
 
 | 级别 | 数量 | 说明 |
