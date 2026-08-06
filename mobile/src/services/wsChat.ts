@@ -15,6 +15,10 @@ export interface ChatWsDone {
   conversationId?: number | null;
   sessionId?: string;
   citations?: unknown[];
+  /** blocked 回答：真实原因（text）+ 违规明细（violations），与 REST 路径一致 */
+  blocked?: boolean;
+  violations?: unknown[];
+  evidenceLevel?: string | null;
 }
 
 export interface ChatWsCallbacks {
@@ -38,6 +42,18 @@ export function openChatWs(
     `ws://${GATEWAY_HOST}/api/v1/specialists/${specialistId}/chat/ws?token=${encodeURIComponent(token)}`
   );
 
+  // open 前 sendQuestion 缓冲的 question 帧（真实 RN WebSocket 构造后先 CONNECTING）
+  let pendingQuestion: string | null = null;
+  // 会话已按协议/主动结束（done、error 帧、onerror、close()）→ onclose 不再上报为故障
+  let done = false;
+
+  ws.onopen = () => {
+    // open 前缓冲的 question 补发；若 open 前已 close() 则 pendingQuestion 已被清空
+    if (pendingQuestion !== null) {
+      ws.send(pendingQuestion);
+      pendingQuestion = null;
+    }
+  };
   ws.onmessage = (e) => {
     try {
       const frame = JSON.parse(e.data as string);
@@ -49,15 +65,20 @@ export function openChatWs(
           cbs.onDelta(frame.text ?? '');
           break;
         case 'done':
+          done = true;
           cbs.onDone({
             text: frame.text ?? '',
             conversationId: frame.conversation_id ?? null,
             sessionId: frame.session_id,
             citations: frame.citations ?? [],
+            blocked: frame.blocked ?? false,
+            violations: frame.violations ?? [],
+            evidenceLevel: frame.evidence_level ?? null,
           });
           ws.close();
           break;
         case 'error':
+          done = true;
           cbs.onError(frame.message || '对话服务异常');
           break;
         default:
@@ -67,19 +88,33 @@ export function openChatWs(
       // 非 JSON 帧忽略
     }
   };
-  ws.onerror = () => cbs.onError('对话服务连接失败');
+  ws.onerror = () => {
+    done = true;
+    cbs.onError('对话服务连接失败');
+  };
+  // 中途断开（专员/网络异常）只触发 onclose；done 已置位说明是按协议或主动关闭，不上报
+  ws.onclose = () => {
+    if (!done) cbs.onError('对话连接已断开');
+  };
 
   return {
     sendQuestion(text: string, sessionId?: string) {
+      const payload = JSON.stringify({
+        type: 'question',
+        text,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      });
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'question',
-          text,
-          ...(sessionId ? { session_id: sessionId } : {}),
-        }));
+        ws.send(payload);
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        // 连接尚未建立：缓冲，onopen 后补发
+        pendingQuestion = payload;
       }
+      // CLOSING/CLOSED：直接丢弃
     },
     close() {
+      done = true;             // 主动关闭：onclose 不上报故障
+      pendingQuestion = null;  // 未 open 即关闭 → 丢弃缓冲的 question
       ws.close();
     },
   };

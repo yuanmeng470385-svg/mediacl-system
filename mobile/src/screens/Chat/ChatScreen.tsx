@@ -33,7 +33,7 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   citations?: { title: string; url?: string }[];
-  evidenceLevel?: string;
+  evidenceLevel?: string | null;
   blocked?: boolean;
   /** 反馈/收藏主键（assistant 行 id）。为空则禁用这两个动作 */
   conversationId?: number | null;
@@ -70,27 +70,50 @@ export default function ChatScreen() {
   ): Promise<boolean> => {
     return new Promise((resolve) => {
       let started = false;
+      // 结果已定（done/error/8s 超时降级）后，迟到的帧一律忽略：
+      // 防止降级 REST 后 onStart 重建“正在思考...”气泡、onDone 重复入列
+      let settled = false;
       const timer = setTimeout(() => {                   // 8s 未收到 start → 降级
         if (!started) { cleanup(); resolve(false); }
       }, 8000);
       const cleanup = () => {
+        settled = true;
         clearTimeout(timer);
         if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       };
       const ws = openChatWs(specialistId, token, {
-        onStart: () => { started = true; setStreaming(true); setStreamText(''); },
-        onDelta: (t) => { setStreamText(t); },
+        onStart: () => {
+          if (settled) return;
+          started = true; setStreaming(true); setStreamText('');
+        },
+        onDelta: (t) => {
+          if (settled) return;
+          setStreamText(t);
+        },
         onDone: (d) => {
+          if (settled) return;
+          settled = true;
           started = true;
           clearTimeout(timer);
           setStreamText('');
           setStreaming(false);
+          // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细），blocked/evidenceLevel 一并透传
+          const violationText = ((d.violations ?? []) as { description?: string }[])
+            .map((v) => v.description)
+            .filter(Boolean)
+            .join('；');
+          const content = d.blocked
+            ? [d.text, violationText && `（${violationText}）`]
+                .filter(Boolean)
+                .join('')
+            : d.text;
           const aiMsg: Message = {
             id: `a_${Date.now()}`,
             role: 'assistant',
-            content: d.text,
+            content,
             citations: (d.citations ?? []) as Message['citations'],
-            blocked: false,
+            blocked: d.blocked ?? false,
+            evidenceLevel: d.evidenceLevel ?? null,
             conversationId: d.conversationId ?? null,
           };
           setMessages((prev) => [...prev, aiMsg]);
@@ -99,6 +122,8 @@ export default function ChatScreen() {
           resolve(true);
         },
         onError: (m) => {
+          if (settled) return;
+          settled = true;
           started = true;
           clearTimeout(timer);
           setStreaming(false);

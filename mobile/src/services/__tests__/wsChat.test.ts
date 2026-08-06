@@ -3,21 +3,30 @@ import { openChatWs } from '../wsChat';
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
   static OPEN = 1;
+  static CONNECTING = 0;
   url: string;
   onopen: (() => void) | null = null;
   onmessage: ((e: any) => void) | null = null;
+  onclose: ((e?: any) => void) | null = null;
   sent: any[] = [];
+  // 与真实 RN WebSocket 一致：构造时为 CONNECTING(0)，onopen 后才进入 OPEN(1)
   readyState = 0;
   constructor(url: string) {
     this.url = url;
     MockWebSocket.instances.push(this);
-    // 模拟连接已建立（真实 WS 打开后 readyState 为 OPEN），否则实现里
-    // readyState === WebSocket.OPEN 的守卫不会放行 sendQuestion()
-    this.readyState = 1;
   }
   send(data: any) { this.sent.push(data); }
   // 模拟真实 WebSocket.close()：只改状态，不产生任何服务端帧
   close() { this.readyState = 3; }
+  // 测试辅助：模拟连接建立（readyState → OPEN 并触发 onopen）
+  triggerOpen() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+  // 测试辅助：模拟服务端/网络断开（只触发 onclose）
+  simulateClose() {
+    this.onclose?.({});
+  }
   // 测试辅助：模拟服务端消息
   emit(data: any) { this.onmessage?.({ data }); }
 }
@@ -27,26 +36,47 @@ beforeEach(() => {
   (global as any).WebSocket = MockWebSocket;
 });
 
+const noopCbs = { onStart: () => {}, onDelta: () => {}, onDone: () => {}, onError: () => {} };
+
 describe('wsChat 客户端', () => {
-  it('URL 走网关并带 token 与 specialistId', async () => {
-    const ws = openChatWs(3, 'tok-1', { onStart: () => {}, onDelta: () => {}, onDone: () => {}, onError: () => {} });
-    await new Promise((r) => setTimeout(r, 0));
+  it('URL 走网关并带 token 与 specialistId', () => {
+    const ws = openChatWs(3, 'tok-1', noopCbs);
     const inst = MockWebSocket.instances[0];
     expect(inst.url).toContain(':8000/api/v1/specialists/3/chat/ws');
     expect(inst.url).toContain('token=tok-1');
     ws.close();
   });
 
-  it('sendQuestion 发 question 帧', async () => {
-    const ws = openChatWs(3, 'tok', { onStart: () => {}, onDelta: () => {}, onDone: () => {}, onError: () => {} });
-    await new Promise((r) => setTimeout(r, 0));
+  it('sendQuestion 发 question 帧（open 后）', () => {
+    const ws = openChatWs(3, 'tok', noopCbs);
     const inst = MockWebSocket.instances[0];
+    inst.triggerOpen();
     ws.sendQuestion('你好', 'sess-1');
     expect(inst.sent[0]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
     ws.close();
   });
 
-  it('start/delta/done 帧触发回调，done 带 conversationId', async () => {
+  it('open 前 sendQuestion 先缓冲，open 后补发 question 帧', () => {
+    const ws = openChatWs(3, 'tok', noopCbs);
+    const inst = MockWebSocket.instances[0];
+    expect(inst.readyState).toBe(0);                 // 真实时序：构造后仍是 CONNECTING
+    ws.sendQuestion('你好', 'sess-1');
+    expect(inst.sent).toHaveLength(0);               // 未 open 不发送
+    inst.triggerOpen();
+    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
+    ws.close();
+  });
+
+  it('open 前 close 丢弃缓冲的 question，不再补发', () => {
+    const ws = openChatWs(3, 'tok', noopCbs);
+    const inst = MockWebSocket.instances[0];
+    ws.sendQuestion('你好');
+    ws.close();
+    inst.triggerOpen();
+    expect(inst.sent).toHaveLength(0);
+  });
+
+  it('start/delta/done 帧触发回调，done 带 conversationId', () => {
     const events: string[] = [];
     let convId: number | null | undefined;
     const ws = openChatWs(3, 'tok', {
@@ -55,24 +85,72 @@ describe('wsChat 客户端', () => {
       onDone: (d) => { events.push('done'); convId = d.conversationId; },
       onError: () => events.push('err'),
     });
-    await new Promise((r) => setTimeout(r, 0));
     const inst = MockWebSocket.instances[0];
     inst.emit(JSON.stringify({ type: 'start' }));
     inst.emit(JSON.stringify({ type: 'delta', text: '你' }));
     inst.emit(JSON.stringify({ type: 'done', text: '你好', conversation_id: 42 }));
-    await new Promise((r) => setTimeout(r, 0));
     expect(events).toEqual(['start', 'd:你', 'done']);
     expect(convId).toBe(42);
     ws.close();
   });
 
-  it('error 帧触发 onError', async () => {
+  it('done 帧透传 blocked/violations/evidenceLevel', () => {
+    let got: any;
+    const ws = openChatWs(3, 'tok', { ...noopCbs, onDone: (d) => { got = d; } });
+    const inst = MockWebSocket.instances[0];
+    inst.emit(JSON.stringify({
+      type: 'done',
+      text: '该问题涉及不合规内容',
+      conversation_id: 7,
+      blocked: true,
+      violations: [{ description: '违规一' }, { description: '违规二' }],
+      evidence_level: 'D',
+    }));
+    expect(got).toMatchObject({
+      text: '该问题涉及不合规内容',
+      conversationId: 7,
+      blocked: true,
+      violations: [{ description: '违规一' }, { description: '违规二' }],
+      evidenceLevel: 'D',
+    });
+    ws.close();
+  });
+
+  it('error 帧触发 onError', () => {
     const errors: string[] = [];
-    const ws = openChatWs(3, 'tok', { onStart: () => {}, onDelta: () => {}, onDone: () => {}, onError: (m) => errors.push(m) });
-    await new Promise((r) => setTimeout(r, 0));
+    const ws = openChatWs(3, 'tok', { ...noopCbs, onError: (m) => errors.push(m) });
     MockWebSocket.instances[0].emit(JSON.stringify({ type: 'error', message: '生成失败' }));
-    await new Promise((r) => setTimeout(r, 0));
     expect(errors).toEqual(['生成失败']);
     ws.close();
+  });
+
+  it('意外断开触发 onError；主动 close / done / error 后的断开不上报', () => {
+    const errors: string[] = [];
+    const mk = () => openChatWs(3, 'tok', { ...noopCbs, onError: (m) => errors.push(m) });
+    const inst = (i: number) => MockWebSocket.instances[i];
+
+    // 1) 未按协议结束即断开 → 故障上报
+    const ws1 = mk();
+    inst(0).simulateClose();
+    expect(errors).toEqual(['对话连接已断开']);
+
+    // 2) 主动 close 后再断开 → 不上报
+    ws1.close();
+    inst(0).simulateClose();
+    expect(errors).toEqual(['对话连接已断开']);
+
+    // 3) done 帧正常结束后断开 → 不上报
+    const ws2 = mk();
+    inst(1).emit(JSON.stringify({ type: 'done', text: 'ok' }));
+    inst(1).simulateClose();
+    expect(errors).toEqual(['对话连接已断开']);
+
+    // 4) error 帧结束后断开 → 不上报
+    const ws3 = mk();
+    inst(2).emit(JSON.stringify({ type: 'error', message: '生成失败' }));
+    inst(2).simulateClose();
+    expect(errors).toEqual(['对话连接已断开', '生成失败']);
+    ws2.close();
+    ws3.close();
   });
 });
