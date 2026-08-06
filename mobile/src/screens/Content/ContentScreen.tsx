@@ -155,7 +155,7 @@ export default function ContentScreen() {
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={Colors.primary} />
         </View>
-      ) : error ? (
+      ) : error && items.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
