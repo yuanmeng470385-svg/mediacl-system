@@ -1,31 +1,81 @@
-import { PageContainer, ProForm, ProFormText, ProFormDigit } from '@ant-design/pro-components';
-import { Card, App } from 'antd';
+import { useEffect, useState } from 'react';
+import { Alert, Card, Descriptions, Row, Col, Tag, Typography } from 'antd';
+import { PageContainer } from '@ant-design/pro-components';
+import { systemAPI, type SystemConfigItem } from '../../services/system';
+
+const { Text } = Typography;
 
 export default function SystemConfig() {
-  const { message } = App.useApp();
+  const [items, setItems] = useState<SystemConfigItem[]>([]);
+  const [info, setInfo] = useState<{ rate_limit_per_minute?: number; log_level?: string }>({});
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    systemAPI
+      .config()
+      .then((r) => {
+        setItems(r.data.data?.items ?? []);
+        setInfo(r.data.data?.info ?? {});
+      })
+      .catch(() => setLoadError('配置状态加载失败：请确认网关服务可用（本页仅管理员可访问）'))
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
-    <PageContainer header={{ title: '系统配置' }}>
-      <ProForm
-        onFinish={async () => { message.success('配置已保存'); return true; }}
-        submitter={{ searchConfig: { submitText: '保存配置' } }}
-      >
-        <Card title="阿里云配置" style={{ marginBottom: 24 }}>
-          <ProFormText name="aliyun_account_id" label="Account ID" />
-          <ProFormText name="aliyun_region" label="区域" initialValue="cn-hangzhou" />
-          <ProFormText name="bailian_app_id" label="百炼 App ID" placeholder="mm_xxx" />
-          <ProFormText name="dashscope_api_key" label="通义千问 API Key" />
-          <ProFormText name="tingwu_app_key" label="通义听悟 App Key" />
-        </Card>
-        <Card title="通知配置" style={{ marginBottom: 24 }}>
-          <ProFormDigit name="compliance_notify" label="合规拦截通知" fieldProps={{ addonAfter: '次后通知' }} initialValue={3} />
-          <ProFormDigit name="error_notify" label="系统异常通知" fieldProps={{ addonAfter: '次后通知' }} initialValue={1} />
-          <ProFormText name="notify_receiver" label="通知接收人" placeholder="多个用逗号分隔" />
-        </Card>
-        <Card title="日志配置">
-          <ProFormDigit name="log_retention_days" label="日志保留天数" fieldProps={{ addonAfter: '天' }} initialValue={1095} />
-        </Card>
-      </ProForm>
+    <PageContainer header={{ title: '系统配置', subTitle: '只读状态页：配置由 .env 环境变量管理' }}>
+      <Alert
+        type="info"
+        showIcon
+        message="本页为只读状态页，不支持在线保存"
+        description="阿里云、短信、大模型（通义千问 / 百炼）、NLS 语音等密钥类配置通过服务的 .env 环境变量管理，修改后需重启对应服务生效。此处仅展示各配置项是否已配置。"
+        style={{ marginBottom: 24 }}
+      />
+
+      <Card title="关键配置状态" style={{ marginBottom: 24 }} loading={loading}>
+        {loadError && <Alert type="error" showIcon message={loadError} style={{ marginBottom: 16 }} />}
+        {!loadError && items.length === 0 && (
+          <Text type="secondary">暂无配置状态数据</Text>
+        )}
+        <Row gutter={[16, 8]}>
+          {items.map((it) => (
+            <Col xs={24} sm={12} lg={8} key={it.key}>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: '8px 0',
+                  borderBottom: '1px solid #f0f0f0',
+                }}
+              >
+                <Text ellipsis title={`${it.label}（${it.key}）`}>
+                  {it.label}
+                </Text>
+                <Tag color={it.configured ? 'success' : 'warning'}>
+                  {it.configured ? '已配置' : '未配置'}
+                </Tag>
+              </div>
+            </Col>
+          ))}
+        </Row>
+      </Card>
+
+      <Card title="系统信息">
+        <Descriptions column={2} size="small">
+          <Descriptions.Item label="网关限流（次/分钟）">
+            {info.rate_limit_per_minute ?? '—'}
+          </Descriptions.Item>
+          <Descriptions.Item label="日志级别">{info.log_level ?? '—'}</Descriptions.Item>
+          <Descriptions.Item label="审计日志保留天数" span={2}>
+            由环境变量 AUDIT_LOG_RETENTION_DAYS 控制（默认 1095 天），修改后重启
+            audit-service 生效
+          </Descriptions.Item>
+          <Descriptions.Item label="通知阈值 / 接收人" span={2}>
+            由环境变量控制（合规拦截通知、系统异常通知等），修改后重启对应服务生效
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
     </PageContainer>
   );
 }

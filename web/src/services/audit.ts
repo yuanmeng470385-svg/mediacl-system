@@ -1,19 +1,36 @@
 import client from './client';
 import type { ApiResponse, PaginatedResponse, AuditLog } from '../types';
 
+/** /audit/logs 查询参数，与 audit-service search_logs 对齐 */
+export interface AuditListParams {
+  page?: number;
+  page_size?: number;
+  start_time?: string;
+  end_time?: string;
+  user_id?: string;
+  service_name?: string;
+  action?: string;
+  risk_level?: string;
+  keyword?: string;
+}
+
+/** /audit/export 请求体（后端仅支持这 4 个筛选字段） */
+export interface AuditExportParams {
+  start_time?: string;
+  end_time?: string;
+  service_name?: string;
+  risk_level?: string;
+}
+
 export const auditAPI = {
-  list: (params?: {
-    page?: number; page_size?: number;
-    start_date?: string; end_date?: string;
-    user_id?: string; service?: string; operation?: string; risk_level?: string;
-  }) =>
+  list: (params?: AuditListParams) =>
     client.get<PaginatedResponse<AuditLog>>('/audit/logs', { params }),
 
   detail: (id: string) =>
-    client.get<ApiResponse<AuditLog & { content?: string }>>(`/audit/logs/${id}`),
+    client.get<ApiResponse<AuditLog>>(`/audit/logs/${id}`),
 
-  export: (params?: any) =>
-    client.post('/audit/export', params, { responseType: 'blob' }),
+  export: (params?: AuditExportParams) =>
+    client.post<Blob>('/audit/export', params ?? {}, { responseType: 'blob' }),
 
   stats: () =>
     client.get<ApiResponse<{

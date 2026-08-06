@@ -39,8 +39,8 @@ export default function Dashboard() {
       .then((r) => setActiveUsers(r.data.data?.total ?? 0))
       .catch(() => {});
 
-    // 对话量（审计里 chat_response 的次数）
-    auditAPI.list({ operation: 'chat_response', page: 1, page_size: 1 })
+    // 对话量（审计里 chat_response 的次数，后端筛选参数是 action）
+    auditAPI.list({ action: 'chat_response', page: 1, page_size: 1 })
       .then((r) => setConversations(r.data.data?.total ?? 0))
       .catch(() => {});
 
@@ -76,12 +76,19 @@ export default function Dashboard() {
       })
       .catch(() => setBlocksLoaded(true));
 
-    // 服务健康（网关 /health 聚合）
+    // 服务健康（网关 /health 聚合，vite 代理 /health → 网关；M46 真探活 status）
     fetch('/health')
       .then((resp) => resp.json())
       .then((d) => {
-        if (d?.backends) {
-          setServices(Object.entries(d.backends).map(([name]) => ({ name, status: 'up' as const })));
+        if (d?.services) {
+          setServices(
+            Object.entries(d.services).map(([name, status]) => ({
+              name,
+              status: status === 'up' ? ('up' as const) : ('down' as const),
+            })),
+          );
+        } else {
+          setServices([]);
         }
       })
       .catch(() => setServices([]));

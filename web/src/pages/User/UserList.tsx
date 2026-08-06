@@ -19,7 +19,8 @@ export default function UserList() {
   const { message } = App.useApp();
 
   const columns: ProColumns<User>[] = [
-    { title: '姓名', dataIndex: 'name', width: 120 },
+    { title: '用户名', dataIndex: 'username', width: 120 },
+    { title: '姓名', dataIndex: 'full_name', width: 120 },
     { title: '手机号', dataIndex: 'phone', width: 140 },
     { title: '角色', dataIndex: 'role', width: 100,
       render: (_, r) => { const rm = ROLE_MAP[r.role] || { color: 'default', text: r.role }; return <Tag color={rm.color}>{rm.text}</Tag>; },
@@ -47,16 +48,47 @@ export default function UserList() {
           <Button key="add" type="primary" icon={<PlusOutlined />} onClick={() => { setEditing(null); setFormOpen(true); }}>新增用户</Button>,
         ]}
       />
-      <ModalForm title={editing ? '编辑用户' : '新增用户'} open={formOpen} onOpenChange={setFormOpen}
+      <ModalForm
+        key={editing?.id ?? 'create'}
+        title={editing ? '编辑用户' : '新增用户'}
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        modalProps={{ destroyOnHidden: true }}
         onFinish={async (values) => {
-          if (editing) await userAPI.update(editing.id, values);
-          else await userAPI.create(values);
-          message.success(`${editing ? '编辑' : '新增'}成功`);
-          actionRef.current?.reload();
-          return true;
+          try {
+            if (editing) {
+              // 后端更新白名单是 full_name（users.py UPDATEABLE_FIELDS），name 不生效
+              await userAPI.update(editing.id, {
+                full_name: values.full_name,
+                phone: values.phone,
+                role: values.role,
+                region: values.region,
+              });
+            } else {
+              const payload: Partial<User> = {
+                username: values.username,
+                full_name: values.full_name,
+                phone: values.phone,
+                region: values.region,
+              };
+              // 后端：manager 传 role 一律拒绝（仅 admin 可指定角色）；rep 是默认角色 → 不传，
+              // 避免 manager 新增默认用户时误 403
+              if (values.role && values.role !== 'rep') payload.role = values.role;
+              await userAPI.create(payload);
+            }
+            message.success(`${editing ? '编辑' : '新增'}成功`);
+            actionRef.current?.reload();
+            setEditing(null);
+            return true;
+          } catch {
+            return false;
+          }
         }}
         initialValues={editing || undefined}>
-        <ProFormText name="name" label="姓名" rules={[{ required: true }]} />
+        {!editing && (
+          <ProFormText name="username" label="用户名" rules={[{ required: true }]} placeholder="登录账号（创建后不可修改）" />
+        )}
+        <ProFormText name="full_name" label="姓名" rules={[{ required: true }]} />
         <ProFormText name="phone" label="手机号" rules={[{ required: true }]} />
         <ProFormSelect name="role" label="角色" rules={[{ required: true }]}
           options={Object.entries(ROLE_MAP).map(([k, v]) => ({ label: v.text, value: k }))} />
