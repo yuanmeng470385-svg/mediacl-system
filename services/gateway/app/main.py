@@ -16,7 +16,10 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-from fastapi import FastAPI, Request, HTTPException
+import asyncio
+import inspect
+import websockets
+from fastapi import FastAPI, Request, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import httpx
@@ -164,6 +167,93 @@ async def proxy(request: Request, path: str):
         except httpx.TimeoutException:
             logger.error(f"后端服务超时: {target_url}")
             raise HTTPException(status_code=504, detail={"code": 5002, "message": "后端服务超时"})
+
+
+# ==================== WS 代理（对话流式转发） ====================
+
+# ---- WS 代理上游工厂（测试注入用） ----
+_upstream_factory = None
+
+
+def set_upstream_factory(fn):
+    """测试注入：替换默认的上游连接函数。fn(url: str) -> 类 WebSocket 上游对象"""
+    global _upstream_factory
+    _upstream_factory = fn
+
+
+async def _default_upstream(url: str):
+    ws = await websockets.connect(url)
+    return ws  # 原生 websockets WebSocket 已具备 send_text/receive_text/close 等
+
+
+@app.websocket("/api/v1/specialists/{specialist_id}/chat/ws")
+async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
+    token = websocket.query_params.get("token", "")
+    await websocket.accept()
+
+    # 上游连接 specialist-service 的 WS 端点，token 原样透传（鉴权在 specialist 侧）
+    ws_scheme = "wss" if settings.SPECIALIST_SERVICE_URL.startswith("https") else "ws"
+    upstream_url = (
+        f"{ws_scheme}://{settings.SPECIALIST_SERVICE_URL.split('://')[1]}"
+        f"/ws/specialists/{specialist_id}/chat?token={token}"
+    )
+    factory = _upstream_factory or _default_upstream
+    try:
+        # 工厂可同步返回上游对象，也可返回协程（默认实现是 async 的）
+        upstream = factory(upstream_url)
+        if inspect.isawaitable(upstream):
+            upstream = await upstream
+    except Exception:
+        await websocket.close(code=4500)
+        return
+
+    # starlette WebSocket 并发 send 会互相干扰，客户端方向统一加锁
+    send_lock = asyncio.Lock()
+
+    async def client_to_upstream():
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg["type"] == "websocket.receive":
+                    if "text" in msg and msg["text"] is not None:
+                        await upstream.send_text(msg["text"])
+                    elif "bytes" in msg and msg["bytes"] is not None:
+                        await upstream.send_bytes(msg["bytes"])
+                elif msg["type"] == "websocket.disconnect":
+                    break
+        except Exception:
+            pass
+        finally:
+            await upstream.close()
+
+    async def upstream_to_client():
+        try:
+            while True:
+                try:
+                    text = await upstream.receive_text()
+                    async with send_lock:
+                        await websocket.send_text(text)
+                except websockets.exceptions.ConnectionClosed:
+                    break
+                except Exception:
+                    break
+        finally:
+            try:
+                async with send_lock:
+                    await websocket.close(code=1000)
+            except Exception:
+                pass
+
+    t1 = asyncio.create_task(client_to_upstream())
+    t2 = asyncio.create_task(upstream_to_client())
+    try:
+        await asyncio.gather(t1, t2)
+    finally:
+        t1.cancel(); t2.cancel()
+        try:
+            await upstream.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
