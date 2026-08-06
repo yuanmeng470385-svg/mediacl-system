@@ -21,7 +21,6 @@ import EvidenceBadge from '../../components/EvidenceBadge';
 import Icon from '../../components/Icon';
 import { ActionIcons } from '../../components/Icon';
 import { specialistAPI } from '../../api/specialist';
-import { complianceAPI } from '../../api/compliance';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ChatScreenParams } from '../../navigation/types';
 
@@ -34,7 +33,8 @@ interface Message {
   citations?: { title: string; url?: string }[];
   evidenceLevel?: string;
   blocked?: boolean;
-  requestId?: string;
+  /** 反馈/收藏主键（assistant 行 id）。为空则禁用这两个动作 */
+  conversationId?: number | null;
 }
 
 export default function ChatScreen() {
@@ -58,21 +58,8 @@ export default function ChatScreen() {
     const text = input.trim();
     if (!text || loading) return;
 
-    try {
-      const check = await complianceAPI.checkContent(text);
-      if (check.blocked) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            role: 'system',
-            content: `输入内容不合规：${check.violations.map((v: any) => v.description).join('；')}`,
-          },
-        ]);
-        return;
-      }
-    } catch {}
-
+    // 不做客户端合规预检：/compliance/check 需 X-Internal-Key（恒 403），
+    // 且服务端 answer_generator 已在 chat 流程内完成问题预检。
     const userMsg: Message = { id: `u_${Date.now()}`, role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
@@ -86,14 +73,25 @@ export default function ChatScreen() {
 
       if (!sessionId && response.session_id) setSessionId(response.session_id);
 
+      // blocked 时展示后端给出的真实原因与违规明细，不再写死话术
+      const violationText = (response.violations ?? [])
+        .map((v) => v.description)
+        .filter(Boolean)
+        .join('；');
+      const content = response.blocked
+        ? [response.answer, violationText && `（${violationText}）`]
+            .filter(Boolean)
+            .join('')
+        : response.answer;
+
       const aiMsg: Message = {
         id: response.request_id || `a_${Date.now()}`,
         role: 'assistant',
-        content: response.blocked ? '该问题建议直接咨询医学顾问。' : response.answer,
+        content,
         citations: response.citations,
         evidenceLevel: response.evidence_level,
         blocked: response.blocked,
-        requestId: response.request_id,
+        conversationId: response.conversation_id ?? null,
       };
       setMessages((prev) => [...prev, aiMsg]);
     } catch (e: any) {
@@ -106,18 +104,18 @@ export default function ChatScreen() {
     }
   }, [input, loading, specialistId, sessionId]);
 
-  const handleFeedback = (msg: Message, rating: 'like' | 'dislike') => {
-    if (!msg.requestId) return;
-    specialistAPI.sendFeedback(specialistId, { request_id: msg.requestId, rating })
-      .then(() => Alert.alert('提示', rating === 'like' ? '感谢反馈！' : '我们会持续改进'))
-      .catch(() => {});
+  const handleFeedback = (msg: Message, rating: 1 | -1) => {
+    if (!msg.conversationId) return;
+    specialistAPI.sendFeedback(msg.conversationId, rating)
+      .then(() => Alert.alert('提示', rating === 1 ? '感谢反馈！' : '我们会持续改进'))
+      .catch((e) => Alert.alert('提示', e.message || '操作失败'));
   };
 
   const handleFavorite = (msg: Message) => {
-    if (!msg.requestId) return;
-    specialistAPI.toggleFavorite(specialistId, msg.requestId, true)
-      .then(() => Alert.alert('提示', '已收藏'))
-      .catch(() => {});
+    if (!msg.conversationId) return;
+    specialistAPI.toggleFavorite(msg.conversationId)
+      .then((r) => Alert.alert('提示', r.is_favorite ? '已收藏' : '已取消收藏'))
+      .catch((e) => Alert.alert('提示', e.message || '操作失败'));
   };
 
   const renderMessage = ({ item }: { item: Message }) => {
@@ -161,12 +159,12 @@ export default function ChatScreen() {
           )}
         </View>
 
-        {!isUser && !item.blocked && item.requestId && (
+        {!isUser && !item.blocked && item.conversationId && (
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => handleFeedback(item, 'like')}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => handleFeedback(item, 1)}>
               <Icon name={ActionIcons.thumbUp} size={16} color={Colors.textHint} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => handleFeedback(item, 'dislike')}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => handleFeedback(item, -1)}>
               <Icon name={ActionIcons.thumbDown} size={16} color={Colors.textHint} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={() => handleFavorite(item)}>

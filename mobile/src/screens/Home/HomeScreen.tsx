@@ -39,7 +39,7 @@ export default function HomeScreen() {
       const today = new Date().toISOString().split('T')[0];
       const result = await visitAPI.list({
         page: 1, page_size: 20,
-        start_date: today, end_date: today,
+        date_from: today, date_to: today,
       });
       setVisits(result.items || []);
     } catch {
