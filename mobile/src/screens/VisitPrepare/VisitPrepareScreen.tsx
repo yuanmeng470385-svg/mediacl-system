@@ -11,6 +11,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { visitAPI } from '../../api/visit';
+import { formatLocalDate } from '../../utils/date';
 import Icon from '../../components/Icon';
 import { ActionIcons, VisitIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -65,7 +66,8 @@ export default function VisitPrepareScreen() {
     try {
       const result = await visitAPI.startVisit({
         hcp_id: hcpId, product_id: productId || 1,
-        planned_date: new Date().toISOString().split('T')[0],
+        // 本地日期（toISOString 是 UTC，东八区凌晨会取成昨天）
+        planned_date: formatLocalDate(),
         notes: `推荐话题：${[...selectedTopics].join('、')}`,
       });
       navigation.replace('VisitInProgress', { visitId: result.visit_id, hcpName });

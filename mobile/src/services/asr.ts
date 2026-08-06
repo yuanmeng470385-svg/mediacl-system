@@ -15,11 +15,12 @@ const ASR_HOST = Platform.select({
 
 export interface AsrCallbacks {
   onReady: () => void;
-  onSentence: (text: string, final: boolean) => void;
+  /** speaker：visit-service 为 ASR 帧加的说话人标签（'rep'/'doctor'，缺省 'rep'） */
+  onSentence: (text: string, final: boolean, speaker?: string) => void;
   onCompliance: (blocked: boolean, violations: unknown[]) => void;
   onError: (message: string) => void;
-  /** completed 帧：回传最后一次 final sentence 的全量文本（可能为空） */
-  onCompleted: (fullText: string) => void;
+  /** completed 帧：回传最后一次 final sentence 的全量文本（可能为空）与说话人标签 */
+  onCompleted: (fullText: string, speaker?: string) => void;
 }
 
 export interface AsrSession {
@@ -31,6 +32,8 @@ export interface AsrSession {
 export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): AsrSession {
   const ws = new WebSocket(`ws://${ASR_HOST}/ws/visits/${visitId}/asr?token=${encodeURIComponent(token)}`);
   let finalText = '';
+  // 最后一次 sentence 帧的说话人标签（visit-service 新字段，缺省 rep）
+  let lastSpeaker: string | undefined;
   // 会话已按协议终止（completed / error 帧，或已报 onerror）则不再把 onclose 当故障上报
   let done = false;
 
@@ -40,7 +43,8 @@ export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): A
       const frame = JSON.parse(e.data as string);
       switch (frame.type) {
         case 'sentence':
-          cbs.onSentence(frame.text ?? '', !!frame.final);
+          if (frame.speaker) lastSpeaker = frame.speaker;
+          cbs.onSentence(frame.text ?? '', !!frame.final, frame.speaker);
           if (frame.final) finalText = frame.text ?? '';
           break;
         case 'compliance':
@@ -52,7 +56,7 @@ export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): A
           break;
         case 'completed':
           done = true;
-          cbs.onCompleted(finalText);
+          cbs.onCompleted(finalText, lastSpeaker);
           ws.close();
           break;
         default:
@@ -65,6 +69,9 @@ export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): A
   ws.onerror = () => {
     done = true;
     cbs.onError('语音服务连接失败');
+    // onerror 后不保证触发 onclose（RN 实现差异）→ 主动 close 释放连接；
+    // 之后即使 onclose 到达，done 已置位也不会重复上报
+    ws.close();
   };
   // 会话中途断开（服务重启、网络闪断）只触发 onclose；done 已置位则说明是按协议正常关闭
   ws.onclose = () => {

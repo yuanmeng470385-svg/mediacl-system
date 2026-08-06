@@ -43,7 +43,8 @@ export interface DigitalSpecialist {
   compliance_level: string;
   bailian_app_id?: string;
   prompt_version: string;
-  status: 'active' | 'inactive' | 'configuring';
+  /** 后端枚举（specialists.py VALID_STATUSES）：draft=草稿 / active=正常 / disabled=已停用 */
+  status: 'draft' | 'active' | 'disabled';
   avatar_color?: string;
 }
 

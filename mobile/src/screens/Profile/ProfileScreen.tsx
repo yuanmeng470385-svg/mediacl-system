@@ -66,8 +66,9 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.userInfo}>
             <Text style={styles.userName}>{user?.name || '医药代表'}</Text>
+            {/* 后端 User.to_dict 无 department 字段（name/phone/role/region/status），缺省显示 '--' */}
             <Text style={styles.userDept}>
-              {user?.department || '肿瘤事业部'} · {user?.region || '华东区'}
+              {user?.department || '--'} · {user?.region || '--'}
             </Text>
           </View>
           <Icon name="chevron-right" size={24} color={Colors.textHint} />

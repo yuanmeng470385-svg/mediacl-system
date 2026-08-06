@@ -25,31 +25,30 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const avatarColors = ['#0D3B66', '#1565C0', '#00ACC1', '#2E7D32', '#C62828'];
 
+/** 状态 → 展示文案/样式（后端枚举 draft/active/disabled，见 types） */
+const STATUS_CONFIG: Record<string, { label: string; bg: string; color: string }> = {
+  active: { label: '正常', bg: '#dcfce7', color: Colors.success },
+  draft: { label: '草稿', bg: '#fef3c7', color: Colors.warning },
+  disabled: { label: '已停用', bg: '#f3f4f6', color: Colors.textHint },
+};
+const STATUS_FALLBACK = { label: '已停用', bg: '#f3f4f6', color: Colors.textHint };
+
 export default function SpecialistListScreen() {
   const navigation = useNavigation<Nav>();
   const [specialists, setSpecialists] = useState<DigitalSpecialist[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
   const loadSpecialists = useCallback(async () => {
+    setError('');
     try {
       const result = await specialistAPI.list({ page_size: 50 });
       setSpecialists(result || []);
-    } catch {
-      // 后端不可用——展示示例数据
-      setSpecialists([
-        {
-          id: 1,
-          name: '肿瘤产品专员-小K',
-          product_id: 1,
-          product_name: '肿瘤产品线',
-          persona: '专业、严谨的肿瘤学顾问',
-          knowledge_scope: '肺癌、乳腺癌、结直肠癌',
-          compliance_level: 'high',
-          prompt_version: 'v1.0',
-          status: 'configuring',
-        },
-      ]);
+    } catch (e: any) {
+      // 真实失败显示错误态 + 重试，不用写死的假专员兜底
+      setError(e?.message || '专员列表加载失败，请检查网络');
+      setSpecialists([]);
     } finally {
       setLoading(false);
     }
@@ -71,6 +70,7 @@ export default function SpecialistListScreen() {
   const renderItem = ({ item }: { item: DigitalSpecialist }) => {
     const initials = item.name.slice(0, 2);
     const isActive = item.status === 'active';
+    const status = STATUS_CONFIG[item.status] || STATUS_FALLBACK;
 
     return (
       <TouchableOpacity
@@ -82,7 +82,7 @@ export default function SpecialistListScreen() {
           })
         }
         activeOpacity={0.7}
-        disabled={item.status === 'configuring'}
+        disabled={!isActive}
       >
         {/* 头像 */}
         <View
@@ -99,37 +99,9 @@ export default function SpecialistListScreen() {
         <View style={styles.info}>
           <View style={styles.nameRow}>
             <Text style={styles.name}>{item.name}</Text>
-            <View
-              style={[
-                styles.statusBadge,
-                {
-                  backgroundColor:
-                    item.status === 'active'
-                      ? '#dcfce7'
-                      : item.status === 'configuring'
-                      ? '#fef3c7'
-                      : '#f3f4f6',
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusText,
-                  {
-                    color:
-                      item.status === 'active'
-                        ? Colors.success
-                        : item.status === 'configuring'
-                        ? Colors.warning
-                        : Colors.textHint,
-                  },
-                ]}
-              >
-                {item.status === 'active'
-                  ? '可用'
-                  : item.status === 'configuring'
-                  ? '配置中'
-                  : '已停用'}
+            <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
+              <Text style={[styles.statusText, { color: status.color }]}>
+                {status.label}
               </Text>
             </View>
           </View>
@@ -154,7 +126,7 @@ export default function SpecialistListScreen() {
             disabled={!isActive}
           >
             <Text style={styles.chatBtnText}>
-              {isActive ? '开始对话' : '待配置'}
+              {isActive ? '开始对话' : item.status === 'draft' ? '待配置' : '已停用'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -167,6 +139,21 @@ export default function SpecialistListScreen() {
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={Colors.primary} />
         <Text style={styles.loadingText}>加载专员列表...</Text>
+      </View>
+    );
+  }
+
+  if (error && specialists.length === 0) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity
+          style={styles.retryBtn}
+          onPress={loadSpecialists}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.retryText}>重试</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -207,6 +194,15 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: Spacing.md, color: Colors.textHint, fontSize: FontSize.sm },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
   header: {
     backgroundColor: Colors.primary,
     paddingHorizontal: Spacing.xl,

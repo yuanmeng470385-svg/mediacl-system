@@ -91,6 +91,9 @@ export function openChatWs(
   ws.onerror = () => {
     done = true;
     cbs.onError('对话服务连接失败');
+    // onerror 后不保证触发 onclose（RN 实现差异）→ 主动 close 释放连接；
+    // 之后即使 onclose 到达，done 已置位也不会重复上报
+    ws.close();
   };
   // 中途断开（专员/网络异常）只触发 onclose；done 已置位说明是按协议或主动关闭，不上报
   ws.onclose = () => {

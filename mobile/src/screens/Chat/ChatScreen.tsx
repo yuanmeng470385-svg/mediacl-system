@@ -2,7 +2,7 @@
  * 数字专员对话页 - 核心交互页面
  * 功能：气泡对话 / 引用来源卡片 / 证据等级 / 反馈收藏 / 语音输入 / 多轮对话
  */
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -58,6 +58,12 @@ export default function ChatScreen() {
   const [streamText, setStreamText] = useState('');    // 当前增量累积
   const wsRef = useRef<ReturnType<typeof openChatWs> | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  // 流式生成中卸载页面（返回/切走）→ 关闭 WS，避免孤儿会话与连接泄漏
+  useEffect(() => () => {
+    wsRef.current?.close();
+    wsRef.current = null;
+  }, []);
 
   /**
    * WS 流式优先：8s 内未收到 start 帧即清理并返回 false → handleSend 降级 REST。

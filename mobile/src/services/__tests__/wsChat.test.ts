@@ -8,6 +8,7 @@ class MockWebSocket {
   onopen: (() => void) | null = null;
   onmessage: ((e: any) => void) | null = null;
   onclose: ((e?: any) => void) | null = null;
+  onerror: ((e?: any) => void) | null = null;
   sent: any[] = [];
   // 与真实 RN WebSocket 一致：构造时为 CONNECTING(0)，onopen 后才进入 OPEN(1)
   readyState = 0;
@@ -26,6 +27,10 @@ class MockWebSocket {
   // 测试辅助：模拟服务端/网络断开（只触发 onclose）
   simulateClose() {
     this.onclose?.({});
+  }
+  // 测试辅助：模拟网络层 onerror（触发后可能不再有 onclose，见实现修复）
+  simulateError() {
+    this.onerror?.({});
   }
   // 测试辅助：模拟服务端消息
   emit(data: any) { this.onmessage?.({ data }); }
@@ -121,6 +126,20 @@ describe('wsChat 客户端', () => {
     const ws = openChatWs(3, 'tok', { ...noopCbs, onError: (m) => errors.push(m) });
     MockWebSocket.instances[0].emit(JSON.stringify({ type: 'error', message: '生成失败' }));
     expect(errors).toEqual(['生成失败']);
+    ws.close();
+  });
+
+  it('onerror 主动 close 释放连接（否则不保证 onclose），且不重复上报', () => {
+    const errors: string[] = [];
+    const ws = openChatWs(3, 'tok', { ...noopCbs, onError: (m) => errors.push(m) });
+    const inst = MockWebSocket.instances[0];
+    inst.simulateError();
+    expect(errors).toEqual(['对话服务连接失败']);
+    // 修复点：onerror 后主动 close → readyState 进入 CLOSED，连接真正释放
+    expect(inst.readyState).toBe(3);
+    // 即使随后 onclose 到达，done 已置位也不重复上报
+    inst.simulateClose();
+    expect(errors).toEqual(['对话服务连接失败']);
     ws.close();
   });
 

@@ -41,6 +41,8 @@ export default function VisitInProgressScreen() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
+  // ASR 帧的说话人标签（visit-service 新字段 'rep'/'doctor'，缺省 undefined → 按代表处理）
+  const [liveSpeaker, setLiveSpeaker] = useState<string | undefined>(undefined);
   const asrSessionRef = useRef<ReturnType<typeof connectAsr> | null>(null);
   const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
   const timerRef = useRef<ReturnType<typeof setInterval>>();
@@ -133,8 +135,11 @@ export default function VisitInProgressScreen() {
           }
           session.stop();
         },
-        // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"
-        onSentence: (text) => setLiveText(text),
+        // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"，带说话人标签
+        onSentence: (text, _final, speaker) => {
+          setLiveText(text);
+          if (speaker) setLiveSpeaker(speaker);
+        },
         // ASR WS compliance 帧：与 transcript 的 compliance_alerts 同一套映射与展示状态
         onCompliance: (blocked, violations) => {
           const alerts = mapComplianceViolations(violations);
@@ -149,12 +154,14 @@ export default function VisitInProgressScreen() {
           setTranscribing(false); // 服务端 error 帧后即断开（无 completed 帧），必须复位防按钮卡死
           Alert.alert('语音转写', msg.includes('NLS') ? 'NLS 识别通道未配置，暂不可用' : msg);
         },
-        onCompleted: async (fullText) => {
+        // speaker：visit-service 帧的说话人标签（'doctor' → 医生，其余按代表）
+        onCompleted: async (fullText, speaker) => {
           asrSessionRef.current = null;
           setTranscribing(false);
           setLiveText('');
+          setLiveSpeaker(undefined);
           if (fullText && fullText.trim()) {
-            await addTranscript(fullText.trim(), 'rep'); // 走异议/合规检测 + 落库
+            await addTranscript(fullText.trim(), speaker === 'doctor' ? 'hcp' : 'rep'); // 走异议/合规检测 + 落库
           }
         },
       });
@@ -272,11 +279,13 @@ export default function VisitInProgressScreen() {
         </View>
       )}
 
-      {/* 转写中提示行 */}
+      {/* 转写中提示行（speaker 标签有就显示，没有就不显示，向后兼容） */}
       {(transcribing || liveText) && (
         <View style={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, backgroundColor: Colors.primarySurface }}>
           <Text style={{ fontSize: FontSize.xs, color: Colors.primary }}>
-            {transcribing ? '转写中：' + (liveText || '...') : '点击停止录音'}
+            {transcribing
+              ? `${liveSpeaker === 'doctor' ? '医生' : liveSpeaker === 'rep' ? '代表' : ''}转写中：${liveText || '...'}`
+              : '点击停止录音'}
           </Text>
         </View>
       )}

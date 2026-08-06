@@ -10,6 +10,7 @@ import React, {
   type ReactNode,
 } from 'react';
 import { authAPI } from '../api/auth';
+import { APIError } from '../api/client';
 import type { User } from '../types';
 
 interface AuthState {
@@ -18,6 +19,7 @@ interface AuthState {
   isLoading: boolean;
   isLoggedIn: boolean;
   login: (phone: string, code: string) => Promise<void>;
+  loginByPassword: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -38,14 +40,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const loggedIn = await authAPI.isLoggedIn();
       if (loggedIn) {
-        // 尝试获取用户信息验证 token 有效
-        const profile = await authAPI.getProfile();
-        setUser(profile);
+        // 先用本地缓存的用户兜底：启动瞬间的网络抖动不把已登录用户踢出
+        const cachedUser = await authAPI.getCachedUser();
+        if (cachedUser) setUser(cachedUser);
         setToken(await authAPI.getToken());
+        try {
+          // 再尝试用真实 profile 校验 token
+          const profile = await authAPI.getProfile();
+          setUser(profile);
+          await authAPI.cacheUser(profile);
+        } catch (err) {
+          // 仅 HTTP 401（token 过期/无效，网关返回 2000/2001/2002）才清除登录态；
+          // 网络错误（APIError.status 为空）保留 token + 缓存用户，避免一次网络抖动就 logout
+          if (err instanceof APIError && err.status === 401) {
+            await authAPI.logout();
+          }
+        }
       }
-    } catch {
-      // token 过期或无效，清除
-      await authAPI.logout();
     } finally {
       setIsLoading(false);
     }
@@ -53,6 +64,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (phone: string, code: string) => {
     const result = await authAPI.login(phone, code);
+    setUser(result.user);
+    setToken(result.token);
+  }, []);
+
+  const loginByPassword = useCallback(async (username: string, password: string) => {
+    const result = await authAPI.loginByPassword(username, password);
     setUser(result.user);
     setToken(result.token);
   }, []);
@@ -80,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isLoggedIn: !!token && !!user,
         login,
+        loginByPassword,
         logout,
         refreshProfile,
       }}

@@ -21,6 +21,7 @@ import Icon from '../../components/Icon';
 import { ActionIcons, FeatureIcons } from '../../components/Icon';
 import { visitAPI } from '../../api/visit';
 import { useAuth } from '../../store/AuthContext';
+import { formatLocalDate } from '../../utils/date';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { VisitRecord } from '../../types';
 import type { RootStackParamList } from '../../navigation/types';
@@ -36,7 +37,8 @@ export default function HomeScreen() {
 
   const loadVisits = useCallback(async () => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      // 本地日期（toISOString 是 UTC，东八区凌晨 0-8 点会取成昨天）
+      const today = formatLocalDate();
       const result = await visitAPI.list({
         page: 1, page_size: 20,
         date_from: today, date_to: today,

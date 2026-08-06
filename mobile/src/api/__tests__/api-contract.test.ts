@@ -8,6 +8,7 @@ import { specialistAPI } from '../specialist';
 import { complianceAPI } from '../compliance';
 import { hcpAPI } from '../hcp';
 import { contentAPI } from '../content';
+import { authAPI } from '../auth';
 
 const okResponse = (data: any = {}) => ({
   json: async () => ({ code: 0, message: 'success', data }),
@@ -307,6 +308,29 @@ describe('complianceAPI', () => {
     expect(Array.isArray(result)).toBe(true);
     expect(result[0].rule_code).toBe('R001');
     expect((result as any).items).toBeUndefined();
+  });
+});
+
+describe('authAPI', () => {
+  it('loginByPassword 发 POST /api/v1/auth/login 且 body 为 username+password', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ token: 't-1', user: { id: 1, name: '张三' } }));
+    const r = await authAPI.loginByPassword('admin', 'secret');
+    const c = lastCall();
+    expect(c.url).toContain('/api/v1/auth/login');
+    expect(c.method).toBe('POST');
+    expect(c.body).toEqual({ username: 'admin', password: 'secret' });
+    expect(r.token).toBe('t-1');
+    // 登录成功后 token 已存储（与验证码登录共用存储逻辑）
+    expect(await authAPI.getToken()).toBe('t-1');
+    expect((await authAPI.getCachedUser())?.name).toBe('张三');
+  });
+
+  it('login（验证码）body 为 phone+code，token 同样入库', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ token: 't-2', user: { id: 2, name: '李四' } }));
+    await authAPI.login('13800000000', '123456');
+    const c = lastCall();
+    expect(c.body).toEqual({ phone: '13800000000', code: '123456' });
+    expect(await authAPI.getToken()).toBe('t-2');
   });
 });
 

@@ -95,7 +95,8 @@ class APIClient {
       if (result.code !== 0) {
         throw new APIError(
           result.message || '请求失败',
-          result.code || -1
+          result.code || -1,
+          response.status
         );
       }
 
@@ -128,9 +129,12 @@ class APIClient {
 
 export class APIError extends Error {
   code: number;
-  constructor(message: string, code: number) {
+  /** HTTP 状态码（网关 401 = token 过期/无效；网络错误时为 undefined） */
+  status?: number;
+  constructor(message: string, code: number, status?: number) {
     super(message);
     this.code = code;
+    this.status = status;
     this.name = 'APIError';
   }
 }

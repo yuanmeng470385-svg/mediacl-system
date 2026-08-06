@@ -12,9 +12,12 @@ import { authAPI } from '../../api/auth';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, loginByPassword } = useAuth();
+  const [mode, setMode] = useState<'code' | 'password'>('code');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [countdown, setCountdown] = useState(0);
@@ -49,17 +52,33 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
-    if (!validatePhone(phone)) { Alert.alert('提示', '请输入正确的手机号'); return; }
-    if (!code || code.length < 4) { Alert.alert('提示', '请输入验证码'); return; }
+    if (mode === 'password') {
+      if (!username.trim()) { Alert.alert('提示', '请输入用户名'); return; }
+      if (!password) { Alert.alert('提示', '请输入密码'); return; }
+    } else {
+      if (!validatePhone(phone)) { Alert.alert('提示', '请输入正确的手机号'); return; }
+      if (!code || code.length < 4) { Alert.alert('提示', '请输入验证码'); return; }
+    }
     if (!agreed) { Alert.alert('提示', '请先同意用户协议和隐私政策'); return; }
     setLoading(true);
     try {
-      await login(phone, code);
+      if (mode === 'password') {
+        await loginByPassword(username.trim(), password);
+      } else {
+        await login(phone, code);
+      }
     } catch (e: any) {
-      Alert.alert('登录失败', e.message || '请检查手机号和验证码');
+      Alert.alert('登录失败', e.message || (mode === 'password' ? '请检查用户名和密码' : '请检查手机号和验证码'));
     } finally {
       setLoading(false);
     }
+  };
+
+  const switchMode = () => {
+    setMode((prev) => (prev === 'code' ? 'password' : 'code'));
+    // 切换方式时清空另一种方式的输入，避免残留
+    setCode('');
+    setPassword('');
   };
 
   return (
@@ -80,51 +99,89 @@ export default function LoginScreen() {
 
         {/* 白色表单卡片 */}
         <View style={[styles.card, Shadow.card]}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>手机号</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="请输入手机号"
-              placeholderTextColor={Colors.textHint}
-              keyboardType="phone-pad"
-              maxLength={11}
-              value={phone}
-              onChangeText={setPhone}
-            />
-          </View>
+          {mode === 'code' ? (
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>手机号</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入手机号"
+                  placeholderTextColor={Colors.textHint}
+                  keyboardType="phone-pad"
+                  maxLength={11}
+                  value={phone}
+                  onChangeText={setPhone}
+                />
+              </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>验证码</Text>
-            <View style={styles.codeRow}>
-              <TextInput
-                ref={codeInputRef}
-                style={[styles.input, styles.codeInput]}
-                placeholder="请输入验证码"
-                placeholderTextColor={Colors.textHint}
-                keyboardType="number-pad"
-                maxLength={6}
-                value={code}
-                onChangeText={setCode}
-              />
-              <TouchableOpacity
-                style={[styles.codeBtn, (countdown > 0 || sendingCode || !validatePhone(phone)) && styles.codeBtnDisabled]}
-                onPress={handleSendCode}
-                disabled={countdown > 0 || sendingCode || !validatePhone(phone)}
-                activeOpacity={0.7}
-              >
-                {sendingCode ? (
-                  <ActivityIndicator color={Colors.primary} size="small" />
-                ) : (
-                  <Text style={[styles.codeBtnText, countdown > 0 && styles.codeBtnDisabledText]}>
-                    {countdown > 0 ? `${countdown}s` : '获取验证码'}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>验证码</Text>
+                <View style={styles.codeRow}>
+                  <TextInput
+                    ref={codeInputRef}
+                    style={[styles.input, styles.codeInput]}
+                    placeholder="请输入验证码"
+                    placeholderTextColor={Colors.textHint}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    value={code}
+                    onChangeText={setCode}
+                  />
+                  <TouchableOpacity
+                    style={[styles.codeBtn, (countdown > 0 || sendingCode || !validatePhone(phone)) && styles.codeBtnDisabled]}
+                    onPress={handleSendCode}
+                    disabled={countdown > 0 || sendingCode || !validatePhone(phone)}
+                    activeOpacity={0.7}
+                  >
+                    {sendingCode ? (
+                      <ActivityIndicator color={Colors.primary} size="small" />
+                    ) : (
+                      <Text style={[styles.codeBtnText, countdown > 0 && styles.codeBtnDisabledText]}>
+                        {countdown > 0 ? `${countdown}s` : '获取验证码'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>用户名</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入用户名"
+                  placeholderTextColor={Colors.textHint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  value={username}
+                  onChangeText={setUsername}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>密码</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入密码"
+                  placeholderTextColor={Colors.textHint}
+                  secureTextEntry
+                  value={password}
+                  onChangeText={setPassword}
+                />
+              </View>
+            </>
+          )}
 
           <TouchableOpacity style={[styles.loginBtn, loading && styles.loginBtnLoading]} onPress={handleLogin} disabled={loading} activeOpacity={0.8}>
             {loading ? <ActivityIndicator color={Colors.textWhite} /> : <Text style={styles.loginBtnText}>登 录</Text>}
+          </TouchableOpacity>
+
+          {/* 登录方式切换（需求 3.1.2：密码登录入口；后端同一 login 端点支持两种方式） */}
+          <TouchableOpacity style={styles.switchRow} onPress={switchMode} activeOpacity={0.7}>
+            <Text style={styles.switchText}>
+              {mode === 'code' ? '使用密码登录' : '使用验证码登录'}
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.agreementRow} onPress={() => setAgreed(!agreed)} activeOpacity={0.7}>
@@ -186,6 +243,8 @@ const styles = StyleSheet.create({
   },
   loginBtnLoading: { opacity: 0.7 },
   loginBtnText: { color: Colors.textWhite, fontSize: FontSize.lg, fontWeight: '600', letterSpacing: 4 },
+  switchRow: { alignItems: 'center', marginTop: -Spacing.sm },
+  switchText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '500' },
   agreementRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
   checkbox: {
     width: 18, height: 18, borderRadius: 4, borderWidth: 1.5,

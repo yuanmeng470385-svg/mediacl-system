@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Share,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -76,8 +77,42 @@ export default function VisitEndScreen() {
     }
   };
 
+  // 分享 AI 摘要 + 关键点（需求 3.1.6：拜访总结可分享给上级）
+  const handleShare = async () => {
+    if (!summary) return;
+    const points = (summary.key_points || [])
+      .map((p, i) => `${i + 1}. ${p}`)
+      .join('\n');
+    const text = [
+      '【MedAgent 拜访总结】',
+      '',
+      `摘要：${summary.summary || '暂无摘要'}`,
+      points ? `\n关键点：\n${points}` : '',
+      summary.interests?.length ? `\n兴趣点：${summary.interests.join('、')}` : '',
+      summary.next_visit_recommendation ? `\n下次拜访推荐：${summary.next_visit_recommendation}` : '',
+    ].filter(Boolean).join('\n');
+    try {
+      await Share.share({ title: '拜访总结', message: text });
+    } catch {
+      // 用户取消分享无需提示；系统失败给个兜底
+      Alert.alert('提示', '分享失败，请稍后重试');
+    }
+  };
+
+  // 确认完成：纯前端完成语义 —— 后端无对应状态端点（visit 状态由 endVisit 置为
+  // completed），此处仅弹确认 → 提示成功 → 返回工作台
   const handleDone = () => {
-    navigation.popToTop();
+    Alert.alert('确认完成', '确认本次拜访已全部完成？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '确认完成',
+        onPress: () => {
+          Alert.alert('完成', '本次拜访已完成，感谢使用', [
+            { text: '知道了', onPress: () => navigation.popToTop() },
+          ]);
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -213,7 +248,8 @@ export default function VisitEndScreen() {
       <View style={styles.bottomBar}>
         <TouchableOpacity
           style={styles.shareBtn}
-          onPress={() => Alert.alert('提示', '分享功能开发中')}
+          onPress={handleShare}
+          activeOpacity={0.7}
         >
           <Text style={styles.shareBtnText}>分享</Text>
         </TouchableOpacity>
