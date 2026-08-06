@@ -7,17 +7,16 @@ import type {
   ChatRequest,
   ChatResponse,
   ConversationMessage,
-  PaginatedResponse,
 } from '../types';
 
 export const specialistAPI = {
-  /** 获取专员列表 */
+  /** 获取专员列表（后端返回纯数组，非分页对象） */
   async list(params?: {
     page?: number;
     page_size?: number;
     status?: string;
-  }): Promise<PaginatedResponse<DigitalSpecialist>> {
-    return apiClient.request<PaginatedResponse<DigitalSpecialist>>(
+  }): Promise<DigitalSpecialist[]> {
+    return apiClient.request<DigitalSpecialist[]>(
       'GET',
       '/api/v1/specialists',
       params

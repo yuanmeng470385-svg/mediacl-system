@@ -19,17 +19,17 @@ const severityConfig: Record<string, { color: string; bg: string; icon: string }
 };
 
 const FALLBACK_RULES: ComplianceRule[] = [
-  { code: 'R001', description: '禁止使用"保证治好""根治""治愈"等绝对化疗效承诺用语', severity: 'high', type: 'keyword' },
-  { code: 'R002', description: '禁止与竞品进行直接疗效对比', severity: 'high', type: 'keyword' },
-  { code: 'R003', description: '学术推广中必须引用公开已发表的数据，不得使用未公开内部数据', severity: 'high', type: 'llm' },
-  { code: 'R004', description: '禁止提及药品回扣、利益输送等敏感内容', severity: 'high', type: 'keyword' },
-  { code: 'R005', description: '适应症外推必须基于循证医学证据且明确标注为"超说明书用药"', severity: 'medium', type: 'llm' },
-  { code: 'R006', description: '推广内容必须有明确证据来源标注（文献+证据等级）', severity: 'medium', type: 'regex' },
-  { code: 'R007', description: '禁止使用"最安全""最好""第一品牌"等极端表述', severity: 'medium', type: 'keyword' },
+  { id: 1, rule_code: 'R001', rule_name: '绝对化疗效承诺', description: '禁止使用"保证治好""根治""治愈"等绝对化疗效承诺用语', severity: 'high', rule_type: 'keyword', action: 'reject', enabled: true, version: 1 },
+  { id: 2, rule_code: 'R002', rule_name: '竞品对比', description: '禁止与竞品进行直接疗效对比', severity: 'high', rule_type: 'keyword', action: 'reject', enabled: true, version: 1 },
+  { id: 3, rule_code: 'R003', rule_name: '未公开数据引用', description: '学术推广中必须引用公开已发表的数据，不得使用未公开内部数据', severity: 'high', rule_type: 'semantic', action: 'reject', enabled: true, version: 1 },
+  { id: 4, rule_code: 'R004', rule_name: '利益输送', description: '禁止提及药品回扣、利益输送等敏感内容', severity: 'high', rule_type: 'keyword', action: 'reject', enabled: true, version: 1 },
+  { id: 5, rule_code: 'R005', rule_name: '超说明书用药标注', description: '适应症外推必须基于循证医学证据且明确标注为"超说明书用药"', severity: 'medium', rule_type: 'semantic', action: 'warn', enabled: true, version: 1 },
+  { id: 6, rule_code: 'R006', rule_name: '证据来源标注', description: '推广内容必须有明确证据来源标注（文献+证据等级）', severity: 'medium', rule_type: 'regex', action: 'warn', enabled: true, version: 1 },
+  { id: 7, rule_code: 'R007', rule_name: '极端表述', description: '禁止使用"最安全""最好""第一品牌"等极端表述', severity: 'medium', rule_type: 'keyword', action: 'warn', enabled: true, version: 1 },
 ];
 
 const filterTabs = ['全部', '高', '中', '低'];
-const TYPE_LABELS: Record<string, string> = { keyword: '关键词', regex: '正则', llm: 'AI语义' };
+const TYPE_LABELS: Record<string, string> = { keyword: '关键词', regex: '正则', semantic: 'AI语义' };
 
 export default function ComplianceScreen() {
   const [rules, setRules] = useState<ComplianceRule[]>([]);
@@ -57,11 +57,11 @@ export default function ComplianceScreen() {
       <TouchableOpacity
         style={[styles.ruleCard, Shadow.card]}
         activeOpacity={0.7}
-        onPress={() => Alert.alert(`规则 ${item.code}`, item.description)}
+        onPress={() => Alert.alert(`规则 ${item.rule_code}`, item.description)}
       >
         <View style={styles.ruleHeader}>
           <View style={styles.ruleLeft}>
-            <Text style={styles.ruleCode}>{item.code}</Text>
+            <Text style={styles.ruleCode}>{item.rule_code}</Text>
             <View style={[styles.severityBadge, { backgroundColor: sev.bg }]}>
               <Icon name={sev.icon} size={12} color={sev.color} />
               <Text style={[styles.severityText, { color: sev.color }]}>
@@ -70,7 +70,7 @@ export default function ComplianceScreen() {
             </View>
           </View>
           <View style={styles.typeBadge}>
-            <Text style={styles.typeText}>{TYPE_LABELS[item.type] || item.type}</Text>
+            <Text style={styles.typeText}>{TYPE_LABELS[item.rule_type] || item.rule_type}</Text>
           </View>
         </View>
         <Text style={styles.ruleDesc}>{item.description}</Text>
@@ -105,7 +105,7 @@ export default function ComplianceScreen() {
         <FlatList
           data={filteredRules}
           renderItem={renderRule}
-          keyExtractor={(item) => item.code}
+          keyExtractor={(item) => item.rule_code}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
         />

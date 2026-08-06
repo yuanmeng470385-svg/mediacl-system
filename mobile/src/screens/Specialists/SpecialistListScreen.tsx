@@ -34,7 +34,7 @@ export default function SpecialistListScreen() {
   const loadSpecialists = useCallback(async () => {
     try {
       const result = await specialistAPI.list({ page_size: 50 });
-      setSpecialists(result.items || []);
+      setSpecialists(result || []);
     } catch {
       // 后端不可用——展示示例数据
       setSpecialists([

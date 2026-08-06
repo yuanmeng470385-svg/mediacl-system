@@ -189,10 +189,15 @@ export interface HCPInteraction {
 
 // ========== 合规 ==========
 export interface ComplianceRule {
-  code: string;
-  description: string;
+  id: number;
+  rule_code: string;
+  rule_name: string;
+  rule_type: 'keyword' | 'regex' | 'semantic';
   severity: 'low' | 'medium' | 'high';
-  type: 'keyword' | 'regex' | 'llm';
+  action: string;
+  description: string;
+  enabled: boolean;
+  version: number;
 }
 
 // ========== 学术内容 ==========

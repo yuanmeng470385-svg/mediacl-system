@@ -9,11 +9,12 @@ import { apiClient } from './client';
 import type { ComplianceRule } from '../types';
 
 export const complianceAPI = {
-  /** 合规规则列表 */
+  /** 合规规则列表（后端返回分页对象 rules.py:110，此处解出 items） */
   async listRules(): Promise<ComplianceRule[]> {
-    return apiClient.request<ComplianceRule[]>(
+    const data = await apiClient.request<{ items: ComplianceRule[] }>(
       'GET',
       '/api/v1/compliance/rules'
     );
+    return data.items || [];
   },
 };

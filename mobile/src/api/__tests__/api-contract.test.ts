@@ -83,6 +83,20 @@ describe('specialistAPI', () => {
     expect(c.url).toContain('/api/v1/specialists/1/chat');
     expect(c.body).toEqual({ question: '你好' });
   });
+
+  it('list 返回 data 里的纯数组（后端 specialists.py:27 返回 success([...])，非分页对象）', async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: [{ id: 1, name: '肿瘤产品专员-小K', status: 'active' }],
+      }),
+    });
+    const result = await specialistAPI.list({ page_size: 50 });
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0].name).toBe('肿瘤产品专员-小K');
+    expect((result as any).items).toBeUndefined();
+  });
 });
 
 describe('complianceAPI', () => {
@@ -90,6 +104,20 @@ describe('complianceAPI', () => {
     await complianceAPI.listRules();
     expect(lastCall().url).toContain('/api/v1/compliance/rules');
     expect((complianceAPI as any).checkContent).toBeUndefined();
+  });
+
+  it('listRules 解出分页对象里的 items（后端 rules.py:110 返回 paginate(...)）', async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: { items: [{ rule_code: 'R001', severity: 'high' }], total: 1, page: 1, page_size: 20 },
+      }),
+    });
+    const result = await complianceAPI.listRules();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result[0].rule_code).toBe('R001');
+    expect((result as any).items).toBeUndefined();
   });
 });
 
