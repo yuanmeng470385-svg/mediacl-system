@@ -1,11 +1,15 @@
 /**
  * 通知设置页
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Switch, TouchableOpacity } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+
+const STORAGE_KEY = 'notification_settings';
+const DEFAULT_TOGGLES = { visit_reminder: true, compliance_alert: true, chat_update: false, system: true };
 
 const items = [
   { icon: 'calendar-check', label: '拜访提醒', desc: '拜访前15分钟推送提醒', key: 'visit_reminder' },
@@ -16,9 +20,29 @@ const items = [
 
 export default function NotificationSettingsScreen() {
   const navigation = useNavigation();
-  const [toggles, setToggles] = useState<Record<string, boolean>>({
-    visit_reminder: true, compliance_alert: true, chat_update: false, system: true,
-  });
+  const [toggles, setToggles] = useState<Record<string, boolean>>(DEFAULT_TOGGLES);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(STORAGE_KEY)
+      .then((raw) => {
+        if (!raw || cancelled) return;
+        const saved = JSON.parse(raw);
+        if (saved && typeof saved === 'object') {
+          setToggles((prev) => ({ ...DEFAULT_TOGGLES, ...saved }));
+        }
+      })
+      .catch(() => { /* 读失败用默认值 */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggle = (key: string, value: boolean) => {
+    setToggles((prev) => {
+      const next = { ...prev, [key]: value };
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
 
   return (
     <View style={styles.container}>
@@ -42,7 +66,7 @@ export default function NotificationSettingsScreen() {
               </View>
               <Switch
                 value={toggles[item.key]}
-                onValueChange={(v) => setToggles(prev => ({ ...prev, [item.key]: v }))}
+                onValueChange={(v) => toggle(item.key, v)}
                 trackColor={{ false: Colors.border, true: Colors.primaryLight }}
                 thumbColor={toggles[item.key] ? Colors.primary : Colors.white}
               />
