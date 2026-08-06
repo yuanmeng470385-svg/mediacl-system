@@ -35,9 +35,18 @@
 | e2e/debug 脚本过时 | X-Internal-Key + sub 契约 |
 | specialist 列表恒空 / stats 双倍计数 | 分页化 + role='user' 计数 |
 
-**仍未修复（功能缺口与剩余 minor，见第 4 节）：**
-- 需求级缺口：飞书导入/同步、表格/OCR 解析（依赖百炼）、风险热力图、实时动态、说话人分离、知识库内容库（100-300 篇文献）、web 检索测试页/拦截记录页/专员数据展示页、移动端密码登录、拜访后确认完成/分享、关键节点标记、语音输入、X-Request-ID 贯穿、ES 真实实例
-- 剩余 minor：mobile 假数据兜底（专员列表/合规/准备包）、checkAuth 网络抖动踢出、设置页死行、监控 http_requests_total 无 .inc()、listen 悟 TTS 未接、任务创建未自动化等
+**第四批修复（2026-08-06 晚，4 提交）再收口：**
+- ~~移动端体验包~~（checkAuth 抖动踢出、假数据兜底删除、设置页真实行为、UTC 日期、WS 泄漏、状态枚举、Profile 假部门）
+- ~~拜访后确认完成/分享~~（原生 Share）、~~密码登录入口~~、~~HelpCenter 接合规红线接口~~、转写 speaker 标签
+- ~~end_visit 自动创建任务~~（幂等）、~~实时转写说话人分离~~（NLS 配置 + 回推帧 speaker，参数待真机确认）
+- ~~风险热力图/实时动态~~（Dashboard + blocks join users 聚合端点）、~~拦截记录页~~（/compliance/blocks + 详情端点）、~~专员数据抽屉~~（stats）
+- ~~X-Request-ID 贯穿~~（网关生成/透传 + 8 服务中间件 + internal_headers 同链 + 审计落库）、~~http_requests_total 计数接线~~（specialist 中间件）
+
+**仍未修复（需求级缺口与剩余项）：**
+- 飞书导入/同步（用户明确暂缓）
+- 知识库内容库（100-300 篇文献，用户明确暂缓——无数据）、ES 真实实例、表格/OCR 解析（依赖百炼云）、web 检索测试页
+- 移动端语音输入（stub，待 NLS 配置）、关键节点标记（需求标"后续版本"）、话术建议实时推荐（后续版本）、听悟 TTS 未接
+- compliance 侧 REQUESTS 计数（与 specialist 同法可扩展）；网关限流仍为单进程内存版（每 worker 独立）
 
 ---
 

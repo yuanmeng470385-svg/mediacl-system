@@ -293,14 +293,13 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~knowledge 审核流卡死/上传无校验/未上架泄露/ES 从未写入~~（ES 索引接线、驳回清索引、白名单+50MB、角色可见性）
 - ~~dev/prod compose 审计写入失效~~（AUDIT_DATABASE_URL + :? 强校验）、~~deploy.yml 分支永不触发~~、~~e2e/debug 脚本过时~~、~~requirements.txt.tmp 残留~~
 
-**仍为假数据/未实现（勿误以为已做，2026-08-06 审计后更新）**：
-- 移动端假数据兜底：专员列表不可用时假专员"小K"、合规手册失败回退写死规则、pre-visit 失败假画像/话题（真实失败应显示错误态——部分已删，仍有残留）
-- 移动端 minor：checkAuth 网络抖动即踢出登录、设置页行无点击行为、语音输入 stub、HelpCenter 屏零后端调用、Hotline 占位
-- 需求级缺口：飞书导入/双向同步、表格/图片 OCR 自动解析（依赖百炼云）、web 风险热力图/实时动态、实时转写说话人分离、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、web 检索测试页/拦截记录页/专员数据展示页、移动端密码登录入口、拜访后"确认完成"提交/分享、关键节点标记、引用资料快捷发送、拜访结束自动创建任务（仅显式 /follow-up）
-- X-Request-ID 链路未贯穿（网关不生成不强制）；REQUESTS 计数器无 .inc() 接线（http_requests_total 恒 0）；听悟 TTS 未接
-- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key；"录完突发推流"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏）
+**仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
+- 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
+- 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
+- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key；"录完突发推流"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
+- 网关限流为单进程内存版（--workers 2 时每 worker 独立限额）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
 
 ## Gotchas
 
