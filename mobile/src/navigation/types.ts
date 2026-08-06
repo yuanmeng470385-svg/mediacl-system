@@ -29,6 +29,7 @@ export type RootStackParamList = {
   HCPDetail: { hcpId: number };
   HCPProfile: { hcpId: number };
   // 学术
+  Content: undefined;
   ContentDetail: { contentId: number };
   // 合规
   ComplianceManual: undefined;

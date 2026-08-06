@@ -1,7 +1,7 @@
 /**
  * 学术内容页 - 文献/指南/说明书浏览
  */
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Icon from '../../components/Icon';
 import { ActionIcons } from '../../components/Icon';
 import {
@@ -11,43 +11,18 @@ import {
   FlatList,
   TouchableOpacity,
   TextInput,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import EmptyState from '../../components/EmptyState';
+import { contentAPI } from '../../api/content';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ContentItem } from '../../types';
+import type { RootStackParamList } from '../../navigation/types';
 
-const MOCK_CONTENT: ContentItem[] = [
-  {
-    id: 1,
-    title: '2026 NCCN 非小细胞肺癌指南更新解读',
-    type: 'guideline',
-    summary: '最新的NCCN指南针对非小细胞肺癌的靶向治疗和免疫治疗方案进行了重大更新...',
-    source: 'NCCN Guidelines',
-    publish_date: '2026-06-15',
-    evidence_level: 'A',
-    tags: ['肺癌', '指南', '靶向治疗'],
-  },
-  {
-    id: 2,
-    title: 'PD-1抑制剂在晚期黑色素瘤中的III期临床研究',
-    type: 'literature',
-    summary: '一项多中心、随机、双盲III期临床研究，比较PD-1抑制剂与标准化疗的疗效和安全性...',
-    source: 'The Lancet Oncology',
-    publish_date: '2026-04-20',
-    evidence_level: 'A',
-    tags: ['黑色素瘤', 'III期', '免疫治疗'],
-  },
-  {
-    id: 3,
-    title: 'XX产品说明书（2026年修订版）',
-    type: 'manual',
-    summary: '适应症、用法用量、不良反应、禁忌症等完整处方信息...',
-    source: '内部资料',
-    publish_date: '2026-07-01',
-    evidence_level: 'B',
-    tags: ['说明书', '产品信息'],
-  },
-];
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const typeLabels: Record<string, { icon: string; label: string }> = {
   literature: { icon: 'file-document-outline', label: '文献' },
@@ -59,15 +34,35 @@ const typeLabels: Record<string, { icon: string; label: string }> = {
 const tabs = ['全部', '文献', '指南', '说明书'];
 
 export default function ContentScreen() {
+  const navigation = useNavigation<Nav>();
   const [searchText, setSearchText] = useState('');
   const [activeTab, setActiveTab] = useState('全部');
+  const [items, setItems] = useState<ContentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const filteredContent = MOCK_CONTENT.filter((item) => {
+  const load = useCallback(async () => {
+    try {
+      const res = await contentAPI.getDocuments({ page: 1, page_size: 50 });
+      setItems(res.items);
+      setError('');
+    } catch (e: any) {
+      setError(e.message || '加载失败');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filteredContent = items.filter((item) => {
     const matchTab =
       activeTab === '全部' || typeLabels[item.type]?.label === activeTab;
     const matchSearch =
       !searchText ||
-      item.title.includes(searchText) ||
+      (item.title || '').includes(searchText) ||
       (item.tags ?? []).some((t) => t.includes(searchText));
     return matchTab && matchSearch;
   });
@@ -76,25 +71,31 @@ export default function ContentScreen() {
     const type = typeLabels[item.type] || { icon: 'file-document-outline', label: item.type };
 
     return (
-      <TouchableOpacity style={[styles.card, Shadow.card]} activeOpacity={0.7}>
+      <TouchableOpacity
+        style={[styles.card, Shadow.card]}
+        activeOpacity={0.7}
+        onPress={() => navigation.navigate('ContentDetail', { contentId: item.id })}
+      >
         <View style={styles.cardHeader}>
           <View style={styles.typeBadge}>
             <Text style={styles.typeIcon}>{type.icon}</Text>
             <Text style={styles.typeLabel}>{type.label}</Text>
           </View>
-          <Text style={styles.evidenceBadge}>
-            {item.evidence_level}级证据
-          </Text>
+          {item.evidence_level ? (
+            <Text style={styles.evidenceBadge}>
+              {item.evidence_level}级证据
+            </Text>
+          ) : null}
         </View>
         <Text style={styles.cardTitle} numberOfLines={2}>
           {item.title}
         </Text>
         <Text style={styles.cardSummary} numberOfLines={3}>
-          {item.summary}
+          {item.summary ?? ''}
         </Text>
         <View style={styles.cardFooter}>
-          <Text style={styles.cardSource}>{item.source}</Text>
-          <Text style={styles.cardDate}>{item.publish_date}</Text>
+          <Text style={styles.cardSource}>{item.source ?? ''}</Text>
+          <Text style={styles.cardDate}>{item.publish_date ?? ''}</Text>
         </View>
         <View style={styles.tagRow}>
           {(item.tags ?? []).map((tag, i) => (
@@ -105,6 +106,12 @@ export default function ContentScreen() {
         </View>
       </TouchableOpacity>
     );
+  };
+
+  const handleRetry = () => {
+    setLoading(true);
+    setError('');
+    load();
   };
 
   return (
@@ -144,25 +151,45 @@ export default function ContentScreen() {
         ))}
       </View>
 
-      <FlatList
-        data={filteredContent}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <EmptyState
-            icon="book-open-page-variant-outline"
-            title="暂无学术内容"
-            description="知识库上线后将展示医学文献和指南"
-          />
-        }
-      />
+      {loading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      ) : error ? (
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
+            <Text style={styles.retryText}>重试</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredContent}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id.toString()}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); load(); }}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="book-open-page-variant-outline"
+              title="暂无学术内容"
+              description="知识库上线后将展示医学文献和指南"
+            />
+          }
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   header: {
     backgroundColor: Colors.primary,
     paddingTop: 52,
@@ -259,4 +286,13 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.sm,
   },
   tagText: { fontSize: 10, color: Colors.textSecondary },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
 });

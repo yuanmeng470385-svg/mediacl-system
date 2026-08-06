@@ -117,7 +117,7 @@ export default function HomeScreen() {
         <View style={styles.quickActions}>
           {[
             { icon: FeatureIcons.specialist, label: '数字专员', route: 'Specialists' as const },
-            { icon: FeatureIcons.content, label: '学术内容', route: 'ContentDetail' as const, params: { contentId: 0 } },
+            { icon: FeatureIcons.content, label: '学术内容', route: 'Content' as const },
             { icon: FeatureIcons.doctor, label: '找医生', route: 'HCPs' as const },
             { icon: FeatureIcons.compliance, label: '合规手册', route: 'ComplianceManual' as const },
           ].map((item, i) => (
@@ -125,11 +125,7 @@ export default function HomeScreen() {
               key={i}
               style={[styles.quickBtn, Shadow.card]}
               onPress={() => {
-                if (item.route === 'ContentDetail' || item.route === 'ComplianceManual') {
-                  (navigation as any).navigate(item.route, item.params || {});
-                } else {
-                  (navigation as any).navigate(item.route);
-                }
+                (navigation as any).navigate(item.route);
               }}
               activeOpacity={0.7}
             >

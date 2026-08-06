@@ -23,6 +23,7 @@ import VisitPrepareScreen from '../screens/VisitPrepare/VisitPrepareScreen';
 import VisitInProgressScreen from '../screens/VisitInProgress/VisitInProgressScreen';
 import VisitEndScreen from '../screens/VisitEnd/VisitEndScreen';
 import ContentScreen from '../screens/Content/ContentScreen';
+import ContentDetailScreen from '../screens/Content/ContentDetailScreen';
 import ComplianceScreen from '../screens/Compliance/ComplianceScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
 import SettingsScreen from '../screens/Settings/SettingsScreen';
@@ -158,8 +159,13 @@ export default function AppNavigator() {
             />
             {/* 学术内容（独立页，不在 Tab 内） */}
             <Stack.Screen
-              name="ContentDetail"
+              name="Content"
               component={ContentScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="ContentDetail"
+              component={ContentDetailScreen}
               options={{ animation: 'slide_from_right' }}
             />
             {/* 合规手册 */}
