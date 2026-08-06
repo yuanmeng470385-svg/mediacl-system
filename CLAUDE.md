@@ -11,7 +11,7 @@ MedAgent 药企 AI 数字员工系统 — 五层架构的医药代表 SaaS 平�
 ```
 Web 管理后台 (React+Vite, web/, :3000) ─┐
                                           ├─→ Gateway (:8000) ─→ 微服务集群
-移动端 (React Native, mobile/, 暂不可构建) ─┘
+移动端 (React Native, mobile/, 可构建) ───────┘
                                               ├─ auth(:8007)      认证 — 手机验证码/密码登录，签发 JWT
                                               ├─ specialist(:8001) 数字专员 — 每个专员=一个百炼多模态App
                                               ├─ visit(:8002)     陪访助手 — 听悟转写+合规实时检查+异议识别
@@ -64,6 +64,16 @@ cd services/specialist-service && python tests/eval_specialist.py --app-id <百�
 
 # 全部 8 个服务同时启动
 docker-compose up -d
+
+# ⚠️ 本机 Docker Hub 不可达（直连超时，需 127.0.0.1:7897 代理）：
+#    8 个服务镜像从未构建过（python:3.11-slim 拉不下来）→ 用 native 直跑路径：
+docker-compose up -d postgres redis        # postgres/redis 镜像本地已有，可正常起
+# 然后每个服务目录下直跑（.env 里 DATABASE_URL 等就是宿主连接配置）：
+cd services/auth-service && python -m uvicorn app.main:app --port 8007
+cd services/gateway && python -m uvicorn app.main:app --port 8000
+# 端口：auth 8007 / specialist 8001 / visit 8002 / knowledge 8003 /
+#       compliance 8004 / audit 8005 / hcp 8006 / gateway 8000
+# 全量启动参考：logs/native/ 下各服务日志；验证码在 logs/native/auth-service.log（ConsoleSender）
 
 # 单独构建某个镜像：build context 必须是仓库根目录（镜像要 COPY shared/）
 docker build -f services/auth-service/Dockerfile -t medagent/auth-service .
@@ -234,13 +244,25 @@ API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；
 
 ## Frontend — mobile/（React Native 移动端）
 
-React Native 0.75 + TypeScript + react-navigation。源码完整（18 屏），但**原生工程缺失**：无 `android/` 目录、`ios/` 为空、缺 `index.js`/`app.json`/`metro.config.js`/`babel.config.js` → 目前无法构建运行，只能读源码。补壳方式：`npx @react-native-community/cli init` 生成原生工程后放入 `src/`。
+React Native 0.75 + TypeScript + react-navigation，原生工程已齐（2026-08-06 bring-up 完成，Pixel_7 模拟器全链路实测通过）。包名/bundle ID `com.medagent.mobile`，App 显示名 `MedAgent`，入口 `mobile/index.js` → `src/App.tsx`（app.json name 与 MainActivity/AppDelegate moduleName 必须一致，否则首启红屏）。
 
-结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token）。
+```bash
+# 构建/运行（JDK 17 + ANDROID_HOME=D:\AndroidSDK + AVD Pixel_7 已就绪）
+cd mobile/android && ./gradlew assembleDebug          # 出 app-debug.apk
+"D:/AndroidSDK/emulator/emulator.exe" -avd Pixel_7 &  # 起模拟器
+cd mobile && npx react-native start                   # Metro（Node v25 实测可用）
+adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n com.medagent.mobile/.MainActivity
+# 测试：cd mobile && npx jest（契约测试 11 用例锁 URL/method/body/响应形状）
+```
 
-**已知问题**：
-- "实时转写"是假功能：无录音权限/音频库，`VisitInProgressScreen` 的录音按钮是写死台词的模拟按钮。
-- 音频路线本身有硬伤：听悟是离线批处理（最长 300s 轮询），达不到方案要求的 <2s 实时转写。
+结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
+
+**已知问题（2026-08-06 实测后）**：
+- "实时转写"仍是假功能：无录音权限/音频库，`VisitInProgressScreen` 的录音按钮是写死台词的模拟按钮（原生工程已齐，录音库/NLS_APPKEY 待接）。
+- ContentScreen（学术内容）用 `MOCK_CONTENT`；VisitDetail / Profile / Settings / NotificationSettings / HelpCenter 五屏零后端调用。
+- mobile 无 WebSocket 客户端（ASR WS、聊天流式都未接）。
+- iOS 未实际构建验证（本机无 Xcode；moduleName 已对齐，首次构建需实测）。
 
 ## Real-time ASR（实时转写）
 
@@ -249,14 +271,21 @@ React Native 0.75 + TypeScript + react-navigation。源码完整（18 屏），�
 - 服务端：`visit-service/app/services/realtime_asr.py`（`RealtimeAsrClient`：AK/SK 签名换 NLS 临时 Token → `wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1?token=` → StartTranscription → 二进制 PCM 推流 → SentenceBegin/ResultChanged/SentenceEnd 事件；`enable_intermediate_result=true` 实时出字）。未配置 `NLS_APPKEY` 自动降级 `MockRealtimeAsrClient`（模拟文本，可联调）。
 - WS 端点：`/ws/visits/{visit_id}/asr?token=<JWT>`（移动端推 PCM → 增量 JSON 回推 → 断句落库 conversation_transcript → 每句实时合规检查并回推 compliance 事件）。**注意 WS 不走网关**（网关 proxy 不支持升级），直连 visit-service:8002。
 - 听悟客户端保留用于拜访后归档（完整音频离线转写）。
-- 移动端接入点：录音 → PCM(16k/16bit/mono) 分片推 WS；`{"type":"stop"}` 结束。（移动端录音能力待原生工程补齐后接入。）
+- 移动端接入点：录音 → PCM(16k/16bit/mono) 分片推 WS；`{"type":"stop"}` 结束。（原生工程已齐，但移动端录音库/权限与 WS 客户端仍未接入，见 mobile 已知问题。）
 
 ## Known Gaps（后端已知缺口，勿误以为已实现）
 
 已修（2026-08-04）：~~audit 零鉴权~~（S2）、~~"不可篡改"未生效~~（S3）、~~visit PUT 越权~~（S4）、~~零 RBAC~~（S6）、~~规则改动/审核不入审计~~、~~语义合规提示注入~~（S7）、~~prod 暴露公网~~（S8）、~~网关中间件顺序/预检 401~~（H10）、~~Excel 导出经网关 500~~（H11）、~~visit→specialist 401 永久 degraded~~（透传用户 JWT）、~~Web 仪表盘假数据~~、~~用户管理 404~~（`/api/v1/users`）、~~知识库 approve 反转~~、~~compliance_blocks 无写入方~~（check 端点拦截即入库，实测 R003 落表）、~~实时转写路线错误~~（服务端已切阿里云实时 ASR 流式链路 + WS 端点，实测 Mock 全链路；移动端录音待原生工程）。
 
-- **citations 恒空**：引用溯源未实现；feedback/favorite 是桩。
-- **规则热更新只读 YAML**：DB 加载规则是注释掉的代码，改库不生效。
+已修（2026-08-05~06）：~~citations 恒空~~（百炼 extra_info.docs 解析引用溯源）、~~feedback/favorite 是桩~~（conversation_feedback/favorites 真落库，实测点赞 2 行 + 收藏 1 行含问答快照）、~~规则热更新只读 YAML~~（DB 规则加载，DB 覆盖 YAML + TTL 60s 重载）、~~移动端无法构建~~（RN 0.75.0 原生工程 + api 契约修复 7 处 + 契约测试 11 用例 + Pixel_7 实测全链路）、~~chat 无 conversation_id~~（前端反馈/收藏拿不到主键）、~~mobile 三处响应形状错位~~（specialist 纯数组、compliance 分页对象+字段名、favorite 必填 body 422）。
+
+**仍为假数据/未实现（勿误以为已做）**：
+- web 无登录页（App.tsx 直接进 AdminLayout）+ 部分增删改假动作（系统配置保存、上传等只弹 toast）
+- 移动端无录音（`VisitInProgressScreen` 模拟按钮），NLS_APPKEY 未配；mobile 无 WS 客户端
+- ContentScreen `MOCK_CONTENT`；VisitDetail/Profile/Settings/NotificationSettings/HelpCenter 五屏零后端调用
+- 短信通道仍 ConsoleSender（只写日志，验证码捞 `logs/native/auth-service.log`）
+- `knowledge-base/` 空目录（方案要求 100-300 篇文献）、ES 真实实例未接（ES_URL 配置才启用）
+- X-Request-ID 链路未贯穿；REQUESTS 计数器无 .inc() 接线（http_requests_total 恒 0）
 
 ## Gotchas
 
@@ -275,6 +304,6 @@ React Native 0.75 + TypeScript + react-navigation。源码完整（18 屏），�
 - **`.env` 在 `.gitignore` 中**：根目录 `.env` 不会被提交，模板见 `.env.example`。
 - **hcp-service 的 visit_interaction_repo**：同库直读 `visit_records` 表（避免循环依赖），表不存在时降级为空列表。如果 visit-service 和 hcp-service 不在同一个 DB，需要改为 HTTP 调用。
 - **visit_records 表无 status 字段**：状态派生自 `ai_summary IS NULL → in_progress`，非独立字段。
-- **前端字段 camelCase、后端 snake_case**：`mobile/src/api/visit.ts` 的 `prepareVisit` 传 `{hcpId, productId}`，后端 pydantic schema 是 `hcp_id`/`product_id` → 准备包接口直接 ParamError。前端请求体需手动映射成 snake_case（`startVisit` 已经是对的）。
+- **前端字段 camelCase、后端 snake_case**：映射统一收在 `mobile/src/api/*.ts`（`prepareVisit` 等已修，2026-08-06 实测 pre-visit 200）。改后端 schema 或响应形状时，同步改 api 层 + 契约测试，屏幕组件只消费 api 层的映射结果，不直接碰请求体。
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
