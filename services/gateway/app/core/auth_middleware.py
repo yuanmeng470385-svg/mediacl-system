@@ -9,7 +9,6 @@ JWT 认证中间件（网关层统一验证）
     app.add_middleware(AuthMiddleware)
 """
 
-import os
 import logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -17,6 +16,7 @@ from starlette.requests import Request
 
 import jwt
 
+from app.config import settings
 from shared.common.internal_auth import get_internal_api_key
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         token = auth_header[7:]  # 去掉 "Bearer " 前缀
 
         try:
-            secret = os.getenv("JWT_SECRET", "dev-secret-change-me")
+            # 统一从 settings 读取 —— 唯一读取点，弱密钥在 app/config.py 启动守卫已拦下
+            secret = settings.JWT_SECRET
             payload = jwt.decode(token, secret, algorithms=["HS256"])
 
             # 将用户信息注入请求头，下游服务可直接读取

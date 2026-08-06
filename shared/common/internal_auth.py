@@ -8,7 +8,7 @@
 - 网关 auth_middleware：内部路径要求 X-Internal-Key（拦截绕过网关的外部请求）
 - 服务端 require_internal_key 依赖：挂在内网接口上（防 8001-8006 端口直连绕过）
 
-INTERNAL_API_KEY 未配置或仍为默认值时抛 RuntimeError —— 服务拒绝启动，
+INTERNAL_API_KEY 未配置或仍为默认值/模板占位值时抛 RuntimeError —— 服务拒绝启动，
 与 JWT_SECRET 相同的模式，防止带默认密钥上线。
 """
 
@@ -19,6 +19,12 @@ from starlette.requests import Request
 
 # 与 JWT_SECRET 的 "dev-secret-change-me" 同模式：检测到默认值就拒绝启动
 DEFAULT_INTERNAL_API_KEY = "change-me-internal-key"
+# .env.example 的模板占位值 —— 照抄模板部署时必须同样被拒绝，
+# 否则守卫不触发，系统会带着公开可猜的密钥启动
+TEMPLATE_INTERNAL_API_KEY = "change_me_to_a_random_secret_string"
+
+# 拒绝集合：未配置 / 代码默认值 / 模板占位值，任一命中即拒绝启动
+_WEAK_INTERNAL_API_KEYS = {"", DEFAULT_INTERNAL_API_KEY, TEMPLATE_INTERNAL_API_KEY}
 
 _INTERNAL_KEY = None
 
@@ -28,9 +34,9 @@ def get_internal_api_key() -> str:
     global _INTERNAL_KEY
     if _INTERNAL_KEY is None:
         key = os.getenv("INTERNAL_API_KEY", "")
-        if not key or key == DEFAULT_INTERNAL_API_KEY:
+        if key in _WEAK_INTERNAL_API_KEYS:
             raise RuntimeError(
-                "INTERNAL_API_KEY 未配置或仍为默认值，拒绝启动。"
+                "INTERNAL_API_KEY 未配置或仍为默认值/模板占位值，拒绝启动。"
                 "生成：openssl rand -hex 32"
             )
         _INTERNAL_KEY = key
