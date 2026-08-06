@@ -21,6 +21,8 @@ import EvidenceBadge from '../../components/EvidenceBadge';
 import Icon from '../../components/Icon';
 import { ActionIcons } from '../../components/Icon';
 import { specialistAPI } from '../../api/specialist';
+import { apiClient } from '../../api/client';
+import { openChatWs } from '../../services/wsChat';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ChatScreenParams } from '../../navigation/types';
 
@@ -52,7 +54,63 @@ export default function ChatScreen() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [streaming, setStreaming] = useState(false);   // 流式生成中
+  const [streamText, setStreamText] = useState('');    // 当前增量累积
+  const wsRef = useRef<ReturnType<typeof openChatWs> | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  /**
+   * WS 流式优先：8s 内未收到 start 帧即清理并返回 false → handleSend 降级 REST。
+   * onDone 时把最终答案以普通 assistant 消息入列（带 citations/conversationId）。
+   */
+  const tryStream = async (
+    text: string,
+    session: string | null,
+    token: string
+  ): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let started = false;
+      const timer = setTimeout(() => {                   // 8s 未收到 start → 降级
+        if (!started) { cleanup(); resolve(false); }
+      }, 8000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      };
+      const ws = openChatWs(specialistId, token, {
+        onStart: () => { started = true; setStreaming(true); setStreamText(''); },
+        onDelta: (t) => { setStreamText(t); },
+        onDone: (d) => {
+          started = true;
+          clearTimeout(timer);
+          setStreamText('');
+          setStreaming(false);
+          const aiMsg: Message = {
+            id: `a_${Date.now()}`,
+            role: 'assistant',
+            content: d.text,
+            citations: (d.citations ?? []) as Message['citations'],
+            blocked: false,
+            conversationId: d.conversationId ?? null,
+          };
+          setMessages((prev) => [...prev, aiMsg]);
+          if (d.sessionId) setSessionId(d.sessionId);
+          wsRef.current = null;
+          resolve(true);
+        },
+        onError: (m) => {
+          started = true;
+          clearTimeout(timer);
+          setStreaming(false);
+          setStreamText('');
+          wsRef.current = null;
+          resolve(false);                                // 降级 REST
+        },
+      });
+      wsRef.current = ws;
+      ws.sendQuestion(text, session ?? undefined);
+    });
+  };
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -66,6 +124,11 @@ export default function ChatScreen() {
     setLoading(true);
 
     try {
+      const token = (await apiClient.getToken()) || '';
+      const ok = await tryStream(text, sessionId, token);
+      if (ok) return;                                    // WS 完成（含 done），不走 REST
+
+      // ---- REST fallback（既有逻辑）----
       const response = await specialistAPI.sendMessage(specialistId, {
         question: text,
         session_id: sessionId || undefined,
@@ -102,7 +165,7 @@ export default function ChatScreen() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, specialistId, sessionId]);
+  }, [input, loading, specialistId, sessionId, tryStream]);
 
   const handleFeedback = (msg: Message, rating: 1 | -1) => {
     if (!msg.conversationId) return;
@@ -185,6 +248,13 @@ export default function ChatScreen() {
     );
   };
 
+  // 流式渲染：WS 增量进行中，在消息尾部并入临时气泡
+  // （conversationId 为空 → 反馈/收藏按钮天然不显示，与既有条件一致）
+  const streamMsg: Message | null = streaming || streamText
+    ? { id: 'streaming', role: 'assistant', content: streamText || '正在思考...' }
+    : null;
+  const listData = streamMsg ? [...messages, streamMsg] : messages;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -204,7 +274,7 @@ export default function ChatScreen() {
 
       <FlatList
         ref={flatListRef}
-        data={messages}
+        data={listData}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
