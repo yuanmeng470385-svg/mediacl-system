@@ -51,7 +51,7 @@ _SPECIALIST_SQL = text("""
 _HISTORY_SQL = text("""
     SELECT visit_time, sentiment, key_points, hcp_interests, hcp_objections, ai_summary
     FROM visit_records
-    WHERE hcp_id = :hcp_id AND ai_summary IS NOT NULL
+    WHERE hcp_id = :hcp_id AND user_id = :user_id AND ai_summary IS NOT NULL
     ORDER BY visit_time DESC LIMIT :limit
 """)
 
@@ -223,9 +223,12 @@ class VisitManager:
             logger.warning(f"读取医生档案失败: {e}")
             return None
 
-    def _get_history(self, db: Session, hcp_id: int, limit: int = 3) -> List[Dict]:
+    def _get_history(self, db: Session, hcp_id: int, user_id: int, limit: int = 3) -> List[Dict]:
+        """读取当前用户对该医生的历史拜访（S4：拜访记录仅本人可见）"""
         try:
-            rows = db.execute(_HISTORY_SQL, {"hcp_id": hcp_id, "limit": limit}).mappings().all()
+            rows = db.execute(
+                _HISTORY_SQL, {"hcp_id": hcp_id, "user_id": user_id, "limit": limit},
+            ).mappings().all()
             history = []
             for r in rows:
                 row = dict(r)
@@ -271,7 +274,7 @@ class VisitManager:
         if not hcp:
             raise BusinessError(f"医生档案不存在: hcp_id={hcp_id}")
 
-        history = self._get_history(db, hcp_id, limit=3)
+        history = self._get_history(db, hcp_id, user_id, limit=3)
         prompt = f"""为医药代表准备拜访以下医生的资料：
 
 医生信息：

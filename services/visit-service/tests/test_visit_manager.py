@@ -76,15 +76,19 @@ class _FakeQuery:
         return len(self.all())
 
     def _match(self, rec):
-        # 简易匹配：只检查 VisitRecord.id == N 和 is_(None)/isnot(None)
+        # 简易匹配：支持 VisitRecord.<col> == 值 的二元比较（否则全部放行）。
+        # is_(None)/isnot(None) 这类与 None 比较的条件不模拟（fake 场景用不到状态筛选）
         for cond in self._filters:
-            if hasattr(cond, "left") and hasattr(cond, "right"):
-                left_val = getattr(rec, cond.left.key, None)
-                right_val = cond.right.value if hasattr(cond.right, "value") else cond.right
-                if hasattr(cond, "operator"):
-                    opname = cond.operator.__name__ if hasattr(cond.operator, "__name__") else str(cond.operator)
-                    if "is_" in opname or opname == "is_":
-                        left_val = getattr(rec, cond.left.key, None) if hasattr(cond.left, "key") else None
+            if not (hasattr(cond, "left") and hasattr(cond, "right")):
+                continue
+            if not hasattr(cond.left, "key"):
+                continue
+            right_val = getattr(cond.right, "value", cond.right)
+            if right_val is None:
+                continue
+            left_val = getattr(rec, cond.left.key, None)
+            if left_val != right_val:
+                return False
         return True
 
 
@@ -119,8 +123,10 @@ class _FakeResult:
         elif "digital_specialists" in s:
             rows = [{"id": 10, "name": "肿瘤专员-小K"}]
         elif "visit_records" in s:
+            uid = self._params.get("user_id")
+            # 与 _HISTORY_SQL 一致：hcp + user 双过滤，且仅已完成（有 ai_summary）的记录
             rows = [r.to_dict() for r in FakeDb._records.values()
-                    if r.hcp_id == pid][:3]
+                    if r.hcp_id == pid and r.user_id == uid and r.ai_summary is not None][:3]
         else:
             rows = []
         return _Mappings(rows)
@@ -432,3 +438,52 @@ def test_end_visit_no_duplicate_after_success():
         assert False, "应抛 BusinessError"
     except Exception as e:
         assert "已结束" in str(e)
+
+
+# ---------- 修复 5：pre-visit 历史隔离（S4，跨用户数据泄露） ----------
+
+async def _fake_specialist_user2(specialist_id, question, user_id, session_id=None, auth_token=None):
+    """user 2 的 end_visit 总结：内容带唯一标记，用于区分两条历史记录"""
+    return {"answer": json.dumps({
+        "summary": "用户2专属拜访总结",
+        "key_points": ["user2"],
+        "hcp_interests": [],
+        "hcp_objections": [],
+        "follow_up_suggestions": [],
+        "sentiment": "neutral",
+        "next_visit_plan": {},
+    }), "blocked": False, "session_id": "test-session"}
+
+
+def test_prepare_visit_history_scoped_to_current_user():
+    """S4 数据隔离：同一医生，不同用户 pre-visit 只看到自己的历史拜访
+
+    两个用户对同一 hcp 各完成一次拜访 → user 1 的 pre-visit 历史
+    只含自己的记录，看不到 user 2 的总结/关键点；反之亦然。
+    """
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+
+    # user 1 完成一次拜访（总结 A）
+    v1 = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.end_visit(db, v1["id"], user_id=1))
+
+    # user 2 对同一医生完成一次拜访（总结 B，带唯一标记）
+    vm_module.chat_with_specialist = _fake_specialist_user2
+    try:
+        v2 = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=2, product_id=1))
+        asyncio.run(mgr.end_visit(db, v2["id"], user_id=2))
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+    # user 1 的 pre-visit：只有自己的 1 条历史，不含 user 2 的总结
+    r1 = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=1, product_id=1))
+    assert len(r1["history"]) == 1, f"user1 应只看到自己 1 条历史，实际 {len(r1['history'])} 条"
+    assert r1["history"][0]["ai_summary"] == "本次拜访讨论了产品疗效和价格问题，医生持中性态度"
+    assert "用户2专属" not in json.dumps(r1["history"], ensure_ascii=False)
+
+    # user 2 的 pre-visit：只有自己的 1 条历史
+    r2 = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=2, product_id=1))
+    assert len(r2["history"]) == 1, f"user2 应只看到自己 1 条历史，实际 {len(r2['history'])} 条"
+    assert r2["history"][0]["ai_summary"] == "用户2专属拜访总结"
