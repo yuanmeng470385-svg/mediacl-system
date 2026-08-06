@@ -2,13 +2,14 @@
  * 我的 - 个人中心
  * 临床精准风
  */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../store/AuthContext';
+import { visitAPI } from '../../api/visit';
 import Icon from '../../components/Icon';
 import {
   Colors, FontSize, Spacing, BorderRadius, Shadow,
@@ -30,6 +31,15 @@ const menuItems = [
 export default function ProfileScreen() {
   const navigation = useNavigation<Nav>();
   const { user, logout } = useAuth();
+  const [visitCount, setVisitCount] = useState<string>('--');
+
+  useEffect(() => {
+    let cancelled = false;
+    visitAPI.list({ page: 1, page_size: 1 })
+      .then((res) => { if (!cancelled) setVisitCount(String(res.total)); })
+      .catch(() => { /* 保持 '--' */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleLogout = () => {
     Alert.alert('退出登录', '确定要退出当前账号吗？', [
@@ -67,7 +77,7 @@ export default function ProfileScreen() {
         <View style={[styles.statsCard, Shadow.card]}>
           {[
             { num: '--', label: '本月对话' },
-            { num: '--', label: '本月拜访' },
+            { num: visitCount, label: '拜访总数' },
             { num: '--', label: '收藏' },
           ].map((s, i) => (
             <React.Fragment key={s.label}>
