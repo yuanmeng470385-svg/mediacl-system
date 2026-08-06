@@ -72,6 +72,13 @@ class DashVectorClient:
         col.upsert(docs)
         return len(docs)
 
+    def delete_doc(self, doc_id: int) -> bool:
+        """按 doc_id 删除该文档的全部 chunk（驳回/下架时清理检索索引，M23）"""
+        col = self._get_collection()
+        # doc_id 元数据为字符串（upsert_chunks 写 str(doc_id)），filter 用字符串字面量
+        resp = col.delete(filter=f"doc_id = '{int(doc_id)}'")
+        return True
+
     def query(self, vector: List[float], filter_expr: Optional[str] = None, top_k: int = 10) -> List[Dict]:
         """向量检索（含过滤）"""
         col = self._get_collection()

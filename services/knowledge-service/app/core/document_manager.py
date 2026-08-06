@@ -40,21 +40,16 @@ class DocumentManager:
         version: Optional[str] = None,
         tags: Optional[List[str]] = None,
     ):
-        # 版本管理：同 title+product 已有文档 → 旧版归档，新行 revision+1 挂 parent 链
+        # 版本管理：同 title+product 已有文档 → 新行 revision+1 挂 parent 链（M22）
+        # 顺序保证：先 OSS 上传新文件 → 再建新文档行 → 最后归档旧版。
+        # OSS 上传失败 → 直接抛错，旧版保持 ready 可检索；归档失败 → 记日志人工处理，旧版也不受影响。
         prev = self.repo.find_latest_by_title(self.db, title, product_id)
-        parent_doc_id = None
-        revision = 1
-        if prev:
-            revision = _next_revision(prev)
-            parent_doc_id = prev.id
-            try:
-                self.repo.archive(self.db, prev)
-            except Exception as exc:
-                logger.warning("归档旧版文档失败（不影响新文档）: %s", exc)
+        revision = _next_revision(prev)
+        parent_doc_id = prev.id if prev else None
 
         file_url = self.oss.upload_local_file(local_path)
         logger.info("document uploaded to OSS by user %s: %s", uploader_id, file_url)
-        return self.repo.create_document(
+        doc = self.repo.create_document(
             title=title,
             doc_type=doc_type,
             file_url=file_url,
@@ -68,6 +63,16 @@ class DocumentManager:
             revision=revision,
             parent_doc_id=parent_doc_id,
         )
+        if prev:
+            try:
+                self.repo.archive(self.db, prev)
+                logger.info("旧版文档 %s 已归档（新版本 %s）", prev.id, doc.id)
+            except Exception as exc:
+                logger.error(
+                    "归档旧版文档 %s 失败（新文档 %s 已入库，旧版仍为 ready，需人工处理）: %s",
+                    prev.id, doc.id, exc,
+                )
+        return doc
 
     def approve_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)
@@ -76,6 +81,7 @@ class DocumentManager:
         if doc.status not in ("draft", "rejected"):
             raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
 
+        prev_status = doc.status  # M23：中途失败要恢复到的可重试状态
         self.repo.update_status(doc_id, "processing", reviewer_id)
         try:
             if not doc.file_url:
@@ -100,6 +106,7 @@ class DocumentManager:
                         try:
                             fields = {"doc_type": doc.doc_type or ""}
                             if doc.product_id is not None:
+                                # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
                                 fields["product_id"] = int(doc.product_id)
                             self.dashvector.upsert_chunks(
                                 doc_id, doc.title or "", chunks,
@@ -113,10 +120,18 @@ class DocumentManager:
                     os.unlink(local_path)
             logger.info("document %s imported to Bailian knowledge base", doc_id)
         except BailianKnowledgeError as exc:
+            # 百炼导入失败：恢复为可重试状态（不卡死在 processing）
             logger.exception("Bailian import failed for document %s", doc_id)
-            self.repo.update_status(doc_id, "rejected", reviewer_id)
+            self.repo.update_status(doc_id, prev_status, reviewer_id)
             raise BusinessError(str(exc), code=6000) from exc
+        except Exception as exc:
+            # M23: OSS 下载失败 / httpx 错误等任意中途异常 → 状态恢复为可重试态，记录错误
+            logger.exception("approve document %s failed, status restored to %s", doc_id, prev_status)
+            self.repo.update_status(doc_id, prev_status, reviewer_id)
+            raise BusinessError(f"审核处理失败（状态已恢复，可重试）: {exc}", code=5000) from exc
 
+        # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
+        self._index_es(doc_id, doc.title or "", doc.content or "", doc)
         return self.repo.update_status(doc_id, "ready", reviewer_id)
 
     def approve_without_bailian(self, doc_id: int, reviewer_id: int):
@@ -143,17 +158,80 @@ class DocumentManager:
             doc.content = text[:100000]
             if self.dashvector.is_configured():
                 chunks = chunk_text(text)
-                self.dashvector.upsert_chunks(
-                    doc_id, doc.title or "", chunks,
-                    fields={"product_id": str(doc.product_id or ""), "doc_type": doc.doc_type or ""},
-                )
+                fields = {"doc_type": doc.doc_type or ""}
+                if doc.product_id is not None:
+                    # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
+                    fields["product_id"] = int(doc.product_id)
+                try:
+                    self.dashvector.upsert_chunks(
+                        doc_id, doc.title or "", chunks,
+                        fields=fields,
+                    )
+                    logger.info("document %s 向量化 %d chunks → DashVector", doc_id, len(chunks))
+                except Exception as exc:
+                    logger.error("DashVector 写入失败（不影响上架，检索将降级）: %s", exc)
+        # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
+        self._index_es(doc_id, doc.title or "", doc.content or "", doc)
         return self.repo.update_status(doc_id, "ready", reviewer_id)
 
     def reject_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)
         if not doc:
             raise BusinessError("文档不存在", code=4001)
+        # M23: 状态校验。draft/processing 可驳回；ready 已上架 → 直接驳回并清理索引（响应会说明）；
+        # 其他状态（archived 等）不允许驳回。
+        if doc.status not in ("draft", "processing", "ready"):
+            raise BusinessError(f"当前状态 {doc.status} 不允许驳回", code=4001)
+        if doc.status == "ready":
+            logger.warning("document %s 已上架（ready）被驳回，将同步清理检索索引", doc_id)
+        # M23: 驳回时清理检索侧索引（DashVector 必删；ES 配置时删；百炼侧无删除封装则记日志说明）
+        self._cleanup_indexes(doc_id, doc)
         return self.repo.update_status(doc_id, "rejected", reviewer_id)
+
+    def _index_es(self, doc_id: int, title: str, content: str, doc) -> None:
+        """M21: 上架后写入 ES 关键词索引；失败降级记日志，不阻塞审核流程"""
+        if not content:
+            return
+        try:
+            from app.services.es_client import EsClient
+            es = EsClient()
+            if not es.is_configured():
+                return
+            fields = {"doc_type": doc.doc_type or "", "status": "ready"}
+            if doc.product_id is not None:
+                fields["product_id"] = int(doc.product_id)
+            ok = es.index_doc(doc_id, title, content, fields=fields)
+            if ok:
+                logger.info("document %s → ES index", doc_id)
+        except Exception as exc:
+            logger.warning("ES 索引写入失败（不影响审核）: %s", exc)
+
+    def _cleanup_indexes(self, doc_id: int, doc) -> None:
+        """M23: 驳回/下架时清理检索侧索引，避免被驳回文档仍可被检索"""
+        # 1. DashVector：按 doc_id 删除全部 chunk（主向量后端，必删）
+        if self.dashvector.is_configured():
+            try:
+                self.dashvector.delete_doc(doc_id)
+                logger.info("document %s 已从 DashVector 删除", doc_id)
+            except Exception as exc:
+                logger.error("DashVector 删除失败（文档 %s 可能仍可被向量检索）: %s", doc_id, exc)
+        # 2. ES：配置时同步删除
+        try:
+            from app.services.es_client import EsClient
+            es = EsClient()
+            if es.is_configured():
+                es.delete_doc(doc_id)
+        except Exception as exc:
+            logger.error("ES 删除失败: %s", exc)
+        # 3. 百炼侧：当前客户端未封装 DeleteFile 能力，若该文档此前已导入百炼，
+        #    百炼知识库中文件仍在（仅作降级检索后端使用）；记录日志 + 注释限制。
+        #    后续如需彻底清理：在 BailianKnowledgeClient 封装 DeleteFile API 后调用。
+        if doc.status in ("ready", "processing") and doc.file_url:
+            logger.warning(
+                "document %s 驳回：百炼知识库文件无法经当前客户端删除"
+                "（BailianKnowledgeClient 未封装 DeleteFile，见 M23 注释），需人工清理或等待降级链路覆盖",
+                doc_id,
+            )
 
     def search(
         self,
@@ -162,6 +240,15 @@ class DocumentManager:
         doc_type: Optional[str] = None,
         top_k: int = 10,
     ) -> Tuple[List[dict], str]:
+        # M21: ES 配置时优先关键词检索（未配置走原 PG/DashVector 路径）
+        try:
+            from app.services.es_client import EsClient
+            es = EsClient()
+            if es.is_configured():
+                results = es.search(query, top_k=top_k, product_id=product_id, doc_type=doc_type)
+                return results, "es"
+        except Exception as exc:
+            logger.warning("ES 检索失败，继续走向量/降级路径: %s", exc)
         # 1. DashVector（向量 + 关键词混合，可选后端）
         if self.dashvector.is_configured():
             try:
@@ -169,7 +256,14 @@ class DocumentManager:
                 return results, "dashvector"
             except Exception as exc:
                 logger.warning("DashVector 检索失败，降级百炼: %s", exc)
-        # 2. 百炼（dense + rerank）
+        # 2. 百炼（dense + rerank）—— M27: 百炼不支持 product_id/doc_type 过滤，
+        #    降级到此时明确打 warning 提示过滤被丢弃，不静默
+        if product_id is not None or doc_type:
+            logger.warning(
+                "Bailian 检索不支持 product_id/doc_type 过滤，过滤条件将被丢弃"
+                "（product_id=%s, doc_type=%s）",
+                product_id, doc_type,
+            )
         try:
             results = self.bailian.search(query=query, top_k=top_k, product_id=product_id, doc_type=doc_type)
             return results, "bailian"
@@ -212,5 +306,7 @@ class DocumentManager:
         if product_id:
             parts.append(f"product_id = {int(product_id)}")
         if doc_type:
-            parts.append(f"doc_type = '{doc_type}'")
+            # M27: doc_type 值转义（去掉单引号），避免注入使 DashVector 表达式出错
+            safe = str(doc_type).replace("'", "")
+            parts.append(f"doc_type = '{safe}'")
         return " AND ".join(parts) if parts else None

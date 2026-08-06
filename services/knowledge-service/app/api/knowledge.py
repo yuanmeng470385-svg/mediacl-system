@@ -27,6 +27,32 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_DOC_TYPES = ("product", "guideline", "literature", "regulation", "competitor", "other")
 
+# M24: 上传校验 —— 扩展名白名单（旧格式 .doc/.ppt 明确排除）+ 大小上限 50MB
+ALLOWED_FILE_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt"}
+LEGACY_BLOCKED_EXTENSIONS = {".doc", ".ppt"}
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+_UPLOAD_READ_CHUNK = 1024 * 1024  # 1MB 分块读取，避免全量读内存
+
+
+def _parse_bool_value(value, name: str = "approved") -> bool:
+    """M24: 显式布尔解析 —— 字符串 "false"/"0" 必须解析为 False"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "y", "on"):
+            return True
+        if v in ("false", "0", "no", "n", "off"):
+            return False
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise ParamError(f"{name} 必须是布尔值（true/false）")
+
+
+def _can_view_all_documents(user: dict) -> bool:
+    """M26: 仅审核角色（admin/manager/medical）可见未上架文档"""
+    return (user.get("role") or "") in KB_ADMIN_ROLES
+
 
 def _manager(db: Session) -> DocumentManager:
     return DocumentManager(db)
@@ -96,10 +122,34 @@ async def upload_document(
         except ValueError as exc:
             raise ParamError("publish_date 格式应为 YYYY-MM-DD") from exc
 
-    suffix = Path(file.filename or "").suffix
+    suffix = (Path(file.filename or "").suffix or "").lower()
+    # M24: 扩展名白名单；旧格式 .doc/.ppt 明确拒绝并提示转换
+    if suffix in LEGACY_BLOCKED_EXTENSIONS:
+        raise ParamError(f"不支持旧版格式 {suffix}，请转换为 .docx/.pptx 后上传")
+    if suffix not in ALLOWED_FILE_EXTENSIONS:
+        raise ParamError(
+            f"不支持的文件类型 {suffix or '(无扩展名)'}，仅支持: {', '.join(sorted(ALLOWED_FILE_EXTENSIONS))}"
+        )
+    # M24: 分块落盘 + 大小上限（50MB），超过直接拒绝，不把大文件读进内存
+    total_read = 0
+    over_limit = False
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp_path = tmp.name
-        tmp.write(file.file.read())
+        while True:
+            chunk = file.file.read(_UPLOAD_READ_CHUNK)
+            if not chunk:
+                break
+            total_read += len(chunk)
+            if total_read > MAX_UPLOAD_SIZE:
+                over_limit = True
+                break
+            tmp.write(chunk)
+    if over_limit:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise ParamError(f"文件大小超过上限 {MAX_UPLOAD_SIZE // (1024 * 1024)}MB，拒绝上传")
 
     try:
         doc = _manager(db).create_from_upload(
@@ -138,6 +188,9 @@ async def list_documents(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # M26: 非审核角色（如 rep）只能看到已上架（ready）文档，忽略其传入的 status 过滤
+    if not _can_view_all_documents(current_user):
+        status = "ready"
     items, total = _manager(db).repo.list_documents(
         status=status,
         doc_type=doc_type,
@@ -157,6 +210,9 @@ async def get_document(
     doc = _manager(db).repo.get(doc_id)
     if not doc:
         raise BusinessError("文档不存在", code=4001)
+    # M26: 未上架文档（draft/rejected/archived）对非审核角色不可见（rep 看不到全文）
+    if doc.status != "ready" and not _can_view_all_documents(current_user):
+        raise BusinessError("文档不存在或无权访问", code=4001)
     return success(doc.to_dict())
 
 
@@ -173,11 +229,15 @@ async def review_document(
     if approved_raw is None:
         approved = request.get("action") == "approve"
     else:
-        approved = bool(approved_raw)
+        # M24: 显式布尔解析，字符串 "false" 必须解析为 False（原 bool("false") == True 是 bug）
+        approved = _parse_bool_value(approved_raw)
     if approved:
         doc = manager.approve_document(doc_id, current_user["id"])
     else:
         doc = manager.reject_document(doc_id, current_user["id"])
+        # M23: 驳回时说明索引已清理；已上架文档被驳回时响应 message 提示
+        if doc.status == "rejected":
+            return success(doc.to_dict(), message="文档已驳回，检索索引已同步清理")
     await write_audit_log(
         user_id=current_user["id"], action="doc_review",
         resource_type="knowledge_document", resource_id=str(doc_id),
@@ -218,7 +278,7 @@ async def search_test(
                 es = EsClient()
                 if not es.is_configured():
                     return {"backend": "es", "error": "ES 未配置（ES_URL）", "results": []}
-                return {"backend": "es", "results": es.search(data["query"], data["top_k"]), "elapsed_ms": int((time.time() - start) * 1000)}
+                return {"backend": "es", "results": es.search(data["query"], data["top_k"], product_id=request.get("product_id"), doc_type=request.get("doc_type")), "elapsed_ms": int((time.time() - start) * 1000)}
             return {"backend": backend, "error": f"未知后端 {backend}", "results": []}
         except Exception as exc:
             logger.error("search-test 后端 %s 失败: %s", backend, exc)
