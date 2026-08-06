@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Navigate } from 'react-router-dom';
 import { Card, Form, Input, Button, Typography, Alert } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useAuth } from '../../hooks/useAuth';
@@ -6,9 +7,12 @@ import { useAuth } from '../../hooks/useAuth';
 const { Title, Text } = Typography;
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, isLoggedIn, loading } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  // 等启动 me() 完成，避免误重定向；已登录直接回 /dashboard
+  if (loading) return null;
+  if (isLoggedIn) return <Navigate to="/dashboard" replace />;
 
   const onFinish = async (values: { username: string; password: string }) => {
     setSubmitting(true);

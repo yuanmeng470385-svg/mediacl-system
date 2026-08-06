@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import AdminLayout from './layouts/AdminLayout';
+import LoginPage from './pages/Login';
+import RequireAuth from './components/RequireAuth';
 import { AuthProvider } from './context/AuthContext';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -36,23 +38,30 @@ export default function App() {
       <AntApp>
         <AuthProvider>
           <BrowserRouter>
-          <Suspense fallback={<Loading />}>
-            <Routes>
-              <Route element={<AdminLayout />}>
-                <Route index element={<Navigate to="/dashboard" replace />} />
-                <Route path="dashboard" element={<Dashboard />} />
-                <Route path="specialist/list" element={<SpecialistList />} />
-                <Route path="specialist/create" element={<SpecialistForm />} />
-                <Route path="knowledge/list" element={<KnowledgeList />} />
-                <Route path="compliance/list" element={<ComplianceList />} />
-                <Route path="audit/list" element={<AuditList />} />
-                <Route path="doctor/list" element={<DoctorList />} />
-                <Route path="doctor/:id" element={<DoctorDetail />} />
-                <Route path="user/list" element={<UserList />} />
-                <Route path="system/config" element={<SystemConfig />} />
-              </Route>
-            </Routes>
-          </Suspense>
+            <Suspense fallback={<Loading />}>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route
+                  element={
+                    <RequireAuth>
+                      <AdminLayout />
+                    </RequireAuth>
+                  }
+                >
+                  <Route index element={<Navigate to="/dashboard" replace />} />
+                  <Route path="dashboard" element={<Dashboard />} />
+                  <Route path="specialist/list" element={<SpecialistList />} />
+                  <Route path="specialist/create" element={<SpecialistForm />} />
+                  <Route path="knowledge/list" element={<KnowledgeList />} />
+                  <Route path="compliance/list" element={<ComplianceList />} />
+                  <Route path="audit/list" element={<AuditList />} />
+                  <Route path="doctor/list" element={<DoctorList />} />
+                  <Route path="doctor/:id" element={<DoctorDetail />} />
+                  <Route path="user/list" element={<UserList />} />
+                  <Route path="system/config" element={<SystemConfig />} />
+                </Route>
+              </Routes>
+            </Suspense>
           </BrowserRouter>
         </AuthProvider>
       </AntApp>

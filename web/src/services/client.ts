@@ -19,8 +19,10 @@ client.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     if (status === 401) {
-      // 未登录：静默处理，各页面自行处理空数据状态
-      console.warn('API 401: 未登录');
+      localStorage.removeItem('medagent_token');
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login';
+      }
     } else if (status >= 500) {
       message.error('服务器错误，请稍后重试');
     }
