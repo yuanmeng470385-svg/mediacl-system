@@ -84,15 +84,26 @@ export interface ConversationMessage {
 // ========== 拜访 ==========
 export type VisitStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
 
+/**
+ * 拜访记录 —— api 层映射后的屏幕消费形状（屏幕只读这里的字段）。
+ * 后端 to_dict 原生字段（visit_time / duration_minutes / ai_summary(字符串) /
+ * key_points / hcp_interests / hcp_objections / sentiment / next_visit_plan / status 派生）
+ * 统一由 src/api/visit.ts 映射为以下形状，hcp_name 缺省回退 "医生 #id"。
+ */
 export interface VisitRecord {
   id: number;
-  user_id: number;
   hcp_id: number;
-  hcp_name?: string;
+  /** 医生名（映射层已做回退，恒为字符串） */
+  hcp_name: string;
   product_id: number;
+  /** 拜访日期 YYYY-MM-DD（取自 visit_time） */
   planned_date: string;
+  /** 完整开始时间（取自 visit_time，ISO 字符串） */
+  visit_time?: string;
   actual_start_time?: string;
+  /** 由 visit_time + duration_minutes 推算 */
   actual_end_time?: string;
+  duration_minutes?: number;
   status: VisitStatus;
   transcript?: string;
   ai_summary?: VisitSummary;
@@ -107,6 +118,28 @@ export interface VisitSummary {
   objections: string[];
   sentiment: 'positive' | 'neutral' | 'negative';
   next_visit_recommendation: string;
+}
+
+/** 合规告警 —— 映射自后端 compliance.violations（{rule_code, rule_name, severity, action, matched_text, reason}） */
+export interface ComplianceAlert {
+  rule_code: string;
+  /** 优先取 matched_text，其次 reason */
+  description: string;
+  severity?: 'low' | 'medium' | 'high';
+  /** action=reject 的规则即合规红线（触发红线弹窗） */
+  critical?: boolean;
+}
+
+/** sendTranscript 的映射结果 —— 屏幕消费形状（后端 objection/compliance 键位错位在此抹平） */
+export interface TranscriptResult {
+  transcript: string;
+  objections: ObjectionAlert[];
+  compliance_alerts: ComplianceAlert[];
+}
+
+export interface FollowUpResult {
+  follow_up_plan: string;
+  suggested_date: string;
 }
 
 export interface ComplianceIssue {
@@ -127,11 +160,13 @@ export interface VisitPrepareData {
   };
 }
 
+/** 异议提醒 —— 映射自后端 objections.objections（[{type, text}]）+ suggestions.objection_responses */
 export interface ObjectionAlert {
+  id: string;
   type: string;
+  text: string;
   description: string;
-  suggested_response: string;
-  severity: 'info' | 'warning' | 'critical';
+  suggested_response?: string;
 }
 
 // ========== 医生 ==========
@@ -154,37 +189,57 @@ export interface HCP {
 }
 
 export interface HCPProfile {
-  basic_info: {
+  /** 基础档案（后端 profile 响应顶层 hcp 平铺字段映射而来） */
+  basic_info?: {
     name: string;
     hospital: string;
     department: string;
     title: string;
     region: string;
   };
+  /** 学术背景（ai_profile.academic_profile 字符串 → {background, research_interests}） */
   academic_profile?: {
     background: string;
-    research_interests: string;
-    publications?: string[];
-  };
+    research_interests: string[];
+  } | null;
+  /** 处方偏好（ai_profile.prescription_preference 字符串 → {preference, decision_factors}） */
   prescription_analysis?: {
     preference: string;
     decision_factors: string[];
-  };
+  } | null;
   communication_advice?: {
-    best_time: string;
-    preferred_channels: string[];
-    topics_to_avoid: string[];
-  };
-  compliance_risk?: string[];
+    /** LLM 返回纯文本时原样展示 */
+    raw_text?: string;
+    best_time?: string;
+    preferred_channels?: string[];
+    topics_to_avoid?: string[];
+  } | null;
+  /** 合规风险（ai_profile.risk_alert 派生 [{level, description}]） */
+  compliance_risk?: { level: string; description: string }[] | null;
+  /** 下一步跟进建议 */
+  next_step_suggestion?: string;
+  /** AI 画像是否可用（ai_profile 为 null / 降级形状时为 false） */
+  ai_available?: boolean;
+  /** 画像不可用时的说明（降级原因/提示） */
+  ai_unavailable_reason?: string;
+  /** 画像来源 */
+  source?: string;
 }
 
 export interface HCPInteraction {
   id: number;
+  /** 拜访时间（后端 visit_time ISO 字符串映射而来） */
   visit_date: string;
-  product_name: string;
+  duration_minutes?: number;
+  /** 拜访摘要（后端 ai_summary 映射而来） */
   summary: string;
-  outcome: string;
-  sentiment: 'positive' | 'neutral' | 'negative';
+  /** 关键点（后端 key_points） */
+  key_points?: string[];
+  interests?: string[];
+  objections?: string[];
+  follow_up_suggestions?: string;
+  next_visit_plan?: string;
+  sentiment?: string;
 }
 
 // ========== 合规 ==========

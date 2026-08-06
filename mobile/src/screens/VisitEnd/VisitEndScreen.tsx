@@ -1,5 +1,9 @@
 /**
  * 拜访结束页 - AI 摘要 + 关键发现 + 下次建议 + 跟进
+ *
+ * 摘要来源：优先用 VisitInProgress 在导航前已调 endVisit 的结果（navigation params.summary），
+ * 没有才自己调一次 endVisit —— 避免同一拜访被 end 两次触发后端"已结束"锁。
+ * 真实失败显示错误态 + 重试，绝不展示伪造数据。
  */
 import React, { useEffect, useState } from 'react';
 import {
@@ -25,59 +29,55 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 export default function VisitEndScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation<Nav>();
-  const { visitId } = route.params;
+  const { visitId, summary: initialSummary } = route.params;
 
-  const [summary, setSummary] = useState<VisitSummary | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [summary, setSummary] = useState<VisitSummary | null>(initialSummary ?? null);
+  const [loading, setLoading] = useState(!initialSummary);
+  const [error, setError] = useState('');
   const [followUp, setFollowUp] = useState<{
     follow_up_plan: string;
     suggested_date: string;
   } | null>(null);
 
   useEffect(() => {
-    loadSummary();
+    if (!initialSummary) loadSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadSummary = async () => {
     try {
       const result = await visitAPI.endVisit(visitId);
       setSummary(result);
-    } catch {
-      // Mock 展示
-      setSummary({
-        summary: '本次拜访就产品最新临床数据与主任进行了深入交流，主任对产品安全性表示认可，但对价格提出了一些顾虑。',
-        key_points: [
-          '产品最新III期临床数据显示优效性',
-          '医生认可产品安全性',
-          '提出价格问题需后续跟进',
-        ],
-        interests: ['临床数据对比', '患者管理方案'],
-        objections: ['价格负担'],
-        sentiment: 'positive',
-        next_visit_recommendation: '建议2周后跟进，重点准备药物经济学数据和患者援助方案',
-      });
+    } catch (e: any) {
+      setError(e?.message || '生成拜访总结失败，请重试');
     } finally {
       setLoading(false);
     }
   };
 
+  const retry = () => {
+    setError('');
+    setLoading(true);
+    loadSummary();
+  };
+
   const handleFollowUp = async () => {
     try {
       const result = await visitAPI.followUp(visitId);
+      if (!result.follow_up_plan) {
+        // api 层解析失败给了空结构 → 提示并保留按钮可重试
+        Alert.alert('生成失败', '未能生成跟进计划，请重试');
+        return;
+      }
       setFollowUp(result);
-    } catch {
-      setFollowUp({
-        follow_up_plan: '准备产品价格对比分析和患者援助方案资料，预约2周后再次拜访。',
-        suggested_date: new Date(Date.now() + 14 * 86400000)
-          .toISOString()
-          .split('T')[0],
-      });
+    } catch (e: any) {
+      // 失败保留生成按钮，用户可重试
+      Alert.alert('生成失败', e?.message || '请稍后重试');
     }
   };
 
   const handleDone = () => {
     navigation.popToTop();
-    (navigation as any).navigate('Home');
   };
 
   if (loading) {
@@ -89,13 +89,24 @@ export default function VisitEndScreen() {
     );
   }
 
+  if (error || !summary) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>{error || '拜访总结生成失败'}</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={retry} activeOpacity={0.8}>
+          <Text style={styles.retryText}>重试</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   const sentimentColor =
-    summary?.sentiment === 'positive' ? Colors.success
-      : summary?.sentiment === 'negative' ? Colors.danger
+    summary.sentiment === 'positive' ? Colors.success
+      : summary.sentiment === 'negative' ? Colors.danger
       : Colors.textSecondary;
   const sentimentLabel =
-    summary?.sentiment === 'positive' ? '积极'
-      : summary?.sentiment === 'negative' ? '消极'
+    summary.sentiment === 'positive' ? '积极'
+      : summary.sentiment === 'negative' ? '消极'
       : '中性';
 
   return (
@@ -128,13 +139,13 @@ export default function VisitEndScreen() {
         {/* AI 摘要 */}
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.sectionTitle}>📋 摘要</Text>
-          <Text style={styles.summaryText}>{summary?.summary}</Text>
+          <Text style={styles.summaryText}>{summary.summary || '暂无摘要'}</Text>
         </View>
 
         {/* 关键点 */}
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.sectionTitle}>🔑 关键点</Text>
-          {summary?.key_points?.map((point, i) => (
+          {summary.key_points?.map((point, i) => (
             <View key={i} style={styles.keyPoint}>
               <Text style={styles.keyPointNum}>{i + 1}.</Text>
               <Text style={styles.keyPointText}>{point}</Text>
@@ -143,7 +154,7 @@ export default function VisitEndScreen() {
         </View>
 
         {/* 兴趣点 */}
-        {summary?.interests && summary.interests.length > 0 && (
+        {summary.interests && summary.interests.length > 0 && (
           <View style={[styles.card, Shadow.card]}>
             <Text style={styles.sectionTitle}>💡 兴趣点</Text>
             <View style={styles.tagRow}>
@@ -157,7 +168,7 @@ export default function VisitEndScreen() {
         )}
 
         {/* 异议 */}
-        {summary?.objections && summary.objections.length > 0 && (
+        {summary.objections && summary.objections.length > 0 && (
           <View style={[styles.card, styles.warningCard]}>
             <Text style={styles.sectionTitle}>⚠️ 异议</Text>
             {summary.objections.map((obj, i) => (
@@ -172,7 +183,7 @@ export default function VisitEndScreen() {
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.sectionTitle}>📅 下次拜访推荐</Text>
           <Text style={styles.nextVisitText}>
-            {summary?.next_visit_recommendation}
+            {summary.next_visit_recommendation || '暂无推荐'}
           </Text>
         </View>
 
@@ -220,8 +231,17 @@ export default function VisitEndScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background },
   loadingText: { marginTop: Spacing.md, color: Colors.textHint, fontSize: FontSize.sm },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
   header: {
     backgroundColor: Colors.success,
     paddingTop: 52,

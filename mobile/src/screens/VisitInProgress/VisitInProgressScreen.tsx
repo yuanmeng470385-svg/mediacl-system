@@ -10,7 +10,7 @@ import {
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { visitAPI } from '../../api/visit';
+import { visitAPI, mapComplianceViolations } from '../../api/visit';
 import { apiClient } from '../../api/client';
 import { connectAsr } from '../../services/asr';
 import { startRecording, stopRecording, readWavPcm } from '../../services/recorder';
@@ -18,7 +18,7 @@ import Icon from '../../components/Icon';
 import { ActionIcons, StatusIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { RootStackParamList, VisitInProgressParams } from '../../navigation/types';
-import type { ObjectionAlert } from '../../types';
+import type { ObjectionAlert, ComplianceAlert, VisitSummary } from '../../types';
 
 type RouteType = RouteProp<{ VisitInProgress: VisitInProgressParams }, 'VisitInProgress'>;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -34,7 +34,7 @@ export default function VisitInProgressScreen() {
 
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [objections, setObjections] = useState<ObjectionAlert[]>([]);
-  const [complianceAlerts, setComplianceAlerts] = useState<{ rule_code: string; description: string }[]>([]);
+  const [complianceAlerts, setComplianceAlerts] = useState<ComplianceAlert[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [sending, setSending] = useState(false);
   const [showRedLine, setShowRedLine] = useState<string | null>(null);
@@ -73,18 +73,20 @@ export default function VisitInProgressScreen() {
       if (result.objections?.length) setObjections((prev) => [...prev, ...result.objections]);
       if (result.compliance_alerts?.length) {
         setComplianceAlerts((prev) => [...prev, ...result.compliance_alerts]);
-        const critical = result.compliance_alerts.find((a: any) => a.rule_code?.startsWith('R00'));
+        const critical = result.compliance_alerts.find((a) => a.critical);
         if (critical) setShowRedLine(critical.description);
       }
     } catch {} finally { setSending(false); }
   }, [visitId, elapsed]);
 
+  // 只调一次 end：结果放进 navigation params 传给 VisitEndScreen，避免第二次 end 触发后端"已结束"锁
   const handleEndVisit = () => {
     Alert.alert('结束拜访', '确认结束本次拜访并生成总结？', [
       { text: '取消', style: 'cancel' },
       { text: '确认结束', onPress: async () => {
-        try { await visitAPI.endVisit(visitId); } catch {}
-        navigation.replace('VisitEnd', { visitId });
+        let summary: VisitSummary | undefined;
+        try { summary = await visitAPI.endVisit(visitId); } catch {}
+        navigation.replace('VisitEnd', { visitId, summary });
       }},
     ]);
   };
@@ -133,7 +135,15 @@ export default function VisitInProgressScreen() {
         },
         // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"
         onSentence: (text) => setLiveText(text),
-        onCompliance: () => {},
+        // ASR WS compliance 帧：与 transcript 的 compliance_alerts 同一套映射与展示状态
+        onCompliance: (blocked, violations) => {
+          const alerts = mapComplianceViolations(violations);
+          if (alerts.length) {
+            setComplianceAlerts((prev) => [...prev, ...alerts]);
+            const critical = alerts.find((a) => a.critical);
+            if (critical) setShowRedLine(critical.description);
+          }
+        },
         onError: (msg) => {
           setLiveText('');
           setTranscribing(false); // 服务端 error 帧后即断开（无 completed 帧），必须复位防按钮卡死
@@ -218,8 +228,8 @@ export default function VisitInProgressScreen() {
               </View>
               {objections.slice(-3).map((obj, i) => (
                 <TouchableOpacity
-                  key={i}
-                  style={[styles.objectionCard, obj.severity === 'critical' && styles.criticalCard]}
+                  key={obj.id || i}
+                  style={styles.objectionCard}
                   onPress={() => Alert.alert('应对话术', obj.suggested_response || '暂无建议话术')}
                 >
                   <Text style={styles.objectionText} numberOfLines={2}>{obj.description}</Text>
@@ -344,7 +354,6 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.sm, marginBottom: Spacing.xs,
     borderLeftWidth: 3, borderLeftColor: Colors.warning,
   },
-  criticalCard: { backgroundColor: Colors.dangerLight, borderLeftColor: Colors.danger },
   objectionText: { fontSize: FontSize.xs, color: Colors.textPrimary, lineHeight: 18 },
   tipLabel: { fontSize: 10, color: Colors.primary, marginTop: 4, fontWeight: '600' },
   complianceItem: {

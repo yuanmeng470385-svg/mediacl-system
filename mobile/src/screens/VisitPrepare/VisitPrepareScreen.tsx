@@ -11,7 +11,6 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { visitAPI } from '../../api/visit';
-import { hcpAPI } from '../../api/hcp';
 import Icon from '../../components/Icon';
 import { ActionIcons, VisitIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -28,10 +27,12 @@ export default function VisitPrepareScreen() {
 
   const [data, setData] = useState<VisitPrepareData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
 
   useEffect(() => { loadPrepareData(); }, []);
 
+  // 真实失败显示错误态 + 重试，不用假数据兜底
   const loadPrepareData = async () => {
     try {
       const result = await visitAPI.prepareVisit({ hcpId, productId: productId || 1 });
@@ -39,25 +40,17 @@ export default function VisitPrepareScreen() {
       if (result.recommendations?.suggested_topics) {
         setSelectedTopics(new Set(result.recommendations.suggested_topics));
       }
-    } catch {
-      try {
-        const profile = await hcpAPI.getProfile(hcpId);
-        setData({
-          hcp_profile: profile,
-          recommendations: {
-            suggested_topics: ['产品最新临床数据', '区域学术会议邀请', '患者管理经验交流'],
-            red_lines: ['不得做出疗效保证', '不得与竞品直接对比', '不得承诺回扣或利益'],
-            opening_remarks: '主任您好，感谢您百忙之中抽出时间。',
-            materials: [],
-            last_follow_up: '暂无上次拜访记录',
-          },
-        });
-      } catch {
-        Alert.alert('加载失败', '无法获取拜访准备数据');
-      }
+    } catch (e: any) {
+      setError(e?.message || '无法获取拜访准备数据');
     } finally {
       setLoading(false);
     }
+  };
+
+  const retry = () => {
+    setError('');
+    setLoading(true);
+    loadPrepareData();
   };
 
   const toggleTopic = (topic: string) => {
@@ -90,6 +83,17 @@ export default function VisitPrepareScreen() {
     );
   }
 
+  if (error || !data) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>{error || '加载失败'}</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={retry} activeOpacity={0.8}>
+          <Text style={styles.retryText}>重试</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -117,7 +121,7 @@ export default function VisitPrepareScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.tipTitle}>沟通建议</Text>
                 <Text style={styles.tipText}>最佳时间：{data.hcp_profile.communication_advice.best_time}</Text>
-                <Text style={styles.tipText}>偏好方式：{data.hcp_profile.communication_advice.preferred_channels.join('、')}</Text>
+                <Text style={styles.tipText}>偏好方式：{(data.hcp_profile.communication_advice.preferred_channels || []).join('、')}</Text>
               </View>
             </View>
           )}
@@ -164,6 +168,25 @@ export default function VisitPrepareScreen() {
             <View style={styles.openingBox}>
               <Text style={styles.openingText}>{data.recommendations.opening_remarks}</Text>
             </View>
+          </View>
+        )}
+
+        {/* 参考资料（materials 有就渲染，没有就不渲染该板块） */}
+        {data.recommendations?.materials && data.recommendations.materials.length > 0 && (
+          <View style={[styles.card, Shadow.card]}>
+            <View style={styles.cardHeader}>
+              <Icon name="file-document-outline" size={22} color={Colors.accent} />
+              <Text style={styles.sectionTitle}>参考资料</Text>
+            </View>
+            {data.recommendations.materials.map((m, i) => (
+              <View key={i} style={styles.materialItem}>
+                <View style={styles.materialDot} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.materialTitle}>{m.title}</Text>
+                  {!!m.url && <Text style={styles.materialUrl} numberOfLines={1}>{m.url}</Text>}
+                </View>
+              </View>
+            ))}
           </View>
         )}
 
@@ -239,6 +262,25 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md, borderLeftWidth: 4, borderLeftColor: Colors.primary,
   },
   openingText: { fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 24, fontStyle: 'italic' },
+  materialItem: {
+    flexDirection: 'row', gap: Spacing.sm, alignItems: 'flex-start',
+    paddingVertical: Spacing.xs,
+  },
+  materialDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.accent,
+    marginTop: 8,
+  },
+  materialTitle: { fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 22 },
+  materialUrl: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: 2 },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
   followText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22 },
   bottomBar: {
     padding: Spacing.lg, paddingBottom: 34, backgroundColor: Colors.white,

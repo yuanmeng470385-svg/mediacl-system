@@ -2,7 +2,7 @@
  * MedAgent 移动端 - 导航类型定义
  */
 
-import type { DigitalSpecialist, HCP, VisitRecord } from '../types';
+import type { DigitalSpecialist, HCP, VisitRecord, VisitSummary } from '../types';
 
 // ========== 主导航 ==========
 export type MainTabParamList = {
@@ -23,7 +23,7 @@ export type RootStackParamList = {
   // 拜访流程
   VisitPrepare: { hcpId: number; hcpName: string; productId?: number };
   VisitInProgress: { visitId: number; hcpName: string };
-  VisitEnd: { visitId: number };
+  VisitEnd: { visitId: number; summary?: VisitSummary };
   VisitDetail: { visitId: number };
   // 医生
   HCPDetail: { hcpId: number };
@@ -59,6 +59,8 @@ export type VisitInProgressParams = {
 
 export type VisitEndParams = {
   visitId: number;
+  /** VisitInProgress 已在导航前调过 endVisit 时传入结果；缺省时 VisitEndScreen 自己调一次 */
+  summary?: VisitSummary;
 };
 
 export type HCPDetailParams = {
