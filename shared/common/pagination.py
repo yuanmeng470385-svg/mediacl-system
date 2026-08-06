@@ -38,7 +38,12 @@ def paginate(
     """生成分页响应"""
     total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
     return {
+        # 顶层字段：web/mobile 全端约定读取 {items,total,page,page_size}
         "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        # 嵌套结构：保持向后兼容（services 内部既有读取方依赖此形状）
         "pagination": {
             "page": page,
             "page_size": page_size,
