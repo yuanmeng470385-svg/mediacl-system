@@ -7,20 +7,48 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import Icon from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import { visitAPI } from '../../api/visit';
+import type { VisitRecord } from '../../types';
 import type { RootStackParamList } from '../../navigation/types';
 
 type RouteType = RouteProp<RootStackParamList, 'VisitDetail'>;
+
+/** 拜访时长：两时间都在则算分钟数；只有开始时间则视为进行中/已结束；都缺显示 -- */
+function formatDuration(start?: string, end?: string): string {
+  if (start && end) {
+    // 后端可能是 'YYYY-MM-DD HH:mm:ss' 空格格式，转 T 以便 Date.parse 兼容
+    const s = Date.parse(start.replace(' ', 'T'));
+    const e = Date.parse(end.replace(' ', 'T'));
+    if (!Number.isNaN(s) && !Number.isNaN(e) && e >= s) {
+      return `${Math.round((e - s) / 60000)} 分钟`;
+    }
+  }
+  return start ? '进行中/已结束' : '--';
+}
 
 export default function VisitDetailScreen() {
   const route = useRoute<RouteType>();
   const navigation = useNavigation();
   const { visitId } = route.params;
+  const [record, setRecord] = useState<VisitRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(timer);
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await visitAPI.getById(visitId);
+        if (!cancelled) setRecord(r);
+      } catch (e: any) {
+        if (!cancelled) setError(e?.message || '加载失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [visitId, reloadKey]);
 
   if (loading) {
     return (
@@ -29,6 +57,29 @@ export default function VisitDetailScreen() {
       </View>
     );
   }
+
+  if (error) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>{error}</Text>
+        <TouchableOpacity
+          style={styles.retryBtn}
+          onPress={() => {
+            setLoading(true);
+            setError('');
+            setReloadKey((k) => k + 1);
+          }}
+        >
+          <Text style={styles.retryText}>重试</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const summary = record?.ai_summary;
+  const keyPoints = summary?.key_points ?? [];
+  const interests = summary?.interests ?? [];
+  const objections = summary?.objections ?? [];
 
   return (
     <View style={styles.container}>
@@ -46,19 +97,23 @@ export default function VisitDetailScreen() {
           <Text style={styles.cardTitle}>基本信息</Text>
           <View style={styles.infoRow}>
             <Icon name="doctor" size={18} color={Colors.textSecondary} />
-            <Text style={styles.infoText}>医生：李主任</Text>
+            <Text style={styles.infoText}>医生：{record?.hcp_name || '未知医生'}</Text>
           </View>
           <View style={styles.infoRow}>
             <Icon name="calendar" size={18} color={Colors.textSecondary} />
-            <Text style={styles.infoText}>日期：2026-08-04</Text>
+            <Text style={styles.infoText}>日期：{record?.planned_date || '--'}</Text>
           </View>
           <View style={styles.infoRow}>
             <Icon name="clock-outline" size={18} color={Colors.textSecondary} />
-            <Text style={styles.infoText}>时长：25 分钟</Text>
+            <Text style={styles.infoText}>
+              时长：{formatDuration(record?.actual_start_time, record?.actual_end_time)}
+            </Text>
           </View>
           <View style={styles.infoRow}>
             <Icon name="hospital-building" size={18} color={Colors.textSecondary} />
-            <Text style={styles.infoText}>地点：肿瘤科门诊</Text>
+            <Text style={styles.infoText}>
+              状态：{record?.status === 'completed' ? '拜访已完成' : record?.status}
+            </Text>
           </View>
         </View>
 
@@ -66,26 +121,53 @@ export default function VisitDetailScreen() {
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.cardTitle}>AI 拜访总结</Text>
           <View style={styles.summaryBox}>
-            <Text style={styles.summaryText}>
-              本次拜访围绕产品最新临床数据展开讨论。医生对疗效数据表示认可，但提出了安全性方面的顾虑。建议下次拜访准备更详细的安全性数据对比。
-            </Text>
+            <Text style={styles.summaryText}>{summary?.summary || '暂无 AI 总结'}</Text>
           </View>
+          {summary?.next_visit_recommendation ? (
+            <Text style={styles.nextRecommend}>
+              下次拜访建议：{summary.next_visit_recommendation}
+            </Text>
+          ) : null}
         </View>
 
         {/* 关键发现 */}
-        <View style={[styles.card, Shadow.card]}>
-          <Text style={styles.cardTitle}>关键发现</Text>
-          {[
-            '医生对III期临床数据非常感兴趣',
-            '安全性是主要顾虑点',
-            '价格敏感度较高',
-          ].map((point, i) => (
-            <View key={i} style={styles.bulletRow}>
-              <View style={styles.bullet} />
-              <Text style={styles.bulletText}>{point}</Text>
-            </View>
-          ))}
-        </View>
+        {keyPoints.length > 0 && (
+          <View style={[styles.card, Shadow.card]}>
+            <Text style={styles.cardTitle}>关键发现</Text>
+            {keyPoints.map((point, i) => (
+              <View key={i} style={styles.bulletRow}>
+                <View style={styles.bullet} />
+                <Text style={styles.bulletText}>{point}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* 兴趣点 */}
+        {interests.length > 0 && (
+          <View style={[styles.card, Shadow.card]}>
+            <Text style={styles.cardTitle}>兴趣点</Text>
+            {interests.map((point, i) => (
+              <View key={i} style={styles.bulletRow}>
+                <View style={styles.bullet} />
+                <Text style={styles.bulletText}>{point}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* 异议 */}
+        {objections.length > 0 && (
+          <View style={[styles.card, Shadow.card]}>
+            <Text style={styles.cardTitle}>异议</Text>
+            {objections.map((point, i) => (
+              <View key={i} style={styles.bulletRow}>
+                <View style={styles.bullet} />
+                <Text style={styles.bulletText}>{point}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -121,6 +203,9 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md, borderLeftWidth: 4, borderLeftColor: Colors.primary,
   },
   summaryText: { fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 24, fontStyle: 'italic' },
+  nextRecommend: {
+    marginTop: Spacing.md, fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22,
+  },
   bulletRow: {
     flexDirection: 'row', alignItems: 'flex-start',
     gap: Spacing.sm, paddingVertical: Spacing.xs,
@@ -130,4 +215,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   bulletText: { fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 22, flex: 1 },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
 });

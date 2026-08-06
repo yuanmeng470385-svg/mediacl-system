@@ -46,6 +46,13 @@ describe('visitAPI', () => {
     expect(c.url).toContain('date_to=2026-08-05');
     expect(c.url).not.toContain('start_date');
   });
+
+  it('getById 发 GET /api/v1/visits/{id}（详情页数据源）', async () => {
+    await visitAPI.getById(123);
+    const c = lastCall();
+    expect(c.url).toContain('/api/v1/visits/123');
+    expect(c.method).toBe('GET');
+  });
 });
 
 describe('specialistAPI', () => {
