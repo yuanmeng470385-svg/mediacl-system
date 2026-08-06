@@ -42,6 +42,41 @@ async def get_specialist(
 
 # ==================== 核心接口：与专员对话 ====================
 
+def _persist_conversation(db, user_id: int, specialist_id: int,
+                          question: str, result: dict):
+    """落库问答两行，返回 assistant 行 id（反馈/收藏的主键）。
+
+    入库失败不影响 chat 主流程 —— 返回 None，前端据此禁用反馈/收藏。
+    """
+    from app.models.conversation import Conversation
+    try:
+        conv = Conversation(
+            user_id=user_id,
+            specialist_id=specialist_id,
+            session_id=result.get("session_id"),
+            role="user",
+            content=question,
+        )
+        db.add(conv)
+        conv_ai = Conversation(
+            user_id=user_id,
+            specialist_id=specialist_id,
+            session_id=result.get("session_id"),
+            role="assistant",
+            content=result.get("answer", ""),
+            citations=result.get("citations"),
+            compliance_result={"blocked": result.get("blocked")},
+            latency_ms=result.get("latency_ms"),
+        )
+        db.add(conv_ai)
+        db.commit()
+        return conv_ai.id
+    except Exception as e:
+        logger.error(f"对话记录入库失败: {e}")
+        db.rollback()
+        return None
+
+
 @router.post("/{specialist_id}/chat")
 async def chat_with_specialist(
     specialist_id: int,
@@ -64,6 +99,7 @@ async def chat_with_specialist(
             "request_id": "...",
             "latency_ms": 1234,
             "blocked": false,
+            "conversation_id": 42,
             "violations": []
         }}
     """
@@ -94,31 +130,10 @@ async def chat_with_specialist(
         session_id=session_id,
     )
 
-    # 对话记录入库
-    try:
-        from app.models.conversation import Conversation
-        conv = Conversation(
-            user_id=current_user["id"],
-            specialist_id=specialist_id,
-            session_id=result.get("session_id"),
-            role="user",
-            content=question,
-        )
-        db.add(conv)
-        conv_ai = Conversation(
-            user_id=current_user["id"],
-            specialist_id=specialist_id,
-            session_id=result.get("session_id"),
-            role="assistant",
-            content=result.get("answer", ""),
-            citations=result.get("citations"),
-            compliance_result={"blocked": result.get("blocked")},
-            latency_ms=result.get("latency_ms"),
-        )
-        db.add(conv_ai)
-        db.commit()
-    except Exception as e:
-        logger.error(f"对话记录入库失败: {e}")
+    # 对话记录入库 —— conversation_id 是前端反馈/收藏的主键
+    result["conversation_id"] = _persist_conversation(
+        db, current_user["id"], specialist_id, question, result
+    )
 
     return success(result)
 
