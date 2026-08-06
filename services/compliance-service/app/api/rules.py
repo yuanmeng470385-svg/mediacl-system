@@ -23,6 +23,78 @@ logger = logging.getLogger(__name__)
 checker = get_checker()
 
 
+# ==================== 规则字段校验 ====================
+# 审计 M29/M30：create/update 不做字段校验时，rule_type/action/severity 拼错会被
+# checker 静默吞掉（规则永不生效），patterns 传字符串会被逐字符展开成单字符匹配
+# （几乎全量误拦）—— 一律在入库前校验，非法值抛 ParamError(400) 中文提示。
+
+VALID_RULE_TYPES = ("keyword", "regex", "semantic")
+VALID_ACTIONS = ("reject", "warn", "log")
+VALID_SEVERITIES = ("high", "medium", "low")
+
+
+def _extract_patterns(data: dict):
+    """提取匹配模式列表：content.patterns 优先，兼容顶层 patterns 直传"""
+    content = data.get("content")
+    if isinstance(content, dict) and "patterns" in content:
+        return content["patterns"]
+    if "patterns" in data:
+        return data["patterns"]
+    return None
+
+
+def _validate_rule_fields(data: dict, partial: bool = False) -> None:
+    """校验合规规则字段（create/update 共用），非法值抛 ParamError(400)。
+
+    partial=False（新增）时 keyword/regex 规则必须提供非空 patterns；
+    正则规则的 pattern 必须能编译通过，否则 checker 会静默剔除该条规则。
+    """
+    import re as _re
+
+    rule_type = data.get("rule_type")
+    if rule_type is not None:
+        if not isinstance(rule_type, str) or rule_type not in VALID_RULE_TYPES:
+            raise ParamError(
+                f"rule_type 取值非法: {rule_type!r}，仅支持 {', '.join(VALID_RULE_TYPES)}"
+            )
+    elif not partial:
+        rule_type = "keyword"  # 与 create 默认值保持一致
+
+    action = data.get("action")
+    if action is not None:
+        if not isinstance(action, str) or action not in VALID_ACTIONS:
+            raise ParamError(
+                f"action 取值非法: {action!r}，仅支持 {', '.join(VALID_ACTIONS)}"
+            )
+
+    severity = data.get("severity")
+    if severity is not None:
+        if not isinstance(severity, str) or severity not in VALID_SEVERITIES:
+            raise ParamError(
+                f"severity 取值非法: {severity!r}，仅支持 {', '.join(VALID_SEVERITIES)}"
+            )
+
+    patterns = _extract_patterns(data)
+    if patterns is not None:
+        if not isinstance(patterns, list) or not patterns:
+            raise ParamError(
+                "content.patterns 必须是非空字符串数组（示例: [\"包治百病\", \"100%有效\"]）"
+            )
+        for p in patterns:
+            if not isinstance(p, str) or not p.strip():
+                raise ParamError("content.patterns 的每一项必须是非空字符串")
+
+    if rule_type in ("keyword", "regex") and not patterns and not partial:
+        raise ParamError(f"{rule_type} 类型规则必须提供非空的 content.patterns 匹配模式")
+
+    if rule_type == "regex" and patterns:
+        for p in patterns:
+            try:
+                _re.compile(p)
+            except _re.error as exc:
+                raise ParamError(f"正则规则 pattern {p!r} 编译失败: {exc}")
+
+
 # ==================== 合规检查（核心接口） ====================
 
 @router.post("/check")
@@ -126,14 +198,24 @@ async def create_rule(
     rule_name = (request.get("rule_name") or "").strip()
     if not rule_code or not rule_name:
         raise ParamError("rule_code 和 rule_name 不能为空")
+    _validate_rule_fields(request, partial=False)
+
+    content = request.get("content")
+    if not isinstance(content, dict):
+        content = {}
+    patterns = _extract_patterns(request)
+    if patterns is not None and "patterns" not in content:
+        content = {**content, "patterns": patterns}
+
     rule = ComplianceRule(
         rule_code=rule_code,
         rule_name=rule_name,
         rule_type=request.get("rule_type") or "keyword",
-        content=request.get("content", {}),
+        content=content,
         severity=request.get("severity", "high"),
         action=request.get("action", "reject"),
         description=request.get("description", ""),
+        enabled=request["enabled"] if "enabled" in request else True,
         created_by=current_user["id"],
     )
     db.add(rule)
@@ -160,6 +242,9 @@ async def update_rule(
     rule = db.query(ComplianceRule).filter(ComplianceRule.id == rule_id).first()
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
+
+    # 按"编辑后的合并结果"整体校验：防止改类型/改 patterns 时留下非法规则
+    _validate_rule_fields({**rule.to_dict(), **request}, partial=False)
 
     changed_fields = ["rule_name", "rule_type", "content", "severity", "action", "description", "enabled"]
     before_value = {f: getattr(rule, f) for f in changed_fields if f in request}
