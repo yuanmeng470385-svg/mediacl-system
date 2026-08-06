@@ -101,7 +101,8 @@ async def get_hcp_interactions(
 ):
     """互动历史（读 visit-service 的拜访记录）"""
     _get_hcp_or_404(db, hcp_id)
-    return success({"items": list_interactions(db, hcp_id)})
+    # 契约：返回裸数组（web/mobile 两端均按数组解包，勿再包 {items: ...}）
+    return success(list_interactions(db, hcp_id))
 
 
 # ==================== 新增 & 编辑 ====================
