@@ -273,6 +273,8 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 ## Real-time ASR（实时转写）
 
+> 配齐 NLS/百炼 key 后的真机联调步骤、待确认点与排障手册见 `docs/real-device-runbook.md`（真机需把 mobile 三个 host 常量从 10.0.2.2 改为宿主机局域网 IP）。
+
 实时转写链路已改用**阿里云实时语音识别**（听悟是离线批处理+3s 轮询，达不到方案的 <2s）：
 
 - 服务端：`visit-service/app/services/realtime_asr.py`（`RealtimeAsrClient`：AK/SK 签名换 NLS 临时 Token → `wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1?token=` → StartTranscription → 二进制 PCM 推流 → SentenceBegin/ResultChanged/SentenceEnd 事件；`enable_intermediate_result=true` 实时出字）。未配置 `NLS_APPKEY` 自动降级 `MockRealtimeAsrClient`（模拟文本，可联调）。
