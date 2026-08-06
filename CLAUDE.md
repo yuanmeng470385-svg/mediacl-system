@@ -144,7 +144,7 @@ GET  /api/v1/auth/me          (Bearer token)                        → user    
 
 约定：
 - 错误信息统一模糊化（不区分"用户不存在"和"凭证错误"），避免账号枚举。
-- 验证码一次性、5 分钟过期、60 秒重发冷却、单码最多校验 5 次。
+- 验证码一次性、5 分钟过期、60 秒重发冷却、单码最多校验 5 次（第 5 次仍有效，之后作废；用尽后响应文案与通用登录失败一致，防注册状态枚举）。
 - `users.password_hash` 为 NULL 表示未设密码，任何密码都登录不了。用 `scripts/seed_admin.py` 设置。
 - `profile`/`me` 每次从库里重读用户，被停用的账号即便持有有效 token 也会被拒。
 - 短信通道可插拔（`app/services/sms.py`）：默认 `console` 只写日志；阿里云通道已实现（`AliyunSmsSender` 走 dysmsapi，缺 `AUTH_SMS_SIGN_NAME`/`AUTH_SMS_TEMPLATE_CODE` 或 `ALIYUN_ACCESS_KEY_ID`/`SECRET` 时构造即抛 `SmsSendError` fail-fast；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效，模板变量固定为 `{"code": ...}`）。
@@ -157,11 +157,12 @@ GET  /api/v1/auth/me          (Bearer token)                        → user    
 # INTERNAL_PATHS —— 免 JWT，但必须带 X-Internal-Key 头（否则 403）
 POST /api/v1/compliance/check
 POST /api/v1/audit/log
-POST /api/v1/knowledge/search
+POST /api/v1/hcps/profile-update
 # PUBLIC_PATHS —— 真正公开（免 JWT 免 key）
 POST /api/v1/auth/login
 POST /api/v1/auth/send-code
 ```
+（2026-08-06：`/api/v1/knowledge/search` 已移出 INTERNAL_PATHS —— 它是 web 检索的用户向接口，服务端挂 JWT 鉴权；`hcps/profile-update` 是 visit→hcp 的内部接口，双重校验齐全。）
 
 - 内部接口是**双重校验**：网关要求 `X-Internal-Key`（`shared/common/internal_auth.py`），服务端路由还挂 `Depends(require_internal_key)` —— 防 8001-8006 端口直连绕过（历史上 audit/log 可被未认证者直接伪造）。
 - 服务间客户端统一用 `internal_headers()` 加头（auth/specialist/visit/hcp 的 audit_client、compliance_client 都已接）。
@@ -237,12 +238,15 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 代理到网关 `localhost:8000`（`vite.config.ts`），生产由反代同路径转发。
 
-8 模块 10 路由（`web/src/constants/routes.ts`，懒加载）：仪表盘 `/dashboard`、数字专员 `/specialist/list` + `/specialist/create`、知识库 `/knowledge/list`、合规规则 `/compliance/list`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、系统配置 `/system/config`。
+9 模块 11 路由（`web/src/constants/routes.ts`，懒加载）：仪表盘 `/dashboard`、数字专员 `/specialist/list` + `/specialist/create`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、系统配置 `/system/config`。
 
-API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。
+API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。非 401 的 4xx（含 403）由拦截器统一弹后端 message。
 
-**已知问题（页面存在 ≠ 功能已实现）**：
-- 部分操作（系统配置保存、上传等）只弹 toast，无真实调用。
+**已知问题（2026-08-06 审计修复后，页面均已真实接线）**：
+- 仪表盘：风险热力图（区域 × 近 7 天拦截量，数据来自 `GET /api/v1/compliance/blocks/stats`）、实时动态（审计日志 5s 轮询）、网关状态卡（真实探活 `/health`）
+- 专员页：列表分页 + 创建/编辑/启停真实调用 + "数据"抽屉（stats）；知识库页：上传/审核/详情真实调用
+- 系统配置页：只读展示配置状态（`GET /api/v1/system/config`，admin），配置经 .env 环境变量管理，不支持在线保存
+- 新增端点：`/compliance/blocks/stats?days=N`（region join 失败自动降级 service 维度）、`/compliance/blocks/{id}`（完整内容+context）、`/system/config`（仅返回配置状态布尔，绝不返回密钥值）
 
 ## Frontend — mobile/（React Native 移动端）
 
@@ -255,15 +259,16 @@ cd mobile/android && ./gradlew assembleDebug          # 出 app-debug.apk
 cd mobile && npx react-native start                   # Metro（Node v25 实测可用）
 adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（契约测试 11 用例锁 URL/method/body/响应形状）
+# 测试：cd mobile && npx jest（48 用例：契约/WS/ASR/日期，锁 URL/method/body/响应形状）
 ```
 
-结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
+结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
 
-**已知问题（2026-08-06 三批实施后）**：
-- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮仅提示（无拜访上下文，避免伪造 visit）。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测。
-- HelpCenter 屏仍零后端调用（其余四屏已接真实数据/持久化）。
+**已知问题（2026-08-06 第四批后）**：
+- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮仅提示 stub（待 NLS 配置后接线）。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测；"录完突发推流 + 立即 stop"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏。
+- 说话人标签已渲染（ASR 帧 speaker 字段，rep/doctor，缺省 rep）；服务端 NLS 分离参数名（enable_speaker_identity/speaker_diarization）待真机确认。
 - 聊天 WS 流式已接（走网关 8000），未配真实百炼 key 时未做模拟器端到端冒烟。
+- HelpCenter 已接合规规则接口（红线清单真实数据，reject 类规则）；联系方式仍为静态占位。
 - iOS 未实际构建验证（本机无 Xcode；moduleName 已对齐，首次构建需实测）。
 
 ## Real-time ASR（实时转写）
@@ -296,10 +301,21 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
 - 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
-- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key；"录完突发推流"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
+- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；ASR/聊天 WS 未真机联调（模拟器无麦克风，E2E 冒烟需真实百炼 key）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - 网关限流为单进程内存版（--workers 2 时每 worker 独立限额）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
+
+**审计确认的技术债（2026-08-06，勿误以为已修）**：
+- **听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）
+- **流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）
+- **收藏多轮错配**：`conversations.py:77-82` 收藏锚定某轮 assistant 行，但 question/answer 取 session 第一条 → 多轮会话收藏展示错对问答
+- **无整体超时熔断**：bailian_client 每帧 wait_for 30s × 60 帧上限，最坏单条 chat 可挂约 30 分钟；证据等级为被动正则，降级（qwen）模式恒 None
+- **hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）；**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
+- **knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环；PG 'simple' 分词不切中文（ts_rank 恒 0）
+- **compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）；warn/log 违规也计入拦截计数
+- **audit 导出 1 万条静默截断**（logs.py:155）、`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）；`AUDIT_LOG_RETENTION_DAYS` 死配置
+- 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
 ## Gotchas
 
