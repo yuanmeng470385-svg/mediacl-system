@@ -13,6 +13,7 @@
 配置（.env）：
   - NLS_APPKEY：NLS 管控台项目 Appkey（必填）
   - ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET：换取临时 Token（已有）
+  - NLS_SPEAKER_ENABLED：1 时开启说话人分离（需求 2.2.2"双方分离"，默认关闭）
 未配置 NLS_APPKEY 时使用 MockRealtimeAsrClient（文本模拟，开发/测试用）。
 """
 
@@ -36,8 +37,14 @@ logger = logging.getLogger(__name__)
 NLS_WS_URL = os.getenv("NLS_WS_URL", "wss://nls-gateway.cn-shanghai.aliyuncs.com/ws/v1")
 NLS_TOKEN_URL = os.getenv("NLS_TOKEN_URL", "https://nls-meta.cn-shanghai.aliyuncs.com/api/v1/token")
 
-# 断句完成的回调签名：async def on_sentence(text: str, index: int, is_final: bool)
-SentenceHandler = Callable[[str, int, bool], Awaitable[None]]
+# 断句完成的回调签名：async def on_sentence(text: str, index: int, is_final: bool, speaker=None)
+# speaker：说话人信息（Mock 固定 "rep"；真实 NLS 为 speaker_id/channel 原始值，由上层映射）
+SentenceHandler = Callable[[str, int, bool, Optional[str]], Awaitable[None]]
+
+
+def nls_speaker_enabled() -> bool:
+    """NLS_SPEAKER_ENABLED → 是否开启说话人分离（1/true/yes/on 视为开启，默认关闭）"""
+    return os.getenv("NLS_SPEAKER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ==================== 临时 Token（阿里云通用 RPC 签名） ====================
@@ -117,6 +124,27 @@ class RealtimeAsrClient:
         self._message_id += 1
         return f"{self._task_id}-{self._message_id}"
 
+    def _build_start_payload(self) -> dict:
+        """StartTranscription 请求参数（说话人分离受 NLS_SPEAKER_ENABLED 控制）"""
+        payload = {
+            "format": "PCM",
+            "sample_rate": 16000,
+            "enable_intermediate_result": True,   # 边说边出字（关键：<2s 实时）
+            "enable_punctuation_prediction": True,
+            "enable_inverse_text_normalization": True,
+            "max_sentence_silence": 800,
+        }
+        if nls_speaker_enabled():
+            # 说话人分离（需求 2.2.2"双方分离"）：
+            #   enable_speaker_identity=true 开启说话人分离；
+            #   speaker_diarization="speaker_change_detection" 按说话人变化断句
+            #   （也可填 "2-8" 指定说话人数范围）。
+            # 注意：参数名/取值以阿里云 NLS 实时识别（SpeechTranscriber）文档为准；
+            # 无真实 NLS 环境，此处待真机确认，如与文档不符仅需改本方法。
+            payload["enable_speaker_identity"] = True
+            payload["speaker_diarization"] = "speaker_change_detection"
+        return payload
+
     async def start(self, on_sentence: SentenceHandler) -> None:
         """建立连接并发送 StartTranscription。返回后即可 feed 音频。"""
         if not self.app_key:
@@ -132,14 +160,7 @@ class RealtimeAsrClient:
                 "namespace": "SpeechTranscriber",
                 "name": "StartTranscription",
             },
-            "payload": {
-                "format": "PCM",
-                "sample_rate": 16000,
-                "enable_intermediate_result": True,   # 边说边出字（关键：<2s 实时）
-                "enable_punctuation_prediction": True,
-                "enable_inverse_text_normalization": True,
-                "max_sentence_silence": 800,
-            },
+            "payload": self._build_start_payload(),
         }
         await self._ws.send(json.dumps(start_msg))
 
@@ -167,21 +188,37 @@ class RealtimeAsrClient:
         self._listener = asyncio.create_task(self._listen(on_sentence))
 
     async def _listen(self, on_sentence: SentenceHandler) -> None:
-        """接收 NLS 事件：中间结果 / 断句完成 → 回调"""
+        """接收 NLS 事件：中间结果 / 断句完成 → 回调（说话人信息透传）
+
+        SentenceBegin / TranscriptionResultChanged / SentenceEnd 的 payload
+        若含 speaker_id（说话人分离开启时）或 channel 信息，随回调透传，
+        由上层（asr_ws）映射为 "rep"/"doctor"。
+        """
+        current_speaker = None  # 当前句的说话人信息（SentenceBegin 携带，结果事件兜底）
         try:
             async for frame in self._ws:
                 if isinstance(frame, str):
                     evt = json.loads(frame)
                     name = evt.get("header", {}).get("name")
                     payload = evt.get("payload", {})
-                    if name == "TranscriptionResultChanged":
+                    if name == "SentenceBegin":
+                        current_speaker = payload.get("speaker_id")
+                        if current_speaker is None:
+                            current_speaker = payload.get("channel")
+                    elif name == "TranscriptionResultChanged":
                         text = payload.get("result", "")
                         if text and on_sentence:
-                            await on_sentence(text, payload.get("index", 0), False)
+                            await on_sentence(
+                                text, payload.get("index", 0), False,
+                                self._event_speaker(payload, current_speaker),
+                            )
                     elif name == "SentenceEnd":
                         text = payload.get("result", "")
                         if text and on_sentence:
-                            await on_sentence(text, payload.get("index", 0), True)
+                            await on_sentence(
+                                text, payload.get("index", 0), True,
+                                self._event_speaker(payload, current_speaker),
+                            )
                     elif name == "TranscriptionCompleted":
                         logger.info(f"实时转写完成: task_id={self._task_id}")
                         break
@@ -190,6 +227,16 @@ class RealtimeAsrClient:
                         break
         except Exception as exc:
             logger.error(f"NLS 事件监听异常: {exc}")
+
+    @staticmethod
+    def _event_speaker(payload: dict, fallback):
+        """事件 payload 中的说话人信息：speaker_id 优先，channel 兜底，再退回句首值"""
+        speaker = payload.get("speaker_id")
+        if speaker is None:
+            speaker = payload.get("channel")
+        if speaker is None:
+            speaker = fallback
+        return speaker
 
     async def feed(self, audio_chunk: bytes) -> None:
         """推送一段 PCM 音频（16k/16bit/单声道）到 NLS"""
@@ -246,13 +293,13 @@ class MockRealtimeAsrClient:
         self._index = 0
 
     async def feed(self, audio_chunk: bytes) -> None:
-        # 模拟：每推送一段音频，产生一条增量+断句
+        # 模拟：每推送一段音频，产生一条增量+断句（无真实说话人信息 → 固定 rep）
         if getattr(self, "_on_sentence", None) and self._index < len(self.sentences):
             text = self.sentences[self._index]
             self._index += 1
             await asyncio.sleep(self.interval)
-            await self._on_sentence(text, self._index, False)
-            await self._on_sentence(text, self._index, True)
+            await self._on_sentence(text, self._index, False, "rep")
+            await self._on_sentence(text, self._index, True, "rep")
 
     async def finish(self) -> None:
         pass

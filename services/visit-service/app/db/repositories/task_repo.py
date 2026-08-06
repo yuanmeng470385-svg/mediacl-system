@@ -9,13 +9,39 @@ from app.models.task import Task
 
 logger = logging.getLogger(__name__)
 
-# channel → task_type 映射（follow_up_items 落库时用）
+# channel → task_type 映射（follow_up_items 落库时用；end_visit 的
+# follow_up_suggestions 是纯文本，按 _CHANNEL_KEYWORDS 子串推断通道后走同一映射）
 CHANNEL_TYPE_MAP = {
+    # 通道词（AI 输出的 channel 字段精确匹配）
     "下次拜访": "book_appointment",
     "邮件": "email",
     "电话": "call",
     "微信": "send_material",
+    # 动作词（end_visit follow_up_suggestions 文本推断；长词优先匹配，
+    # 如"电话随访"先于"电话"、"发送资料"先于"资料"）
+    "电话随访": "call",
+    "随访": "call",
+    "发送资料": "send_material",
+    "发资料": "send_material",
+    "寄送资料": "send_material",
+    "发送文献": "send_material",
+    "约时间": "book_appointment",
+    "预约": "book_appointment",
+    "拜访": "book_appointment",
+    "发邮件": "email",
+    "资料": "send_material",
 }
+
+# 文本推断用关键词：按长度降序（长词优先，避免短词抢在长词前误匹配）
+_CHANNEL_KEYWORDS = sorted(CHANNEL_TYPE_MAP, key=len, reverse=True)
+
+
+def infer_channel(text: str) -> Optional[str]:
+    """从动作文本推断通道词（长词优先子串匹配），无匹配返回 None"""
+    for keyword in _CHANNEL_KEYWORDS:
+        if keyword in text:
+            return keyword
+    return None
 
 
 class TaskRepo:

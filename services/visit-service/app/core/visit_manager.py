@@ -82,7 +82,7 @@ def _parse_json_content(content: str) -> Optional[dict]:
         return None
 
 
-from app.db.repositories.task_repo import TaskRepo, CHANNEL_TYPE_MAP
+from app.db.repositories.task_repo import TaskRepo, CHANNEL_TYPE_MAP, infer_channel
 
 
 def _parse_follow_up_items(items: list, visit_id: int, user_id: int) -> list:
@@ -106,6 +106,64 @@ def _parse_follow_up_items(items: list, visit_id: int, user_id: int) -> list:
             "task_type": CHANNEL_TYPE_MAP.get(channel, "follow_up"),
             "due_date": due_date,
             "channel": channel or None,
+        })
+    return parsed
+
+
+def _parse_end_visit_tasks(follow_up: list, next_plan: dict) -> list:
+    """把 end_visit 结构化结果（follow_up_suggestions + next_visit_plan）归一化为 tasks 行数据
+
+    形状与 _parse_follow_up_items 一致（title/description/task_type/due_date/channel）：
+      - follow_up_suggestions：逐条文本建任务，按动作词推断通道/类型，映射失败仍创建
+        （默认类型 follow_up + 原文标题）
+      - next_visit_plan.recommended_time：建"预约下次拜访"任务（时间作 due_date）
+      - next_visit_plan.materials_to_send：逐条建"发送资料：xxx"任务
+    """
+    parsed = []
+    for suggestion in follow_up or []:
+        if not isinstance(suggestion, str):
+            continue
+        action = suggestion.strip()
+        if not action:
+            continue
+        channel = infer_channel(action)
+        parsed.append({
+            "title": action,
+            "description": None,
+            "task_type": CHANNEL_TYPE_MAP.get(channel, "follow_up"),
+            "due_date": None,
+            "channel": channel,
+        })
+
+    plan = next_plan or {}
+    if not isinstance(plan, dict):
+        plan = {}
+    due_raw = str(plan.get("recommended_time") or "").strip()
+    due_date = None
+    if due_raw:
+        try:
+            due_date = date.fromisoformat(due_raw)
+        except ValueError:
+            due_date = None
+    topics = plan.get("recommended_topics") or []
+    if due_date or topics:
+        parsed.append({
+            "title": f"预约下次拜访（{due_raw}）" if due_date else "预约下次拜访",
+            "description": "；".join(str(t) for t in topics) if topics else None,
+            "task_type": "book_appointment",
+            "due_date": due_date,
+            "channel": "下次拜访",
+        })
+    for material in plan.get("materials_to_send") or []:
+        m = str(material).strip()
+        if not m:
+            continue
+        parsed.append({
+            "title": f"发送资料：{m}",
+            "description": m,
+            "task_type": "send_material",
+            "due_date": None,
+            "channel": "发送资料",
         })
     return parsed
 
@@ -415,6 +473,27 @@ class VisitManager:
 
     # ==================== 拜访后：结构化记录 & 跟进建议 ====================
 
+    def _create_tasks_idempotent(self, db: Session, visit_id: int, user_id: int, items: list) -> list:
+        """按 visit_id 幂等创建任务：该 visit 已有任务（end_visit / follow-up 任一先建过）则跳过
+
+        与 /follow-up 端点共用同一去重规则 —— end_visit 自动建任务后再调
+        /follow-up 不会重复建（审计 M20：follow-up 无去重可重复建任务）。
+        单条创建失败不影响其余任务（失败记日志，主流程不阻塞）。
+        """
+        if TaskRepo.list_by_visit(db, visit_id):
+            logger.info("visit %s 已有任务，跳过自动创建（按 visit_id 幂等）", visit_id)
+            return []
+        created = []
+        for item in items:
+            try:
+                task = TaskRepo.create(db, visit_id, user_id, item)
+                created.append(task.id)
+            except Exception as exc:
+                logger.error("任务创建失败: %s", exc)
+        if created:
+            logger.info("visit %s 自动创建任务 %s 条: %s", visit_id, len(created), created)
+        return created
+
     async def end_visit(
         self,
         db: Session,
@@ -515,6 +594,13 @@ class VisitManager:
             ai_prompt=prompt[:2000], ai_response=ai_summary[:2000],
             compliance_result=compliance,
         )
+        # 自动创建后续任务（必做项 需求 2.2.2"任务创建，自动创建后续任务"）：
+        # 结构化记录生成成功 → follow_up_suggestions / next_visit_plan 中的动作落库为任务。
+        # AI 失败（占位串）/ 合规拦截路径 follow_up/next_plan 已为空 → 不建任务；
+        # 按 visit_id 幂等（重复 end 重试不重复建），与 /follow-up 端点共用同一去重
+        if structured:
+            items = _parse_end_visit_tasks(follow_up, next_plan)
+            self._create_tasks_idempotent(db, visit_id, user_id, items)
         # 医生画像更新（必做项）：基于本次拜访的 AI 结构化结果
         if structured:
             await _push_profile_update(record.hcp_id, structured, visit_id)
@@ -553,17 +639,13 @@ class VisitManager:
         result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
         parsed = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
 
-        # 自动创建后续任务（必做项）：AI 建议逐条落库，失败不影响主流程
+        # 自动创建后续任务（必做项）：AI 建议逐条落库，失败不影响主流程；
+        # 按 visit_id 幂等（end_visit 已自动建过则跳过，避免重复任务）
         follow_up_items = (parsed.get("follow_up_items") or []) if isinstance(parsed, dict) else []
-        created = []
-        for item in _parse_follow_up_items(follow_up_items, visit_id, user_id):
-            try:
-                task = TaskRepo.create(db, visit_id, user_id, item)
-                created.append(task.id)
-            except Exception as exc:
-                logger.error("任务创建失败: %s", exc)
-        if created:
-            logger.info("visit %s 自动创建任务 %s 条: %s", visit_id, len(created), created)
+        self._create_tasks_idempotent(
+            db, visit_id, user_id,
+            _parse_follow_up_items(follow_up_items, visit_id, user_id),
+        )
 
         await write_audit_log(
             user_id=user_id, action="visit_follow_up",

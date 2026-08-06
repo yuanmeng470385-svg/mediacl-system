@@ -6,6 +6,7 @@ import os
 import sys
 import asyncio
 import json
+from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
@@ -124,9 +125,11 @@ class _FakeResult:
             rows = [{"id": 10, "name": "肿瘤专员-小K"}]
         elif "visit_records" in s:
             uid = self._params.get("user_id")
-            # 与 _HISTORY_SQL 一致：hcp + user 双过滤，且仅已完成（有 ai_summary）的记录
+            # 与 _HISTORY_SQL 一致：hcp + user 双过滤，且仅已完成（有 ai_summary）的记录；
+            # 只取 VisitRecord（FakeDb 同库存有 Task，需按类型隔离）
             rows = [r.to_dict() for r in FakeDb._records.values()
-                    if r.hcp_id == pid and r.user_id == uid and r.ai_summary is not None][:3]
+                    if isinstance(r, VisitRecord)
+                    and r.hcp_id == pid and r.user_id == uid and r.ai_summary is not None][:3]
         else:
             rows = []
         return _Mappings(rows)
@@ -175,6 +178,16 @@ async def _fake_specialist_previsit(specialist_id, question, user_id, session_id
 
 async def _fake_compliance_ok(content, context=None):
     return {"blocked": False, "violations": [], "risk_level": "none"}
+
+async def _fake_specialist_followup(specialist_id, question, user_id, session_id=None, auth_token=None):
+    """follow-up 专用：返回带 follow_up_items 的跟进建议"""
+    return {"answer": json.dumps({
+        "follow_up_items": [
+            {"action": "微信发送文献包", "due": "2026-08-12", "channel": "微信"},
+            {"action": "预约下次拜访", "due": "2026-09-01", "channel": "下次拜访"},
+        ],
+        "reminders": ["带 III 期文献"],
+    }), "blocked": False, "session_id": "test-session"}
 
 
 async def _fake_compliance_blocked(content, context=None):
@@ -487,3 +500,139 @@ def test_prepare_visit_history_scoped_to_current_user():
     r2 = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=2, product_id=1))
     assert len(r2["history"]) == 1, f"user2 应只看到自己 1 条历史，实际 {len(r2['history'])} 条"
     assert r2["history"][0]["ai_summary"] == "用户2专属拜访总结"
+
+
+# ---------- 修复：end_visit 自动创建后续任务（需求 2.2.2，按 visit_id 幂等） ----------
+
+def test_end_visit_auto_creates_tasks():
+    """end_visit 结构化记录成功 → follow_up_suggestions / next_visit_plan 自动落库为任务"""
+    from app.core.visit_manager import VisitManager
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+
+    tasks = TaskRepo.list_by_visit(db, visit_id)
+    assert len(tasks) == 4, f"应自动建 4 条任务，实际 {[t.title for t in tasks]}"
+    titles = {t.title for t in tasks}
+    # follow_up_suggestions 逐条建任务（动作词推断通道，映射失败仍建默认类型）
+    assert "发送III期文献" in titles          # 无动作词匹配 → 默认 follow_up
+    assert "预约下周电话随访" in titles       # "电话随访" → call
+    follow_up_call = [t for t in tasks if t.title == "预约下周电话随访"][0]
+    assert follow_up_call.task_type == "call"
+    # next_visit_plan.recommended_time → 预约任务（带 due_date）
+    booking = [t for t in tasks if t.task_type == "book_appointment"]
+    assert len(booking) == 1
+    assert booking[0].due_date == date(2026, 8, 10)
+    assert booking[0].channel == "下次拜访"
+    # next_visit_plan.materials_to_send → 发送资料任务
+    material = [t for t in tasks if t.title == "发送资料：文献包"]
+    assert len(material) == 1 and material[0].task_type == "send_material"
+
+
+def test_end_visit_ai_failure_creates_no_tasks_then_retry_creates():
+    """AI 失败（占位串路径）不建任务；重试成功后建任务"""
+    from app.core.visit_manager import VisitManager
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+
+    vm_module.chat_with_specialist = _fake_specialist_fail
+    try:
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert TaskRepo.list_by_visit(db, visit_id) == [], "AI 失败路径不应建任务"
+
+        # AI 恢复重试成功 → 建任务
+        vm_module.chat_with_specialist = _fake_specialist_ok
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert len(TaskRepo.list_by_visit(db, visit_id)) > 0
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
+def test_end_visit_compliance_blocked_creates_no_tasks():
+    """合规拦截 AI 总结 → follow_up/next_plan 清空，不建任务"""
+    from app.core.visit_manager import VisitManager
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+
+    vm_module.check_compliance = _fake_compliance_blocked
+    try:
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert TaskRepo.list_by_visit(db, visit_id) == [], "合规拦截路径不应建任务"
+    finally:
+        vm_module.check_compliance = ORIG_COMP
+
+
+def test_follow_up_does_not_duplicate_tasks_after_end_visit():
+    """幂等：end_visit 已自动建任务 → 再调 /follow-up 不重复建（都按 visit_id 去重）"""
+    from app.core.visit_manager import VisitManager
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    before = len(TaskRepo.list_by_visit(db, visit_id))
+    assert before > 0
+
+    vm_module.chat_with_specialist = _fake_specialist_followup
+    try:
+        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+    assert len(TaskRepo.list_by_visit(db, visit_id)) == before, "end_visit 建过任务后 follow-up 不应再建"
+
+
+def test_follow_up_idempotent_on_repeat_calls():
+    """幂等：仅调 /follow-up 建任务后，重复调用不重复建（审计 M20：可重复建任务）"""
+    from app.core.visit_manager import VisitManager
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+
+    vm_module.chat_with_specialist = _fake_specialist_followup
+    try:
+        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
+        first = TaskRepo.list_by_visit(db, visit_id)
+        assert len(first) == 2, f"首次 follow-up 应建 2 条，实际 {[t.title for t in first]}"
+        assert first[0].task_type == "send_material"   # 微信 → send_material
+        assert first[1].task_type == "book_appointment"
+
+        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
+        assert len(TaskRepo.list_by_visit(db, visit_id)) == 2, "重复 follow-up 不应重复建任务"
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
+def test_parse_end_visit_tasks():
+    """end_visit 结构化结果 → tasks 行数据：动作词推断 + 预约/资料任务 + 坏格式跳过"""
+    from app.core.visit_manager import _parse_end_visit_tasks
+    items = _parse_end_visit_tasks(
+        ["发送资料到邮箱", "预约下周电话随访", "   ", 123],
+        {"recommended_time": "2026-08-10", "recommended_topics": ["安全性数据"],
+         "materials_to_send": ["文献包", ""]},
+    )
+    assert len(items) == 4
+    by_title = {it["title"]: it for it in items}
+    # 动作词推断："发送资料到邮箱" 长词优先 → send_material；"预约下周电话随访" → call
+    assert by_title["发送资料到邮箱"]["task_type"] == "send_material"
+    assert by_title["预约下周电话随访"]["task_type"] == "call"
+    assert by_title["预约下次拜访（2026-08-10）"]["task_type"] == "book_appointment"
+    assert by_title["预约下次拜访（2026-08-10）"]["due_date"] == date(2026, 8, 10)
+    assert by_title["发送资料：文献包"]["task_type"] == "send_material"
+
+    # 无推荐时间/话题 → 不建预约任务；无资料 → 不建发送任务
+    items2 = _parse_end_visit_tasks([], {})
+    assert items2 == []
+    items3 = _parse_end_visit_tasks([], {"materials_to_send": []})
+    assert items3 == []
