@@ -5,6 +5,8 @@ import queue as thread_queue
 import threading
 
 import pytest
+import websockets
+import websockets.frames as ws_frames
 from fastapi.testclient import TestClient
 
 from app.main import app, set_upstream_factory
@@ -73,3 +75,31 @@ def test_ws_proxy_双向透传():
             assert json.loads(ws.receive_text())["type"] == "delta"
             fake.to_client.put(("text", json.dumps({"type": "done", "text": "你好", "conversation_id": 1})))
             assert json.loads(ws.receive_text())["type"] == "done"
+
+
+class FakeUpstreamClosing(FakeUpstream):
+    """receive_text 立即抛 ConnectionClosed(close_code)，模拟上游主动带码关闭"""
+
+    def __init__(self, close_code: int):
+        super().__init__()
+        self.close_code = close_code
+
+    async def receive_text(self):
+        raise websockets.exceptions.ConnectionClosed(
+            ws_frames.Close(self.close_code, ""),
+            ws_frames.Close(self.close_code, ""),
+            rcvd_then_sent=False,
+        )
+
+
+@pytest.mark.parametrize("close_code", [4401, 4404, 4500])
+def test_ws_proxy_透传上游关闭码(close_code):
+    """M46：上游 4401/4404/4500 关闭码原样透传给下游，不再被吞成 1000"""
+    fake = FakeUpstreamClosing(close_code)
+    set_upstream_factory(lambda url: fake)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/specialists/1/chat/ws?token=abc") as ws:
+            msg = ws.receive()
+            assert msg["type"] == "websocket.close"
+            assert msg["code"] == close_code

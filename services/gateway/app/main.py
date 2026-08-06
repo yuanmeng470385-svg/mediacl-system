@@ -7,10 +7,8 @@
     /api/v1/compliance/*   → compliance-service (8004)
     /api/v1/audit/*        → audit-service (8005)
     /api/v1/hcps/*         → hcp-service (8006)
-    /health                → 健康检查聚合
-
-中间件顺序（先注册的先执行）:
-    CORS → Auth → RateLimiter → Proxy
+    /api/v1/system/config  → 网关自身（系统配置只读，admin）
+    /health                → 健康检查聚合（并发探测各上游）
 """
 import sys
 import os
@@ -19,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 import asyncio
 import inspect
 import websockets
-from fastapi import FastAPI, Request, HTTPException, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import httpx
@@ -45,18 +43,20 @@ app = FastAPI(
 
 # ==================== 中间件 ====================
 # Starlette 中间件是"后注册的先执行"（LIFO）。
-# 注册顺序 Auth → RateLimiter → CORS，实际执行顺序：CORS → RateLimiter → Auth → 路由。
-# 这样 CORS 在最外层（OPTIONS 预检不被认证拦 401）、限流在认证外层
-# （未认证流量按 IP 限流，认证流量按 user_id 限流）、Auth 最内层兜底。
+# 注册顺序 RateLimiter → Auth → CORS，实际执行顺序：CORS → Auth → RateLimiter → 路由。
+# - CORS 最外层：OPTIONS 预检直接由 CORS 短路处理，不被认证/限流拦截（H10 修复保持）。
+# - Auth 在限流之前：JWT 校验通过后注入 scope["user"]，RateLimiter 才有 user_id 可用
+#   （M43：此前限流注册在认证外层，scope["user"] 恒空，按 user_id 限流是死代码）。
+# - RateLimiter 最内层：已认证请求按 user_id 限流，未认证（public 路径）按 IP 限流。
 
-# 3. JWT 认证（最内层：白名单路径自动跳过）
-app.add_middleware(AuthMiddleware)
-
-# 2. 限流（认证外层：scope["user"] 已有则按 user_id，否则按 IP）
+# 1. 限流（最内层：在 Auth 注入 scope["user"] 之后执行）
 rate_limit = int(_os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
 
-# 1. CORS（最外层：跨域预检先过）
+# 2. JWT 认证
+app.add_middleware(AuthMiddleware)
+
+# 3. CORS（最外层：跨域预检先过）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -92,26 +92,144 @@ def get_backend_url(path: str) -> str:
 
 # ==================== 明确路由（必须在通配路由之前定义） ====================
 
-@app.get("/health")
-async def health():
-    """聚合所有服务的健康检查"""
+# ---- 健康探测（M46：真探活，测试注入用） ----
+
+HEALTH_PROBE_TIMEOUT = 2.0
+
+_health_probe_fn = None
+
+
+def set_health_probe(fn):
+    """测试注入：替换默认的单点探测函数。fn(url: str) -> 协程(bool)"""
+    global _health_probe_fn
+    _health_probe_fn = fn
+
+
+async def _default_health_probe(url: str) -> bool:
+    """探测单个后端 /health：2s 超时，返回 200 视为 up。"""
+    try:
+        async with httpx.AsyncClient(timeout=HEALTH_PROBE_TIMEOUT) as client:
+            resp = await client.get(f"{url}/health")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+async def _probe_backend(url: str) -> bool:
+    probe = _health_probe_fn or _default_health_probe
+    return bool(await probe(url))
+
+
+def _backend_urls() -> dict:
+    """所有后端服务地址（name → url）"""
     return {
-        "status": "ok",
-        "service": settings.SERVICE_NAME,
-        "version": "1.0.0",
-        "backends": {
-            "auth": settings.AUTH_SERVICE_URL,
-            "specialist": settings.SPECIALIST_SERVICE_URL,
-            "visit": settings.VISIT_SERVICE_URL,
-            "knowledge": settings.KNOWLEDGE_SERVICE_URL,
-            "compliance": settings.COMPLIANCE_SERVICE_URL,
-            "audit": settings.AUDIT_SERVICE_URL,
-            "hcp": settings.HCP_SERVICE_URL,
-        }
+        "auth": settings.AUTH_SERVICE_URL,
+        "specialist": settings.SPECIALIST_SERVICE_URL,
+        "visit": settings.VISIT_SERVICE_URL,
+        "knowledge": settings.KNOWLEDGE_SERVICE_URL,
+        "compliance": settings.COMPLIANCE_SERVICE_URL,
+        "audit": settings.AUDIT_SERVICE_URL,
+        "hcp": settings.HCP_SERVICE_URL,
     }
 
 
+@app.get("/health")
+async def health():
+    """聚合所有服务的健康检查：异步并发探测各上游 /health（超时 2s）"""
+    backends = _backend_urls()
+    results = await asyncio.gather(
+        *(_probe_backend(url) for url in backends.values()),
+        return_exceptions=True,
+    )
+    services = {
+        name: ("up" if (isinstance(ok, bool) and ok) else "down")
+        for name, ok in zip(backends.keys(), results)
+    }
+    return {
+        "status": "ok",  # 网关自身存活；各上游状态见 services
+        "service": settings.SERVICE_NAME,
+        "version": "1.0.0",
+        "backends": backends,
+        "services": services,
+    }
+
+
+# ---- 系统配置只读端点（网关级信息，admin） ----
+
+# 关键配置项 → 环境变量名。只返回"是否已配置"布尔值，绝不返回密钥值。
+SYSTEM_CONFIG_ITEMS = [
+    ("JWT_SECRET", "JWT 密钥"),
+    ("INTERNAL_API_KEY", "内部服务调用密钥"),
+    ("ALIYUN_ACCESS_KEY_ID", "阿里云 AccessKey ID"),
+    ("ALIYUN_ACCESS_KEY_SECRET", "阿里云 AccessKey Secret"),
+    ("DASHSCOPE_API_KEY", "通义千问 API Key"),
+    ("BAILIAN_API_KEY", "百炼 API Key"),
+    ("NLS_APPKEY", "阿里云 NLS 语音转写"),
+    ("AUTH_SMS_PROVIDER", "短信服务商"),
+    ("ES_URL", "Elasticsearch（知识库）"),
+    ("REDIS_URL", "Redis"),
+]
+
+# .env.example 模板占位值标记（照抄模板部署 = 未配置）
+_PLACEHOLDER_MARKERS = ("your_", "change_me_")
+
+
+def _is_env_configured(env: str) -> bool:
+    """环境变量已配置：非空且不是 .env.example 模板占位值。"""
+    value = _os.getenv(env, "").strip()
+    if not value:
+        return False
+    low = value.lower()
+    return not any(marker in low for marker in _PLACEHOLDER_MARKERS)
+
+
+@app.get("/api/v1/system/config")
+async def system_config(request: Request):
+    """系统级配置状态（只读，admin）。
+
+    返回各关键配置项"是否已配置"（布尔），绝不返回密钥值本身；
+    在线不可修改 —— 配置由 .env 环境变量管理，改后重启服务生效。
+    """
+    user = request.scope.get("user") or {}
+    if user.get("role") != "admin":
+        return JSONResponse(
+            status_code=403,
+            content={"code": 3000, "message": "无权限：需要角色 admin", "data": None},
+        )
+    items = [
+        {"key": env, "label": label, "configured": _is_env_configured(env)}
+        for env, label in SYSTEM_CONFIG_ITEMS
+    ]
+    return JSONResponse(
+        status_code=200,
+        content={
+            "code": 0,
+            "message": "success",
+            "data": {
+                "items": items,
+                "info": {
+                    "rate_limit_per_minute": rate_limit,
+                    "log_level": settings.LOG_LEVEL,
+                },
+            },
+        },
+    )
+
+
 # ==================== 代理路由（兜底） ====================
+
+def _forward_headers(response) -> dict:
+    """透传上游响应头，但剔除由新响应自己处理、透传会失配的头部（M46）。
+
+    - content-length：JSONResponse 会重新序列化 body，长度必然变化
+    - content-encoding：上游已压缩的字节被改写/解析后不能再透传该头
+    - transfer-encoding：由 ASGI 服务器管理
+    """
+    return {
+        k: v for k, v in response.headers.items()
+        if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")
+    }
+
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def proxy(request: Request, path: str):
@@ -119,7 +237,11 @@ async def proxy(request: Request, path: str):
     backend_url = get_backend_url(f"/{path}")
 
     if backend_url is None:
-        raise HTTPException(status_code=404, detail={"code": 1004, "message": "路由不存在"})
+        # M44：统一错误格式 {code, message, data}，与 auth/rate_limiter 中间件一致
+        return JSONResponse(
+            status_code=404,
+            content={"code": 1004, "message": "路由不存在", "data": None},
+        )
 
     target_url = f"{backend_url}/{path}"
 
@@ -147,26 +269,36 @@ async def proxy(request: Request, path: str):
                 return JSONResponse(
                     content=response.json(),
                     status_code=response.status_code,
-                    headers=dict(response.headers),
+                    headers=_forward_headers(response),
                 )
             # 非 JSON（Excel 导出/文件下载，H11）：原样透传字节，不尝试解析
-            # content-length/content-encoding/transfer-encoding 由新响应自己处理，不透传
-            filtered_headers = {
-                k: v for k, v in response.headers.items()
-                if k.lower() not in ("content-length", "content-encoding", "transfer-encoding")
-            }
             return Response(
                 content=response.content,
                 status_code=response.status_code,
-                headers=filtered_headers,
+                headers=_forward_headers(response),
                 media_type=content_type,
             )
         except httpx.ConnectError:
             logger.error(f"无法连接到后端服务: {target_url}")
-            raise HTTPException(status_code=503, detail={"code": 5001, "message": "后端服务不可用"})
+            return JSONResponse(
+                status_code=503,
+                content={"code": 5001, "message": "后端服务不可用", "data": None},
+            )
         except httpx.TimeoutException:
             logger.error(f"后端服务超时: {target_url}")
-            raise HTTPException(status_code=504, detail={"code": 5002, "message": "后端服务超时"})
+            return JSONResponse(
+                status_code=504,
+                content={"code": 5002, "message": "后端服务超时", "data": None},
+            )
+        except httpx.HTTPError as exc:
+            # M45：ConnectError/TimeoutException 之外的网络/协议异常
+            # （RemoteProtocolError/ReadError/NetworkError 等）统一 502，
+            # 不再冒泡成 500 纯文本。
+            logger.error(f"后端服务连接异常: {target_url} ({type(exc).__name__}: {exc})")
+            return JSONResponse(
+                status_code=502,
+                content={"code": 5004, "message": "后端服务连接中断", "data": None},
+            )
 
 
 # ==================== WS 代理（对话流式转发） ====================
@@ -227,20 +359,26 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
             await upstream.close()
 
     async def upstream_to_client():
+        # M46：上游关闭码原样透传给下游 —— 4401（未授权）/4404（不存在）/
+        # 4500（内部错误）等业务关闭码不再被吞成 1000，客户端可据此处理。
+        upstream_close_code = 1000
         try:
             while True:
                 try:
                     text = await upstream.receive_text()
                     async with send_lock:
                         await websocket.send_text(text)
-                except websockets.exceptions.ConnectionClosed:
+                except websockets.exceptions.ConnectionClosed as exc:
+                    # 用 rcvd.code（关闭帧到达侧）取值，避免 .code 已废弃属性
+                    rcvd = getattr(exc, "rcvd", None)
+                    upstream_close_code = getattr(rcvd, "code", None) or 1000
                     break
                 except Exception:
                     break
         finally:
             try:
                 async with send_lock:
-                    await websocket.close(code=1000)
+                    await websocket.close(code=upstream_close_code)
             except Exception:
                 pass
 
