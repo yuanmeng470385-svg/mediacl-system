@@ -10,17 +10,23 @@ import type {
 } from '../types';
 
 export const specialistAPI = {
-  /** 获取专员列表（后端返回纯数组，非分页对象） */
+  /** 获取专员列表（后端返回 paginate 分页对象，解出 items 数组） */
   async list(params?: {
     page?: number;
     page_size?: number;
     status?: string;
   }): Promise<DigitalSpecialist[]> {
-    return apiClient.request<DigitalSpecialist[]>(
+    const res = await apiClient.request<{
+      items: DigitalSpecialist[];
+      total: number;
+      page: number;
+      page_size: number;
+    }>(
       'GET',
       '/api/v1/specialists',
       params
     );
+    return res.items ?? [];
   },
 
   /** 获取专员详情 */

@@ -268,12 +268,17 @@ describe('specialistAPI', () => {
     expect(c.body).toEqual({ question: '你好' });
   });
 
-  it('list 返回 data 里的纯数组（后端 specialists.py:27 返回 success([...])，非分页对象）', async () => {
+  it('list 解出分页对象里的 items（后端 specialists.py 返回 paginate(...)，非裸数组）', async () => {
     fetchMock.mockResolvedValueOnce({
       json: async () => ({
         code: 0,
         message: 'success',
-        data: [{ id: 1, name: '肿瘤产品专员-小K', status: 'active' }],
+        data: {
+          items: [{ id: 1, name: '肿瘤产品专员-小K', status: 'active' }],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        },
       }),
     });
     const result = await specialistAPI.list({ page_size: 50 });
