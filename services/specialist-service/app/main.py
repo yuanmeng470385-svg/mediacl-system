@@ -45,6 +45,9 @@ app.include_router(conversations.favorites_router)
 from app.api import metrics as metrics_api
 app.include_router(metrics_api.router)
 
+from app.api.chat_ws import router as chat_ws_router
+app.include_router(chat_ws_router)
+
 
 @app.get("/health")
 async def health():
