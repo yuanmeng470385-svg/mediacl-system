@@ -19,9 +19,10 @@ export default function DoctorList() {
     { title: '职称', dataIndex: 'title', width: 100 },
     { title: '标签', dataIndex: 'tags', width: 200,
       render: (_, r) => <Space wrap>{r.tags?.map((t) => <Tag key={t}>{t}</Tag>)}</Space> },
-    { title: '拜访次数', dataIndex: 'visit_count', width: 100, sorter: true },
-    { title: '满意度', dataIndex: 'satisfaction', width: 100, sorter: true,
-      render: (_, r) => `${r.satisfaction}%` },
+    { title: '拜访次数', dataIndex: 'visit_count', width: 100,
+      render: (_, r) => (r.visit_count != null ? r.visit_count : '--') },
+    { title: '满意度', dataIndex: 'satisfaction', width: 100,
+      render: (_, r) => (r.satisfaction != null ? `${r.satisfaction}%` : '--') },
     { title: '操作', width: 100,
       render: (_, r) => <a onClick={() => navigate(`/doctor/${r.id}`)}>查看详情</a> },
   ];
