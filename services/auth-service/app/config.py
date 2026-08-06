@@ -24,8 +24,10 @@ class Settings:
     CODE_MAX_ATTEMPTS = int(os.getenv("AUTH_CODE_MAX_ATTEMPTS", "5"))      # 单个验证码最多试 5 次
 
     # --- 短信通道 ---
-    # console（默认，只写日志）/ aliyun（待接入）
+    # console（默认，只写日志）/ aliyun（需签名与模板 CODE）
     SMS_PROVIDER = os.getenv("AUTH_SMS_PROVIDER", "console")
+    SMS_SIGN_NAME = os.getenv("AUTH_SMS_SIGN_NAME", "")
+    SMS_TEMPLATE_CODE = os.getenv("AUTH_SMS_TEMPLATE_CODE", "")
 
     # --- 开发模式 ---
     # 打开后 send-code 会在响应体里回传验证码，方便本地联调。生产必须为 false。
