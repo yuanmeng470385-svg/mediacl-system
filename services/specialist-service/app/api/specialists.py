@@ -44,12 +44,15 @@ async def get_live_status(
     """数字员工办公室实时状态（web 后台 3s/5s 轮询）。
 
     状态推导：draft/disabled → offline；注册表有记录 → working（带阶段）；
-    注册表空但 5 分钟内有过对话 → working（粗粒度 generating）；否则 idle。
+    注册表空但进程刚启动（重启降级窗口）且 5 分钟内有过对话 → working（粗粒度 generating）；
+    否则 idle（平时注册表空 = 立即空闲）。
     """
     from datetime import datetime, timedelta
     from sqlalchemy import func
     from app.models.conversation import Conversation
-    from app.core.activity_registry import registry, PHASE_TEXT, PHASE_GENERATING
+    from app.core.activity_registry import (
+        registry, PHASE_TEXT, PHASE_GENERATING, is_recently_started,
+    )
 
     specialists = db.query(Specialist).all()
     now = datetime.utcnow()
@@ -79,7 +82,9 @@ async def get_live_status(
             state, phase = "offline", None
         elif snap is not None:
             state, phase = "working", snap.phase
-        elif last_active.get(s.id) is not None and last_active[s.id] >= recent_cutoff:
+        elif (is_recently_started()
+              and last_active.get(s.id) is not None
+              and last_active[s.id] >= recent_cutoff):
             state, phase = "working", PHASE_GENERATING
         else:
             state, phase = "idle", None

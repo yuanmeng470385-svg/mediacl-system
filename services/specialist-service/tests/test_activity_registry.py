@@ -33,3 +33,13 @@ def test_all_returns_snapshot_of_current_state():
 def test_phase_text_maps_all_phases():
     assert PHASE_TEXT[PHASE_GENERATING] == "正在检索知识库并生成回答"
     assert set(PHASE_TEXT) == {"compliance_precheck", "generating", "compliance_review"}
+
+def test_is_recently_started_window(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.core import activity_registry
+    base = datetime(2026, 8, 6, 10, 0, 0)
+    monkeypatch.setattr(activity_registry, "_now", lambda: base + timedelta(seconds=30))
+    monkeypatch.setattr(activity_registry, "STARTED_AT", base)
+    assert activity_registry.is_recently_started() is True
+    monkeypatch.setattr(activity_registry, "_now", lambda: base + timedelta(minutes=6))
+    assert activity_registry.is_recently_started() is False

@@ -108,6 +108,10 @@ def test_live_status_idle_when_registry_empty_and_no_recent(monkeypatch):
 
 
 def test_live_status_recent_conversation_degrades_to_working(monkeypatch):
+    from app.core import activity_registry as ar
+    base = datetime(2026, 8, 6, 10, 0, 0)
+    monkeypatch.setattr(ar, "_now", lambda: base + timedelta(seconds=10))
+    monkeypatch.setattr(ar, "STARTED_AT", base)
     _reset_registry()
     db = FakeDb(
         specialists=[FakeSpecialist(1, "A", "active")],
@@ -119,6 +123,25 @@ def test_live_status_recent_conversation_degrades_to_working(monkeypatch):
     assert item["state"] == "working"
     assert item["phase"] == PHASE_GENERATING  # 降级粗粒度
     assert item["question_snippet"] is None
+
+
+def test_live_status_recent_conversation_idle_when_not_recently_started(monkeypatch):
+    from datetime import datetime, timedelta
+    from app.core import activity_registry as ar
+    from app.core.activity_registry import registry as reg
+    reg._states.clear()
+    base = datetime(2026, 8, 6, 10, 0, 0)
+    monkeypatch.setattr(ar, "_now", lambda: base + timedelta(minutes=30))
+    monkeypatch.setattr(ar, "STARTED_AT", base)
+    db = FakeDb(
+        specialists=[FakeSpecialist(1, "A", "active")],
+        today_rows=[],
+        active_rows=[(1, datetime.utcnow() - timedelta(minutes=1))],
+    )
+    resp = _client(db).get("/api/v1/specialists/live-status")
+    item = resp.json()["data"]["items"][0]
+    assert item["state"] == "idle"
+    assert resp.json()["data"]["summary"] == {"working": 0, "idle": 1, "offline": 0}
 
 
 def test_live_status_disabled_is_offline_even_with_registry_entry(monkeypatch):

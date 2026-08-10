@@ -27,6 +27,14 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
+STARTED_AT = _now()  # 进程启动时间，用于重启降级窗口判断
+
+
+def is_recently_started(within_minutes: int = 5) -> bool:
+    """进程启动至今是否在窗口内（重启后前 N 分钟内启用粗粒度降级推断）"""
+    return (_now() - STARTED_AT).total_seconds() < within_minutes * 60
+
+
 @dataclass
 class ActivitySnapshot:
     specialist_id: int
