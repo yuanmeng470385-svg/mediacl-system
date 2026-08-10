@@ -9,7 +9,7 @@ const PER_ROW = 6;
 const CSS = `
 .office-scene { position: relative; perspective: 900px; background: #0b1220; border-radius: 12px;
   padding: 20px; min-height: 360px; overflow: hidden; }
-.office-floor { position: absolute; inset: 0; transform: rotateX(18deg); transform-style: preserve-3d;
+.office-floor { position: relative; min-height: 320px; transform: rotateX(18deg); transform-style: preserve-3d;
   background:
     linear-gradient(90deg, rgba(88, 166, 255, 0.13) 1px, transparent 1px),
     linear-gradient(0deg, rgba(88, 166, 255, 0.13) 1px, transparent 1px),
