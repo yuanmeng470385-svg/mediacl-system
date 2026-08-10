@@ -728,15 +728,16 @@ export function createTag(actions: TagActions): TagHandle {
   const qToggle = el.querySelector('[data-act="toggle"]') as HTMLAnchorElement;
 
   el.addEventListener('click', (e) => {
+    // 卡片区（pointer-events auto）任意点击都阻断冒泡，防外层"点空白取消选中"误触发
+    e.stopPropagation();
     if (e.target instanceof HTMLAnchorElement) {
       const act = e.target.dataset.act;
-      // 通过 update 保存的 lastItem 取数据
+      // 通过 update 写入的 _item 活引用取数据
       const item = (el as unknown as { _item?: LiveStatusItem })._item;
       if (!item) return;
       if (act === 'data') actions.onViewData(item);
       else if (act === 'edit') actions.onEdit(item);
       else if (act === 'toggle') actions.onToggleStatus(item);
-      e.stopPropagation();
     }
   });
 
@@ -753,7 +754,7 @@ export function createTag(actions: TagActions): TagHandle {
       if (showBubble) {
         qBubble.textContent = agent.item.phase_text
           ? `${agent.item.phase_text}${agent.item.question_snippet ? ` · 正在回答：${agent.item.question_snippet}…` : ''}`
-          : `正在回答：${agent.item.question_snippet}…`;
+          : `正在回答：${agent.item.question_snippet ?? ''}…`;
       }
       const sel = selected;
       qActions.style.display = sel ? '' : 'none';
