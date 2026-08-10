@@ -196,7 +196,8 @@ export type DeskState = 'working' | 'idle' | 'offline';
 export interface Desk {
   group: THREE.Group;
   screenMat: THREE.MeshStandardMaterial;
-  state: DeskState;
+  /** readonly getter，与 setState 同步（实现须用 getter，否则公共字段恒为初始值） */
+  readonly state: DeskState;
   setState(s: DeskState): void;
   /** working 时每帧调用：0..1 脉动强度 */
   setEmissivePulse(v: number): void;
@@ -249,7 +250,8 @@ export function buildDesk(): Desk {
 
   let state: DeskState = 'idle';
   const desk: Desk = {
-    group, screenMat, state,
+    group, screenMat,
+    get state() { return state; },
     setState(s) {
       state = s;
       if (s === 'working') {
@@ -264,9 +266,11 @@ export function buildDesk(): Desk {
       }
       const dim = s === 'offline';
       group.traverse((o) => {
-        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-        if (m && m !== screenMat) {
-          m.transparent = true;
+        // Material 基类（含 edgeMat 的 MeshBasicMaterial），保证与 edgeMat 比较可编译
+        const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+        // edgeMat 保持构造态（transparent+opacity 0.5），offline 只暗化主体材质且可逆
+        if (m && m !== screenMat && m !== edgeMat) {
+          m.transparent = dim;
           m.opacity = dim ? 0.5 : 1;
         }
       });
@@ -275,6 +279,7 @@ export function buildDesk(): Desk {
       if (state === 'working') screenMat.emissiveIntensity = 0.5 + 0.5 * v;
     },
   };
+  desk.setState('idle'); // 构造时归一到 idle 材质态（emissive 0x0a1a2e/0.08）
   return desk;
 }
 
