@@ -55,7 +55,7 @@ export default function AttendancePanel({
       <style>{CSS}</style>
       <div className="att-title">团队出勤</div>
       {total === 0 ? (
-        <Empty description="暂无数字专员" imageStyle={{ height: 60 }}>
+        <Empty description="暂无数字专员" styles={{ image: { height: 60 } }}>
           <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd}>新增专员</Button>
         </Empty>
       ) : (
