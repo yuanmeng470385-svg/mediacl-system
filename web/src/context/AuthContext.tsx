@@ -21,7 +21,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token) {
       authAPI.me()
         .then((res) => setUser(res.data.data))
-        .catch(() => { localStorage.removeItem('medagent_token'); })
+        // 仅 token 失效（401）才清除；429 限流/网络抖动保留登录态（401 时 interceptor 已清理并跳转）
+        .catch((err: { response?: { status?: number } }) => {
+          if (err?.response?.status === 401) localStorage.removeItem('medagent_token');
+        })
         .finally(() => setLoading(false));
     } else {
       setLoading(false);
