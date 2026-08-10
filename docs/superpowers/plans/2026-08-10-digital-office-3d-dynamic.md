@@ -887,6 +887,8 @@ export default function OfficeScene3D({
       raycaster: new THREE.Raycaster(),
       pointer: new THREE.Vector2(-2, -2),
       camTarget,
+      // 预分配临时向量（每帧 lerp 复用，避免 GC 抖动）
+      tmpVec: new THREE.Vector3(),
       selected: null as number | null,
       hovered: null as number | null,
       raf: 0,
@@ -958,12 +960,16 @@ export default function OfficeScene3D({
         t.obj.position.set(a.pos.x, 1.55, a.pos.z);
         t.update(a, ctx.selected === id, ctx.hovered === id);
       }
-      // 选中聚焦（相机注视点平滑跟随）
+      // 选中聚焦（相机注视点平滑跟随，复用预分配向量）
       if (ctx.selected !== null) {
         const a = ctx.sim.agents.get(ctx.selected);
-        if (a) ctx.camTarget.lerp(new THREE.Vector3(a.pos.x, 0, a.pos.z), Math.min(1, dt * 2));
+        if (a) {
+          ctx.tmpVec.set(a.pos.x, 0, a.pos.z);
+          ctx.camTarget.lerp(ctx.tmpVec, Math.min(1, dt * 2));
+        }
       } else {
-        ctx.camTarget.lerp(new THREE.Vector3(0, 0, 0.5), Math.min(1, dt * 2));
+        ctx.tmpVec.set(0, 0, 0.5);
+        ctx.camTarget.lerp(ctx.tmpVec, Math.min(1, dt * 2));
       }
       camera.lookAt(ctx.camTarget);
       // render 签名要求 THREE.Scene（运行时 Group 等价，类型断言绕过）
@@ -984,7 +990,12 @@ export default function OfficeScene3D({
         const m = o as THREE.Mesh;
         if (m.geometry) m.geometry.dispose();
         const mat = m.material as THREE.Material | undefined;
-        if (mat) mat.dispose();
+        if (mat) {
+          mat.dispose();
+          // 地板 CanvasTexture 一并释放（每次挂载新建，避免挂载循环累积纹理）
+          const tex = (mat as THREE.MeshStandardMaterial).map;
+          if (tex) tex.dispose();
+        }
       });
       renderer.dispose();
       mount.removeChild(renderer.domElement);
