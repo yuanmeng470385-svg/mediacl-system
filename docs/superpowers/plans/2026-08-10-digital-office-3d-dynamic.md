@@ -512,6 +512,7 @@ export class Simulation {
       this.scene.add(rig.group);
       this.agents.set(item.id, a);
     }
+    const prevState = a.item.state;
     a.item = item;
     a.index = index;
     a.desk = desks[index % desks.length]; // 工位组重建后自动重绑
@@ -523,9 +524,12 @@ export class Simulation {
     } else {
       a.dimTarget = 0;
       if (item.state === 'working') {
-        a.poseTarget = 1;
-        if (a.target === null) a.target = new THREE.Vector3(sitPosOf(index).x, 0, sitPosOf(index).z);
-      } else {
+        // 每次 upsert 无条件重定向坐姿目标（覆盖 idle 巡逻残留点 / offline 停留点）
+        a.target = new THREE.Vector3(sitPosOf(index).x, 0, sitPosOf(index).z);
+        if (a.pos.distanceTo(a.target) < 0.05) a.poseTarget = 1; // 已在坐点才坐，避免半路坐下
+      } else if (prevState === 'working') {
+        // working→idle 起身：清掉坐姿目标，转入巡逻
+        a.target = null;
         a.poseTarget = 0;
       }
     }
@@ -535,6 +539,12 @@ export class Simulation {
     const a = this.agents.get(id);
     if (!a) return;
     this.scene.remove(a.rig.group);
+    a.rig.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material as THREE.Material | undefined;
+      if (mat) mat.dispose();
+    });
     this.agents.delete(id);
   }
 
@@ -552,17 +562,16 @@ export class Simulation {
       const standing = a.pose < 0.5;
 
       if (a.item.state === 'idle' && standing) {
-        // 过道巡逻：无目标/到达 → 换随机点
+        // 过道巡逻：无目标/到达 → 换随机点（walkPhase 由 moveToward 连续推进，不跳变）
         if (!a.target || a.pos.distanceTo(a.target) < 0.06) {
           a.target = new THREE.Vector3(
             (Math.random() * 2 - 1) * PATROL_X_RANGE, 0,
             a.aisleZ + (Math.random() - 0.5) * 0.4,
           );
-          a.walkPhase += 1.7;
         }
         this.moveToward(a, a.target, AISLE_PATROL_SPEED, dt);
       } else if (a.item.state === 'working' && standing) {
-        // 走向工位：到点坐下
+        // 走向工位：到点坐下（target 由 upsert 无条件指向坐点，这里兜底）
         if (!a.target) a.target = new THREE.Vector3(sitPosOf(a.index).x, 0, sitPosOf(a.index).z);
         if (a.pos.distanceTo(a.target) < 0.05) {
           a.poseTarget = 1;
@@ -613,7 +622,7 @@ export class Simulation {
 }
 ```
 
-注意：`upsert` 时若 `a.target === null` 已用传入 index 设置坐姿目标；工位组重建（数量变化）时 `a.desk` 在下次 upsert 重绑。
+注意：working 的坐姿目标在每次 upsert 无条件重定向（覆盖 idle 巡逻残留点与 offline 停留点）；poseTarget 只在到点（dist<0.05）时置 1，避免半路坐下；工位组重建（数量变化）时 `a.desk` 在下次 upsert 重绑。Minor 已修：巡逻换点不再跳变 walkPhase；remove 释放 rig 几何/材质。Minor deferred：aisleZ 固定于出生排（items 重排序后巡逻道与工位行可能不一致，可接受偏差）。
 
 - [ ] **Step 2: 构建门**
 
