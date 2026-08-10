@@ -64,6 +64,7 @@ export default function LiveStatusStrip() {
               }}
             >
               <MiniCharacter id={item.id} state={item.state} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: STATE_COLOR[item.state], flexShrink: 0 }} />
               {item.name}
             </span>
           </Tooltip>
