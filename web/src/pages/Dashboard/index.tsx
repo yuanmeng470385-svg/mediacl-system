@@ -4,6 +4,7 @@ import { Column, Line, Heatmap } from '@ant-design/charts';
 import { ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { PageContainer } from '@ant-design/pro-components';
 import StatCard from '../../components/StatCard';
+import LiveStatusStrip from '../../components/LiveStatusStrip';
 import { complianceAPI } from '../../services/compliance';
 import { auditAPI } from '../../services/audit';
 import { userAPI } from '../../services/user';
@@ -223,6 +224,7 @@ export default function Dashboard() {
 
   return (
     <PageContainer header={{ title: '仪表盘', subTitle: '业务总览与系统监控' }}>
+      <LiveStatusStrip />
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>
           <StatCard title="用户总数" value={activeUsers} />
