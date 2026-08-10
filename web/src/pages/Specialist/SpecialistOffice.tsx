@@ -19,6 +19,11 @@ const STATE_META: Record<LiveStatusItem['state'], { label: string; color: string
 
 const POLL_INTERVAL_MS = 3000;
 
+/** live 条目 → Specialist：live 用 lifecycle、Specialist 用 status，映射补 status 供父组件 toggleStatus 判定 */
+function toSpecialist(sp: LiveStatusItem): Specialist {
+  return { ...sp, created_at: '', status: sp.lifecycle } as unknown as Specialist;
+}
+
 /** 工位卡片：头像光晕 + 状态区 + 底部统计 + 悬停操作 */
 function WorkstationCard({
   item, index, onEdit, onToggleStatus, onViewData,
@@ -164,15 +169,15 @@ export default function SpecialistOffice({
                 index={index}
                 onEdit={() => {
                   const sp = items.find((i) => i.id === item.id);
-                  if (sp) onEdit({ ...sp, created_at: '' } as unknown as Specialist);
+                  if (sp) onEdit(toSpecialist(sp));
                 }}
                 onToggleStatus={() => {
                   const sp = items.find((i) => i.id === item.id);
-                  if (sp) onToggleStatus({ ...sp, created_at: '' } as unknown as Specialist);
+                  if (sp) onToggleStatus(toSpecialist(sp));
                 }}
                 onViewData={() => {
                   const sp = items.find((i) => i.id === item.id);
-                  if (sp) onViewData({ ...sp, created_at: '' } as unknown as Specialist);
+                  if (sp) onViewData(toSpecialist(sp));
                 }}
               />
             </Col>
