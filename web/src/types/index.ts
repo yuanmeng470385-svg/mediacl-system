@@ -37,6 +37,35 @@ export interface SpecialistStats {
   satisfaction_rate: number | null;
 }
 
+// ========== 数字员工办公室（live-status）==========
+export type SpecialistLiveState = 'working' | 'idle' | 'offline';
+export type SpecialistPhase = 'compliance_precheck' | 'generating' | 'compliance_review';
+
+/** 与后端 GET /specialists/live-status 对齐 */
+export interface LiveStatusItem {
+  id: number;
+  name: string;
+  lifecycle: 'draft' | 'active' | 'disabled';
+  state: SpecialistLiveState;
+  phase: SpecialistPhase | null;
+  phase_text: string | null;
+  phase_since: string | null;
+  question_snippet: string | null;
+  today_conversations: number;
+  last_active_at: string | null;
+}
+
+export interface LiveSummary {
+  working: number;
+  idle: number;
+  offline: number;
+}
+
+export interface LiveStatus {
+  items: LiveStatusItem[];
+  summary: LiveSummary;
+}
+
 // ========== 知识文档 ==========
 export type KnowledgeDocType = 'product' | 'guideline' | 'literature' | 'regulation' | 'competitor' | 'other';
 export type KnowledgeDocStatus = 'draft' | 'processing' | 'ready' | 'rejected' | 'archived';
