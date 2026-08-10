@@ -84,8 +84,8 @@ function blinkDelay(id: number): string {
 }
 
 const CSS = `
-@keyframes ch-blink { 0%, 5%, 100% { transform: scaleY(1); } 7.5% { transform: scaleY(0.06); } }
-.ch-blink { animation: ch-blink 4s infinite; transform-origin: 50% 50%; }
+@keyframes ch-blink { 0%, 5%, 100% { transform: scaleY(0.08); } 7.5% { transform: scaleY(1); } }
+.ch-blink { animation: ch-blink 4s infinite; transform-origin: 50% 0; transform-box: fill-box; }
 @keyframes ch-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.015); } }
 .ch-breathe { animation: ch-breathe 3s ease-in-out infinite; transform-origin: 60px 116px; }
 .ch-dim { opacity: 0.45; filter: grayscale(1); }
@@ -182,7 +182,6 @@ export function MiniCharacter({ id, state, size = 24 }: { id: number; state: Cha
         <g stroke="#444444" strokeWidth="1" fill="none">
           <circle cx="18" cy="18" r="4" />
           <circle cx="26" cy="18" r="4" />
-          <path d="M22 18 L22 18" />
         </g>
       )}
     </svg>
@@ -237,7 +236,8 @@ const CSS = `
 @keyframes ws-steam { 0% { transform: translateY(0); opacity: 0; } 25% { opacity: 0.7; } 100% { transform: translateY(-7px); opacity: 0; } }
 .ch-steam-1 { animation: ws-steam 2s ease-out infinite; }
 .ch-steam-2 { animation: ws-steam 2s ease-out 1s infinite; }
-.ws { position: relative; width: 170px; }
+@keyframes ws-enter { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.ws { position: relative; width: 170px; animation: ws-enter .45s ease-out backwards; }
 .ws-bubble { position: absolute; top: -34px; left: 50%; transform: translateX(-50%); z-index: 3;
   background: #fff; border: 1px solid #f0f0f0; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08);
   padding: 4px 8px; font-size: 11px; color: #595959; white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
