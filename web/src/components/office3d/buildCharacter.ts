@@ -67,7 +67,7 @@ export function buildCharacter(): CharacterRig {
   const mats = [white, gray, shoe];
 
   const dimColor = new THREE.Color(0xb0b0b0);
-  const baseColor = new THREE.Color(0xffffff);
+  const baseColors = mats.map((m) => m.color.clone());
 
   const rig: CharacterRig = {
     group, legL, legR, armL, armR, torso, head, mats,
@@ -75,21 +75,20 @@ export function buildCharacter(): CharacterRig {
       const p = THREE.MathUtils.clamp(pose, 0, 1);
       const swing = Math.sin(phase);
       const typingOffset = typing ? Math.sin(phase * 4) * 0.04 : 0;
-      const seatedArm = -1.35 + typingOffset;
-      legL.rotation.x = (1 - p) * (swing * 0.65) + p * -1.2;
-      legR.rotation.x = (1 - p) * (-swing * 0.65) + p * -1.2;
+      const seatedArm = 1.35 + typingOffset;
+      legL.rotation.x = (1 - p) * (swing * 0.65) + p * 1.2;
+      legR.rotation.x = (1 - p) * (-swing * 0.65) + p * 1.2;
       armL.rotation.x = (1 - p) * (-swing * 0.5) + p * seatedArm;
       armR.rotation.x = (1 - p) * (swing * 0.5) + p * (seatedArm + 0.05);
-      torso.rotation.x = p * 0.12;
+      torso.rotation.x = p * 0.12 + (1 - p) * Math.sin(phase * 2) * 0.03;
       head.rotation.x = p * 0.04;
-      group.position.y = p * 0.1;
     },
     setDim(a) {
-      const c = baseColor.clone().lerp(dimColor, a);
-      for (const m of mats) {
-        m.color.copy(c);
-        m.transparent = a > 0;
-        m.opacity = 1 - 0.55 * a;
+      for (let i = 0; i < mats.length; i++) {
+        const c = baseColors[i].clone().lerp(dimColor, a);
+        mats[i].color.copy(c);
+        mats[i].transparent = a > 0;
+        mats[i].opacity = 1 - 0.55 * a;
       }
     },
   };
