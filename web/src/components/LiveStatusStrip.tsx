@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from 'antd';
-import { RobotOutlined, ArrowRightOutlined } from '@ant-design/icons';
+import { ArrowRightOutlined } from '@ant-design/icons';
+import { MiniCharacter } from './office/SpecialistCharacter';
 import { useNavigate } from 'react-router-dom';
 import { specialistAPI } from '../services/specialist';
 import type { LiveStatus, LiveStatusItem } from '../types';
@@ -62,7 +63,7 @@ export default function LiveStatusStrip() {
                 border: `1px solid ${STATE_COLOR[item.state]}44`,
               }}
             >
-              <RobotOutlined style={{ color: STATE_COLOR[item.state] }} />
+              <MiniCharacter id={item.id} state={item.state} />
               {item.name}
             </span>
           </Tooltip>
