@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ProTable, ModalForm } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin } from 'antd';
+import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin, Segmented } from 'antd';
 import { PlusOutlined, BarChartOutlined } from '@ant-design/icons';
 import StatCard from '../../components/StatCard';
 import SpecialistForm from './SpecialistForm';
+import SpecialistOffice from './SpecialistOffice';
 import { specialistAPI } from '../../services/specialist';
+import { STATUS_MAP } from '../../constants/specialist';
 import type { Specialist, SpecialistStats } from '../../types';
-
-const STATUS_MAP: Record<string, { color: string; text: string }> = {
-  draft: { color: 'default', text: '草稿' },
-  active: { color: 'green', text: '正式' },
-  disabled: { color: 'red', text: '停用' },
-};
 
 /** axios 错误里取后端 message（ParamError 400 / 404 / 403 均带 message） */
 function errMsg(err: unknown, fallback: string): string {
@@ -80,6 +76,7 @@ export default function SpecialistList() {
   // 聚合卡片：全部/在线 总数（来自列表接口 total，非硬编码假数）
   const [counts, setCounts] = useState<{ total: number; active: number } | null>(null);
   const [dataView, setDataView] = useState<Specialist | null>(null);
+  const [view, setView] = useState<'office' | 'table'>('office');
   const { message } = App.useApp();
 
   const loadCounts = useCallback(async () => {
@@ -172,6 +169,24 @@ export default function SpecialistList() {
         <Col span={12}><StatCard title="专员总数" value={counts?.total ?? '—'} /></Col>
         <Col span={12}><StatCard title="在线专员" value={counts?.active ?? '—'} /></Col>
       </Row>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Segmented
+          value={view}
+          onChange={(v) => setView(v as 'office' | 'table')}
+          options={[
+            { label: '数字员工办公室', value: 'office' },
+            { label: '表格视图', value: 'table' },
+          ]}
+        />
+      </div>
+      {view === 'office' ? (
+        <SpecialistOffice
+          onAdd={() => { setEditing(null); setFormOpen(true); }}
+          onEdit={(r) => { setEditing(r); setFormOpen(true); }}
+          onToggleStatus={toggleStatus}
+          onViewData={(r) => setDataView(r)}
+        />
+      ) : (
       <ProTable<Specialist>
         headerTitle="数字专员列表"
         actionRef={actionRef}
@@ -196,6 +211,7 @@ export default function SpecialistList() {
           </Button>,
         ]}
       />
+      )}
       <SpecialistDataDrawer specialist={dataView} onClose={() => setDataView(null)} />
       <ModalForm
         title={editing ? '编辑专员' : '新增专员'}
