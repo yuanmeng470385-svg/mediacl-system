@@ -6,7 +6,7 @@ export type DeskState = 'working' | 'idle' | 'offline';
 export interface Desk {
   group: THREE.Group;
   screenMat: THREE.MeshStandardMaterial;
-  state: DeskState;
+  readonly state: DeskState;
   setState(s: DeskState): void;
   /** working 时每帧调用：0..1 脉动强度 */
   setEmissivePulse(v: number): void;
@@ -59,7 +59,8 @@ export function buildDesk(): Desk {
 
   let state: DeskState = 'idle';
   const desk: Desk = {
-    group, screenMat, state,
+    group, screenMat,
+    get state() { return state; },
     setState(s) {
       state = s;
       if (s === 'working') {
@@ -74,9 +75,9 @@ export function buildDesk(): Desk {
       }
       const dim = s === 'offline';
       group.traverse((o) => {
-        const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-        if (m && m !== screenMat) {
-          m.transparent = true;
+        const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+        if (m && m !== screenMat && m !== edgeMat) {
+          m.transparent = dim;
           m.opacity = dim ? 0.5 : 1;
         }
       });
@@ -85,6 +86,7 @@ export function buildDesk(): Desk {
       if (state === 'working') screenMat.emissiveIntensity = 0.5 + 0.5 * v;
     },
   };
+  desk.setState('idle');
   return desk;
 }
 
