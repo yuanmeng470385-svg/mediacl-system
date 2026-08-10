@@ -36,6 +36,69 @@ async def list_specialists(
     ))
 
 
+@router.get("/live-status")
+async def get_live_status(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """数字员工办公室实时状态（web 后台 3s/5s 轮询）。
+
+    状态推导：draft/disabled → offline；注册表有记录 → working（带阶段）；
+    注册表空但 5 分钟内有过对话 → working（粗粒度 generating）；否则 idle。
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import func
+    from app.models.conversation import Conversation
+    from app.core.activity_registry import registry, PHASE_TEXT, PHASE_GENERATING
+
+    specialists = db.query(Specialist).all()
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    recent_cutoff = now - timedelta(minutes=5)
+
+    # 今日对话数（role='user' 口径与 stats 一致）
+    today_rows = db.query(
+        Conversation.specialist_id, func.count(Conversation.id),
+    ).filter(
+        Conversation.role == "user",
+        Conversation.created_at >= today_start,
+    ).group_by(Conversation.specialist_id).all()
+    today_count = {sid: cnt for sid, cnt in today_rows}
+
+    # 最近活跃时间（任意 role 最后一条）
+    active_rows = db.query(
+        Conversation.specialist_id, func.max(Conversation.created_at),
+    ).group_by(Conversation.specialist_id).all()
+    last_active = {sid: ts for sid, ts in active_rows}
+
+    items = []
+    summary = {"working": 0, "idle": 0, "offline": 0}
+    for s in specialists:
+        snap = registry.get(s.id)
+        if s.status in ("draft", "disabled"):
+            state, phase = "offline", None
+        elif snap is not None:
+            state, phase = "working", snap.phase
+        elif last_active.get(s.id) is not None and last_active[s.id] >= recent_cutoff:
+            state, phase = "working", PHASE_GENERATING
+        else:
+            state, phase = "idle", None
+        summary[state] += 1
+        items.append({
+            "id": s.id,
+            "name": s.name,
+            "lifecycle": s.status,
+            "state": state,
+            "phase": phase,
+            "phase_text": PHASE_TEXT.get(phase) if phase else None,
+            "phase_since": snap.phase_since.isoformat() if snap else None,
+            "question_snippet": snap.question_snippet if snap else None,
+            "today_conversations": today_count.get(s.id, 0),
+            "last_active_at": last_active.get(s.id).isoformat() if last_active.get(s.id) else None,
+        })
+    return success({"items": items, "summary": summary})
+
+
 @router.get("/{specialist_id}")
 async def get_specialist(
     specialist_id: int,
