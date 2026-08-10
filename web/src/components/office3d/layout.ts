@@ -1,16 +1,16 @@
-/** 3D 办公室布局常量（世界单位）。坐标系：桌面 y=0.74，行沿 x，行距沿 z，所有桌朝 +z。 */
-export const PER_ROW = 6;
-export const DESK_W = 1.6;
-export const DESK_D = 0.9;
-export const DESK_H = 0.74;
-export const COL_X = 2.2;        // 桌列间距
-export const ROW_Z = 2.2;        // 行间距
-export const ROWS_MAX = 4;       // 最多 4 排（24 专员）
+/** 3D 办公室布局常量（世界单位）。坐标系：桌面 y=0.96，行沿 x，行距沿 z，所有桌朝 +z。 */
+export const PER_ROW = 5;
+export const DESK_W = 2.08;
+export const DESK_D = 1.17;
+export const DESK_H = 0.96;
+export const COL_X = 2.6;        // 桌列间距（净空 0.52）
+export const ROW_Z = 2.4;        // 行间距（排间过道净空 1.23）
+export const ROWS_MAX = 4;       // 最多 4 排（4×5 = 20 专员）
 export const AISLE_PATROL_SPEED = 0.8;
 export const DESK_APPROACH_SPEED = 1.4;
-export const SIT_Z_OFFSET = 0.82; // 坐姿位置 = 桌中心 z + 此偏移（桌 +z 侧）
+export const SIT_Z_OFFSET = 1.07; // 坐姿位置 = 桌中心 z + 此偏移（桌 +z 侧）
 
-/** 第 col 列（0..5）的 x */
+/** 第 col 列（0..4）的 x */
 export function deskX(col: number): number {
   return (col - (PER_ROW - 1) / 2) * COL_X;
 }

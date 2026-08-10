@@ -12,49 +12,52 @@ export interface Desk {
   setEmissivePulse(v: number): void;
 }
 
-/** 单张工位：桌面 + 桌腿 + 桌沿发光条 + 电脑（底座/支架/屏幕/外框）+ 凳子 */
+/** 单张工位：白色桌面/桌腿 + 桌沿发光条 + 电脑（底座/支架/屏幕/外框）+ 凳子 */
 export function buildDesk(): Desk {
   const group = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x2b3a52, roughness: 0.8 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x1a2536, roughness: 0.9 });
+  const wood = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 }); // 白色桌面
+  const legMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.6 }); // 浅灰白桌腿
+  const dark = new THREE.MeshStandardMaterial({ color: 0x27334a, roughness: 0.9 }); // 电脑/凳子深蓝灰
   const edgeMat = new THREE.MeshBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.5 });
 
   // 桌面 + 桌腿
-  const top = new THREE.Mesh(new THREE.BoxGeometry(DESK_W, 0.08, DESK_D), wood);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(DESK_W, 0.1, DESK_D), wood);
   top.position.y = DESK_H;
   group.add(top);
-  for (const sx of [-0.7, 0.7]) {
-    for (const sz of [-0.35, 0.35]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, DESK_H - 0.04, 0.08), dark);
-      leg.position.set(sx, (DESK_H - 0.04) / 2, sz);
+  const legX = DESK_W / 2 - 0.13;
+  const legZ = DESK_D / 2 - 0.1;
+  for (const sx of [-legX, legX]) {
+    for (const sz of [-legZ, legZ]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, DESK_H - 0.05, 0.1), legMat);
+      leg.position.set(sx, (DESK_H - 0.05) / 2, sz);
       group.add(leg);
     }
   }
   // 桌沿发光条（前缘，浅蓝）
-  const edge = new THREE.Mesh(new THREE.BoxGeometry(DESK_W + 0.02, 0.02, 0.02), edgeMat);
-  edge.position.set(0, DESK_H + 0.05, DESK_D / 2);
+  const edge = new THREE.Mesh(new THREE.BoxGeometry(DESK_W + 0.02, 0.026, 0.026), edgeMat);
+  edge.position.set(0, DESK_H + 0.065, DESK_D / 2);
   group.add(edge);
 
   // 电脑：底座 + 支架 + 屏幕 + 外框（屏幕朝 +z）
-  const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, 0.3), dark);
-  base.position.set(0, DESK_H + 0.04, 0.08);
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.05, 0.39), dark);
+  base.position.set(0, DESK_H + 0.05, 0.1);
   group.add(base);
-  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.06), dark);
-  stand.position.set(0, DESK_H + 0.13, 0.08);
+  const stand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.18, 0.08), dark);
+  stand.position.set(0, DESK_H + 0.17, 0.1);
   group.add(stand);
   const screenMat = new THREE.MeshStandardMaterial({
     color: 0x0e1c2e, roughness: 0.35, emissive: 0x1677ff, emissiveIntensity: 0,
   });
-  const screen = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.58, 0.06), screenMat);
-  screen.position.set(0, DESK_H + 0.34, 0.1);
+  const screen = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.75, 0.08), screenMat);
+  screen.position.set(0, DESK_H + 0.44, 0.13);
   group.add(screen);
-  const bezel = new THREE.Mesh(new THREE.BoxGeometry(1.06, 0.64, 0.02), dark);
-  bezel.position.set(0, DESK_H + 0.34, 0.135);
+  const bezel = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.83, 0.026), dark);
+  bezel.position.set(0, DESK_H + 0.44, 0.175);
   group.add(bezel);
 
   // 凳子（坐姿支撑）
-  const stool = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.4, 0.36), dark);
-  stool.position.set(0, 0.2, DESK_D / 2 + 0.33);
+  const stool = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.52, 0.47), dark);
+  stool.position.set(0, 0.26, DESK_D / 2 + 0.43);
   group.add(stool);
 
   let state: DeskState = 'idle';
@@ -73,12 +76,12 @@ export function buildDesk(): Desk {
         screenMat.emissive.set(0x1a1a1a);
         screenMat.emissiveIntensity = 0;
       }
-      const dim = s === 'offline';
+      // 桌子始终保持白色不透明（用户要求）；offline 语义只体现在屏幕熄灭 + 人物灰化
       group.traverse((o) => {
         const m = (o as THREE.Mesh).material as THREE.Material | undefined;
         if (m && m !== screenMat && m !== edgeMat) {
-          m.transparent = dim;
-          m.opacity = dim ? 0.5 : 1;
+          m.transparent = false;
+          m.opacity = 1;
         }
       });
     },

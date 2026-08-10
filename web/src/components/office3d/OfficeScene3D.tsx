@@ -78,7 +78,8 @@ export default function OfficeScene3D({
 
     const scene = buildScene();
     const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
-    camera.position.set(0, 16, 14);
+    // 4×5 布局（±5.2 跨）近机位放大主体（~46° 俯视；名牌边缘在垂直 fov 内已验算）
+    camera.position.set(0, 11, 10.5);
     const camTarget = new THREE.Vector3(0, 0, 0.5);
     camera.lookAt(camTarget);
 
@@ -159,7 +160,7 @@ export default function OfficeScene3D({
       for (const [id, t] of ctx.tags) {
         const a = ctx.sim.agents.get(id);
         if (!a) continue;
-        t.obj.position.set(a.pos.x, 1.55, a.pos.z);
+        t.obj.position.set(a.pos.x, 2.0, a.pos.z);
         t.update(a, ctx.selected === id, ctx.hovered === id);
       }
       // 选中聚焦（相机注视点平滑跟随）

@@ -64,7 +64,7 @@ export function createTag(actions: TagActions): TagHandle {
       <a data-act="data">数据</a><a data-act="edit">编辑</a><a data-act="toggle"></a>
     </div>`;
   const obj = new CSS2DObject(el);
-  obj.position.set(0, 1.55, 0);
+  obj.position.set(0, 2.0, 0);
 
   const qDot = el.querySelector('.dot') as HTMLSpanElement;
   const qNm = el.querySelector('.nm') as HTMLSpanElement;

@@ -18,9 +18,12 @@ export interface CharacterRig {
 /** 程序化白色小人（低多边形，无外部模型）：腿/躯干/臂/头 + 姿态插值 */
 export function buildCharacter(): CharacterRig {
   const group = new THREE.Group();
-  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
-  const gray = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.7 });
-  const shoe = new THREE.MeshStandardMaterial({ color: 0x3f3f46, roughness: 0.8 });
+  // 亮白主体（微弱自发光，与蓝灰背景拉开对比）+ 深炭四肢/鞋
+  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, emissive: 0xffffff, emissiveIntensity: 0.12 });
+  const gray = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.7 });
+  const shoe = new THREE.MeshStandardMaterial({ color: 0x2b2b2e, roughness: 0.8 });
+  // 整体等比放大 1.3×（与工位/间距同倍率，保持手落桌面等几何关系）
+  group.scale.setScalar(1.3);
 
   // 腿（髋 pivot 0.42，向下）
   const legL = new THREE.Group();
@@ -66,7 +69,8 @@ export function buildCharacter(): CharacterRig {
   group.add(legL, legR, torso, armL, armR, head);
   const mats = [white, gray, shoe];
 
-  const dimColor = new THREE.Color(0xb0b0b0);
+  // offline 灰化：不透明（用户要求不要太过透明），靠颜色灰化与背景区分
+  const dimColor = new THREE.Color(0x8a9099);
   const baseColors = mats.map((m) => m.color.clone());
 
   const rig: CharacterRig = {
@@ -87,8 +91,8 @@ export function buildCharacter(): CharacterRig {
       for (let i = 0; i < mats.length; i++) {
         const c = baseColors[i].clone().lerp(dimColor, a);
         mats[i].color.copy(c);
-        mats[i].transparent = a > 0;
-        mats[i].opacity = 1 - 0.55 * a;
+        mats[i].transparent = false;
+        mats[i].opacity = 1;
       }
     },
   };
