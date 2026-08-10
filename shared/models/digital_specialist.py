@@ -27,6 +27,8 @@ class Specialist(Base, TimestampMixin):
             "name": self.name,
             "product_id": self.product_id,
             "persona": self.persona,
+            "knowledge_scope": self.knowledge_scope,
+            "prompt_version": self.prompt_version,
             "compliance_level": self.compliance_level,
             "bailian_app_id": self.bailian_app_id,
             "status": self.status,
