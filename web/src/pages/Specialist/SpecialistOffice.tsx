@@ -1,24 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Row, Col, Card, Empty, Spin, Switch, Button, Space, Tag, App,
+  Tag, Switch, Button, Space, App,
 } from 'antd';
-import {
-  RobotOutlined, CoffeeOutlined, PoweroffOutlined,
-  PlusOutlined, ReloadOutlined,
-} from '@ant-design/icons';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { specialistAPI } from '../../services/specialist';
-import { STATUS_MAP } from '../../constants/specialist';
+import OfficeScene from '../../components/office/OfficeScene';
 import type { LiveStatus, LiveStatusItem, Specialist } from '../../types';
-
-dayjs.extend(utc);
-
-const STATE_META: Record<LiveStatusItem['state'], { label: string; color: string }> = {
-  working: { label: '工作中', color: '#1677ff' },
-  idle: { label: '空闲中', color: '#faad14' },
-  offline: { label: '离线', color: '#bfbfbf' },
-};
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -27,85 +14,7 @@ function toSpecialist(sp: LiveStatusItem): Specialist {
   return { ...sp, created_at: '', status: sp.lifecycle } as unknown as Specialist;
 }
 
-/** 工位卡片：头像光晕 + 状态区 + 底部统计 + 悬停操作 */
-function WorkstationCard({
-  item, index, onEdit, onToggleStatus, onViewData,
-}: {
-  item: LiveStatusItem;
-  index: number;
-  onEdit: () => void;
-  onToggleStatus: () => void;
-  onViewData: () => void;
-}) {
-  const meta = STATE_META[item.state];
-  const idle = item.state === 'idle';
-  const offline = item.state === 'offline';
-  return (
-    <Card
-      size="small"
-      hoverable
-      onClick={onViewData}
-      style={{
-        animationDelay: `${index * 120}ms`,
-        borderColor: offline ? '#f0f0f0' : meta.color + '55',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div
-          style={{
-            position: 'relative', width: 40, height: 40, borderRadius: 20, flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: offline ? '#f5f5f5' : meta.color + '1a',
-            boxShadow: offline ? 'none' : `0 0 12px ${meta.color}66`,
-            animation: offline ? 'none' : idle ? 'office-float 3s ease-in-out infinite' : 'office-breathe 2s ease-in-out infinite',
-          }}
-        >
-          <RobotOutlined style={{ fontSize: 20, color: offline ? '#bfbfbf' : meta.color }} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{item.name}</span>
-            {STATUS_MAP[item.lifecycle] && (
-              <Tag color={STATUS_MAP[item.lifecycle].color} style={{ marginInlineEnd: 0 }}>
-                {STATUS_MAP[item.lifecycle].text}
-              </Tag>
-            )}
-          </div>
-          <div style={{ fontSize: 12, color: meta.color, marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-            {item.state === 'working' && <Spin size="small" />}
-            {item.state === 'idle' && <CoffeeOutlined />}
-            {item.state === 'offline' && <PoweroffOutlined />}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {item.state === 'working'
-                ? item.phase_text ?? '正在工作'
-                : meta.label}
-            </span>
-          </div>
-        </div>
-      </div>
-      {item.state === 'working' && item.question_snippet && (
-        <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', lineHeight: 1.5 }}>
-          正在回答：{item.question_snippet}…
-        </div>
-      )}
-      <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#8c8c8c' }}>
-        <span>今日 {item.today_conversations} 次</span>
-        <span>{item.last_active_at ? dayjs.utc(item.last_active_at).local().format('MM-DD HH:mm') : '从未'}</span>
-      </div>
-      <div style={{ marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
-        <Space size={12}>
-          <a onClick={onViewData}>数据</a>
-          <a onClick={onEdit}>编辑</a>
-          <a style={{ color: item.lifecycle === 'active' ? '#ff4d4f' : '#52c41a' }} onClick={onToggleStatus}>
-            {item.lifecycle === 'active' ? '停用' : '启用'}
-          </a>
-        </Space>
-      </div>
-    </Card>
-  );
-}
-
-/** 数字员工办公室：3s 轮询 live-status，卡片化展示每个专员在干什么 */
+/** 数字员工办公室：3s 轮询 live-status，场景化展示每个专员在干什么 */
 export default function SpecialistOffice({
   onAdd, onEdit, onToggleStatus, onViewData,
 }: {
@@ -147,10 +56,6 @@ export default function SpecialistOffice({
 
   return (
     <div>
-      <style>{`
-        @keyframes office-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
-        @keyframes office-float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-      `}</style>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
         <Space size={8}>
           <Tag color="blue" style={{ marginInlineEnd: 0 }}>工作中 {summary.working}</Tag>
@@ -162,38 +67,22 @@ export default function SpecialistOffice({
         <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>
         <Button type="primary" size="small" icon={<PlusOutlined />} onClick={onAdd}>新增专员</Button>
       </div>
-      {items.length === 0 ? (
-        <Empty description="暂无数字专员，点击右上角「新增专员」创建" style={{ padding: 60 }} />
-      ) : (
-        <Row gutter={[16, 16]}>
-          {items.map((item, index) => (
-            <Col key={item.id} xs={12} sm={8} lg={6}>
-              <WorkstationCard
-                item={item}
-                index={index}
-                onEdit={async () => {
-                  // live 数据无 persona/knowledge_scope 等字段，必须先拉全量记录再进编辑表单，
-                  // 否则表单会把空值 JSON 序列化提交，覆盖真实人设（评审 Critical 数据丢失）
-                  try {
-                    const res = await specialistAPI.detail(item.id);
-                    onEdit(res.data.data);
-                  } catch {
-                    message.error('获取专员详情失败，请稍后重试');
-                  }
-                }}
-                onToggleStatus={() => {
-                  const sp = items.find((i) => i.id === item.id);
-                  if (sp) onToggleStatus(toSpecialist(sp));
-                }}
-                onViewData={() => {
-                  const sp = items.find((i) => i.id === item.id);
-                  if (sp) onViewData(toSpecialist(sp));
-                }}
-              />
-            </Col>
-          ))}
-        </Row>
-      )}
+      <OfficeScene
+        items={items}
+        onAdd={onAdd}
+        onEdit={async (item) => {
+          // live 数据无 persona/knowledge_scope 等字段，必须先拉全量记录再进编辑表单，
+          // 否则表单会把空值 JSON 序列化提交，覆盖真实人设（既有 Critical 修复，必须保留）
+          try {
+            const res = await specialistAPI.detail(item.id);
+            onEdit(res.data.data);
+          } catch {
+            message.error('获取专员详情失败，请稍后重试');
+          }
+        }}
+        onToggleStatus={(item) => onToggleStatus(toSpecialist(item))}
+        onViewData={(item) => onViewData(toSpecialist(item))}
+      />
     </div>
   );
 }
