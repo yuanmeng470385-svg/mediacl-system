@@ -52,6 +52,7 @@ export class Simulation {
       this.scene.add(rig.group);
       this.agents.set(item.id, a);
     }
+    const prevState = a.item.state;
     a.item = item;
     a.index = index;
     a.desk = desks[index % desks.length]; // 工位组重建后自动重绑
@@ -63,9 +64,10 @@ export class Simulation {
     } else {
       a.dimTarget = 0;
       if (item.state === 'working') {
-        a.poseTarget = 1;
-        if (a.target === null) a.target = new THREE.Vector3(sitPosOf(index).x, 0, sitPosOf(index).z);
-      } else {
+        a.target = new THREE.Vector3(sitPosOf(index).x, 0, sitPosOf(index).z);
+        if (a.pos.distanceTo(a.target) < 0.05) a.poseTarget = 1;
+      } else if (prevState === 'working') {
+        a.target = null;
         a.poseTarget = 0;
       }
     }
@@ -75,6 +77,12 @@ export class Simulation {
     const a = this.agents.get(id);
     if (!a) return;
     this.scene.remove(a.rig.group);
+    a.rig.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material as THREE.Material | undefined;
+      if (mat) mat.dispose();
+    });
     this.agents.delete(id);
   }
 
@@ -98,7 +106,6 @@ export class Simulation {
             (Math.random() * 2 - 1) * PATROL_X_RANGE, 0,
             a.aisleZ + (Math.random() - 0.5) * 0.4,
           );
-          a.walkPhase += 1.7;
         }
         this.moveToward(a, a.target, AISLE_PATROL_SPEED, dt);
       } else if (a.item.state === 'working' && standing) {
