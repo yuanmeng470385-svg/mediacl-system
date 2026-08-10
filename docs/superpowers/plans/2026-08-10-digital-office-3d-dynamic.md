@@ -847,8 +847,8 @@ export default function OfficeScene3D({
     raf: number;
     last: number;
   } | null>(null);
-  const propsRef = useRef({ onEdit, onToggleStatus, onViewData });
-  propsRef.current = { onEdit, onToggleStatus, onViewData };
+  const propsRef = useRef({ onSelect, onEdit, onToggleStatus, onViewData });
+  propsRef.current = { onSelect, onEdit, onToggleStatus, onViewData };
 
   // 首次挂载：建渲染器/场景/模拟/标签层
   useEffect(() => {
@@ -966,8 +966,9 @@ export default function OfficeScene3D({
         ctx.camTarget.lerp(new THREE.Vector3(0, 0, 0.5), Math.min(1, dt * 2));
       }
       camera.lookAt(ctx.camTarget);
-      renderer.render(scene, camera);
-      css.render(scene, camera);
+      // render 签名要求 THREE.Scene（运行时 Group 等价，类型断言绕过）
+      renderer.render(scene as unknown as THREE.Scene, camera);
+      css.render(scene as unknown as THREE.Scene, camera);
       ctx.raf = requestAnimationFrame(loop);
     };
     ctx.raf = requestAnimationFrame(loop);
