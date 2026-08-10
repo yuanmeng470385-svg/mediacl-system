@@ -231,14 +231,20 @@ export default function KnowledgeList() {
         rowKey="id"
         search={{ labelWidth: 80 }}
         request={async (params) => {
-          const res = await knowledgeAPI.list({
-            page: params.current || 1,
-            page_size: params.pageSize || 10,
-            doc_type: params.doc_type,
-            status: params.status,
-            product_id: params.product_id != null && params.product_id !== '' ? Number(params.product_id) : undefined,
-          });
-          return { data: res.data.data.items, total: res.data.data.total, success: true };
+          try {
+            const res = await knowledgeAPI.list({
+              page: params.current || 1,
+              page_size: params.pageSize || 10,
+              doc_type: params.doc_type,
+              status: params.status,
+              product_id: params.product_id != null && params.product_id !== '' ? Number(params.product_id) : undefined,
+            });
+            return { data: res.data.data.items, total: res.data.data.total, success: true };
+          } catch {
+            // 限流 429/网络抖动静默降级：保留上一次表格数据。
+            // 若不在此兜底，ProTable 在未传 onRequestError 时会向上抛出未捕获拒绝（unhandled rejection）
+            return { data: [], total: 0, success: false };
+          }
         }}
         toolBarRender={() => [
           <Button key="upload" type="primary" icon={<PlusOutlined />} onClick={() => setUploadOpen(true)}>上传文档</Button>,
