@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Row, Col, Card, Empty, Spin, Switch, Button, Space, Tag,
+  Row, Col, Card, Empty, Spin, Switch, Button, Space, Tag, App,
 } from 'antd';
 import {
   RobotOutlined, CoffeeOutlined, PoweroffOutlined,
   PlusOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { specialistAPI } from '../../services/specialist';
 import { STATUS_MAP } from '../../constants/specialist';
 import type { LiveStatus, LiveStatusItem, Specialist } from '../../types';
+
+dayjs.extend(utc);
 
 const STATE_META: Record<LiveStatusItem['state'], { label: string; color: string }> = {
   working: { label: '工作中', color: '#1677ff' },
@@ -87,7 +90,7 @@ function WorkstationCard({
       )}
       <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #f5f5f5', display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#8c8c8c' }}>
         <span>今日 {item.today_conversations} 次</span>
-        <span>{item.last_active_at ? dayjs(item.last_active_at).format('MM-DD HH:mm') : '从未'}</span>
+        <span>{item.last_active_at ? dayjs.utc(item.last_active_at).local().format('MM-DD HH:mm') : '从未'}</span>
       </div>
       <div style={{ marginTop: 6 }} onClick={(e) => e.stopPropagation()}>
         <Space size={12}>
@@ -115,6 +118,7 @@ export default function SpecialistOffice({
   const [autoPoll, setAutoPoll] = useState(true);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const { message } = App.useApp();
 
   const load = async () => {
     try {
@@ -167,9 +171,15 @@ export default function SpecialistOffice({
               <WorkstationCard
                 item={item}
                 index={index}
-                onEdit={() => {
-                  const sp = items.find((i) => i.id === item.id);
-                  if (sp) onEdit(toSpecialist(sp));
+                onEdit={async () => {
+                  // live 数据无 persona/knowledge_scope 等字段，必须先拉全量记录再进编辑表单，
+                  // 否则表单会把空值 JSON 序列化提交，覆盖真实人设（评审 Critical 数据丢失）
+                  try {
+                    const res = await specialistAPI.detail(item.id);
+                    onEdit(res.data.data);
+                  } catch {
+                    message.error('获取专员详情失败，请稍后重试');
+                  }
                 }}
                 onToggleStatus={() => {
                   const sp = items.find((i) => i.id === item.id);

@@ -221,10 +221,15 @@ export default function SpecialistList() {
         modalProps={{ destroyOnHidden: true }}
         initialValues={editing ? {
           ...editing,
-          persona: typeof editing.persona === 'string' ? editing.persona : JSON.stringify(editing.persona ?? ''),
-          knowledge_scope: typeof editing.knowledge_scope === 'string'
-            ? editing.knowledge_scope
-            : JSON.stringify(editing.knowledge_scope ?? ''),
+          // null/undefined 直接留空（toPayload 跳过空值），严禁 JSON.stringify 成 '""' 覆盖后端真实人设
+          persona: editing.persona == null ? undefined : (
+            typeof editing.persona === 'string' ? editing.persona : JSON.stringify(editing.persona)
+          ),
+          knowledge_scope: editing.knowledge_scope == null ? undefined : (
+            typeof editing.knowledge_scope === 'string'
+              ? editing.knowledge_scope
+              : JSON.stringify(editing.knowledge_scope)
+          ),
         } : undefined}
       >
         <SpecialistForm />

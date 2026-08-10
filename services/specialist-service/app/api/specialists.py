@@ -54,7 +54,8 @@ async def get_live_status(
         registry, PHASE_TEXT, PHASE_GENERATING, is_recently_started,
     )
 
-    specialists = db.query(Specialist).all()
+    # 固定按 id 排序：3s/5s 轮询下卡片网格与前 8 工位条不得在两次轮询间换位
+    specialists = db.query(Specialist).order_by(Specialist.id).all()
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     recent_cutoff = now - timedelta(minutes=5)
@@ -99,7 +100,12 @@ async def get_live_status(
             "phase_since": snap.phase_since.isoformat() if snap else None,
             "question_snippet": snap.question_snippet if snap else None,
             "today_conversations": today_count.get(s.id, 0),
-            "last_active_at": last_active.get(s.id).isoformat() if last_active.get(s.id) else None,
+            # 规格：注册表 phase_since 或最近对话时间 —— 首次对话中（对话行未落库）注册表存在时展示阶段开始时刻
+            "last_active_at": (
+                snap.phase_since.isoformat()
+                if snap is not None
+                else last_active.get(s.id).isoformat() if last_active.get(s.id) else None
+            ),
         })
     return success({"items": items, "summary": summary})
 

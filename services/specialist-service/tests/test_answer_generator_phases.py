@@ -1,7 +1,6 @@
 """AnswerGenerator 埋点测试：阶段切换写注册表，退出必置 idle"""
 import asyncio
 from app.core.answer_generator import AnswerGenerator
-from app.core import activity_registry
 from app.core.activity_registry import registry
 from app.models.specialist import Specialist
 from app.services.bailian_client import BailianException

@@ -27,6 +27,10 @@ class ChainStub:
         self.filters.append((a, k))
         return self
 
+    def order_by(self, *a, **k):
+        self.filters.append(("order_by", (a, k)))
+        return self
+
     def group_by(self, *a, **k):
         return self
 
