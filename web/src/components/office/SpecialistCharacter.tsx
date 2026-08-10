@@ -38,8 +38,8 @@ function blinkDelay(id: number): string {
 }
 
 const CSS = `
-@keyframes ch-blink { 0%, 5%, 100% { transform: scaleY(1); } 7.5% { transform: scaleY(0.06); } }
-.ch-blink { animation: ch-blink 4s infinite; transform-origin: 50% 50%; }
+@keyframes ch-blink { 0%, 5%, 100% { transform: scaleY(0.08); } 7.5% { transform: scaleY(1); } }
+.ch-blink { animation: ch-blink 4s infinite; transform-origin: 50% 0; transform-box: fill-box; }
 @keyframes ch-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.015); } }
 .ch-breathe { animation: ch-breathe 3s ease-in-out infinite; transform-origin: 60px 116px; }
 .ch-dim { opacity: 0.45; filter: grayscale(1); }
@@ -136,7 +136,6 @@ export function MiniCharacter({ id, state, size = 24 }: { id: number; state: Cha
         <g stroke="#444444" strokeWidth="1" fill="none">
           <circle cx="18" cy="18" r="4" />
           <circle cx="26" cy="18" r="4" />
-          <path d="M22 18 L22 18" />
         </g>
       )}
     </svg>
