@@ -1,4 +1,5 @@
 """知识库服务 API 路由"""
+import asyncio
 import json
 import logging
 import os
@@ -151,18 +152,22 @@ async def upload_document(
             pass
         raise ParamError(f"文件大小超过上限 {MAX_UPLOAD_SIZE // (1024 * 1024)}MB，拒绝上传")
 
+    # 上传链路含 OSS 上传等同步网络 IO——丢线程池执行，避免阻塞事件循环
+    # （asyncio.to_thread 把整个调用在独立线程串行完成，db session 安全）
     try:
-        doc = _manager(db).create_from_upload(
-            local_path=tmp_path,
-            title=title,
-            doc_type=doc_type,
-            uploader_id=current_user["id"],
-            product_id=product_id,
-            evidence_level=evidence_level,
-            source=source,
-            publish_date=parsed_date,
-            version=version,
-            tags=parsed_tags,
+        doc = await asyncio.to_thread(
+            lambda: _manager(db).create_from_upload(
+                local_path=tmp_path,
+                title=title,
+                doc_type=doc_type,
+                uploader_id=current_user["id"],
+                product_id=product_id,
+                evidence_level=evidence_level,
+                source=source,
+                publish_date=parsed_date,
+                version=version,
+                tags=parsed_tags,
+            )
         )
     finally:
         try:
@@ -231,10 +236,16 @@ async def review_document(
     else:
         # M24: 显式布尔解析，字符串 "false" 必须解析为 False（原 bool("false") == True 是 bug）
         approved = _parse_bool_value(approved_raw)
+    # 审核链路含百炼导入轮询（最长 1h）/DashVector/ES 等同步 IO——丢线程池执行，
+    # 不阻塞事件循环（2 worker 时一个导入卡死全服务的根因，2026-08-11 修复）
     if approved:
-        doc = manager.approve_document(doc_id, current_user["id"])
+        doc = await asyncio.to_thread(
+            lambda: manager.approve_document(doc_id, current_user["id"])
+        )
     else:
-        doc = manager.reject_document(doc_id, current_user["id"])
+        doc = await asyncio.to_thread(
+            lambda: manager.reject_document(doc_id, current_user["id"])
+        )
         # 合规硬伤回归：驳回曾是 early return，跳过了 write_audit_log ——
         # 审核动作（尤其驳回）必须留痕。先写审计再响应。
         if doc.status == "rejected":

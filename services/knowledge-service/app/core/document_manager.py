@@ -86,7 +86,10 @@ class DocumentManager:
             raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
 
         prev_status = doc.status  # M23：中途失败要恢复到的可重试状态
-        self.repo.update_status(doc_id, "processing", reviewer_id)
+        # 并发防抖：先读后写存在竞态（两请求同时读到 draft 都进处理）。
+        # 原子抢占（UPDATE 带状态条件）保证双击/多管理同时审核时只有一个成功。
+        if not self.repo.try_mark_processing(doc_id, reviewer_id):
+            raise BusinessError("文档正在审核中或状态已变化，请刷新后重试", code=4001)
         try:
             if not doc.file_url:
                 raise BailianKnowledgeError("document has no file_url")

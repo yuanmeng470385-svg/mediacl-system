@@ -93,6 +93,14 @@ class _StatusRepo:
     def get(self, doc_id):
         return self.doc
 
+    def try_mark_processing(self, doc_id, reviewer_id):
+        """模拟原子抢占：仅 draft/rejected 可进入 processing（第二次调用返回 False）"""
+        if self.doc is None or self.doc.status not in ("draft", "rejected"):
+            return False
+        self.status_log.append("processing")
+        self.doc.status = "processing"
+        return True
+
     def update_status(self, doc_id, status, reviewer_id=None):
         self.status_log.append(status)
         if self.doc is not None:
@@ -411,3 +419,57 @@ def test_search_es_unconfigured_falls_back(monkeypatch):
     results, source = dm.search("q", top_k=5)
     assert source == "dashvector"
     assert results[0]["backend"] == "dashvector"
+
+
+# ---------- 2026-08-11: 并发防抖（原子抢占，防双击/多管理同时审核） ----------
+
+def test_approve_concurrent_double_click_second_fails():
+    """并发防抖：状态已进入 processing 后，第二个请求原子抢占失败 → 400"""
+    doc = _Doc()
+    repo = _StatusRepo(doc)
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.bailian = _FakeBailian()
+    dm.dashvector = _FakeDV()
+
+    # 模拟并发场景：另一请求已把状态置为 processing（抢占逻辑同：draft→processing）
+    assert repo.try_mark_processing(5, reviewer_id=1) is True
+    assert doc.status == "processing"
+
+    with pytest.raises(BusinessError) as ei:
+        dm.approve_document(5, reviewer_id=2)
+
+    assert ei.value.code == 4001
+    # 第二请求重读到 processing：命中预检查「当前状态 processing 不允许审核」（4001）
+    assert "不允许审核" in str(ei.value)
+    # 第二个请求不得触发任何状态变更（status_log 只有第一个请求的 processing）
+    assert repo.status_log == ["processing"]
+
+
+def test_approve_concurrent_race_both_read_draft():
+    """竞态窗口：两个请求都读到 draft，原子抢占只放行一个"""
+    doc = _Doc()
+
+    class _RacingRepo(_StatusRepo):
+        """抢占返回 False 模拟并发窗口内另一请求已抢走"""
+
+        def try_mark_processing(self, doc_id, reviewer_id):
+            if self.doc.status not in ("draft", "rejected"):
+                return False
+            # 模拟另一个请求抢先：状态已变 processing
+            self.doc.status = "processing"
+            return False
+
+    repo = _RacingRepo(doc)
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.bailian = _FakeBailian()
+    dm.dashvector = _FakeDV()
+
+    with pytest.raises(BusinessError) as ei:
+        dm.approve_document(5, reviewer_id=1)
+
+    assert ei.value.code == 4001
+    assert doc.status == "processing"  # 不被第二请求改动

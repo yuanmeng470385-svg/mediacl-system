@@ -107,6 +107,23 @@ class KnowledgeRepository:
         self.db.refresh(doc)
         return doc
 
+    def try_mark_processing(self, doc_id: int, reviewer_id: int) -> bool:
+        """原子抢占审核权：仅 draft/rejected 可进入 processing（防并发双审）。
+
+        UPDATE 带状态条件并判断受影响行数——多请求/多 worker 并发点击审核时
+        只有一个能抢到；抢不到说明已被其他请求处理或状态已变化。返回是否抢占成功。
+        """
+        from sqlalchemy import text
+        result = self.db.execute(
+            text(
+                "UPDATE knowledge_documents SET status='processing', reviewer_id=:rid, "
+                "review_date=:now WHERE id=:id AND status IN ('draft','rejected')"
+            ),
+            {"rid": reviewer_id, "now": datetime.utcnow(), "id": doc_id},
+        )
+        self.db.commit()
+        return result.rowcount == 1
+
     def local_search(self, query, product_id=None, doc_type=None, top_k=10):
         """本地关键词检索（PostgreSQL 全文检索：标题+正文 tsvector，ts_rank 排序）"""
         from sqlalchemy import func
