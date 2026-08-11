@@ -1,8 +1,12 @@
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { Button, Empty, Progress } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { MiniCharacter, STATE_TINTS } from '../office/SpecialistCharacter';
 import { stateText } from './labels';
 import type { LiveStatusItem } from '../../types';
+
+dayjs.extend(utc);
 
 const CSS = `
 .att-panel { background: #fafafa; border: 1px solid #f0f0f0; border-radius: 12px; padding: 14px 12px; }
@@ -23,7 +27,8 @@ const CSS = `
 
 function relTime(iso: string | null): string {
   if (!iso) return '从未';
-  const ms = Date.now() - new Date(iso).getTime();
+  // 后端存 UTC 字面（无时区后缀）—— 按 UTC 解析再转本地，否则相对时间恒偏 8h
+  const ms = Date.now() - dayjs.utc(iso).valueOf();
   if (ms < 0) return '刚刚';
   const min = Math.floor(ms / 60000);
   if (min < 1) return '刚刚';

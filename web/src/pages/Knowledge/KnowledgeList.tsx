@@ -5,7 +5,11 @@ import {
   App, Button, Col, DatePicker, Descriptions, Form, Input, InputNumber, Modal,
   Row, Select, Tag, Upload,
 } from 'antd';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import type { Dayjs } from 'dayjs';
+
+dayjs.extend(utc);
 import type { UploadFile } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import StatCard from '../../components/StatCard';
@@ -56,7 +60,9 @@ interface UploadFormValues {
 
 function formatTime(value: string | null | undefined): string {
   if (!value) return '-';
-  return value.replace('T', ' ').slice(0, 16);
+  // created_at 为 PG server_default 的 UTC 字面（无时区后缀）—— 按 UTC 解析
+  // 再转本地，否则整点显示恒偏 8h
+  return dayjs.utc(value).local().format('YYYY-MM-DD HH:mm');
 }
 
 export default function KnowledgeList() {

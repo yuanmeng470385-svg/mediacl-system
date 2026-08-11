@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { ProTable, ModalForm } from '@ant-design/pro-components';
+
+dayjs.extend(utc);
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin, Segmented } from 'antd';
 import { PlusOutlined, BarChartOutlined } from '@ant-design/icons';
@@ -145,7 +149,13 @@ export default function SpecialistList() {
         return <Tag color={s.color}>{s.text}</Tag>;
       },
     },
-    { title: '创建时间', dataIndex: 'created_at', width: 170 },
+    {
+      title: '创建时间', dataIndex: 'created_at', width: 170,
+      // created_at 为 PG UTC 字面 —— UTC 解析转本地，否则恒偏 8h
+      render: (_, r) => (r.created_at
+        ? dayjs.utc(r.created_at).local().format('YYYY-MM-DD HH:mm')
+        : '-'),
+    },
     {
       title: '操作', width: 180,
       render: (_, r) => (

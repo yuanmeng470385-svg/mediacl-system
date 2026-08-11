@@ -97,7 +97,9 @@ export default function AuditList() {
       search: {
         transform: (value: any) =>
           Array.isArray(value) && value?.[0]
-            ? { start_time: dayjs(value[0]).format('YYYY-MM-DDTHH:mm:ss'), end_time: dayjs(value[1]).format('YYYY-MM-DDTHH:mm:ss') }
+            // 后端 timestamp 存 UTC 字面，搜索参数也必须是 UTC 字面 ——
+            // 直接用本地时间会整体偏移 8 小时（选中"8 月 1 日"实查 7 月 31 日）
+            ? { start_time: dayjs.utc(value[0]).format('YYYY-MM-DDTHH:mm:ss'), end_time: dayjs.utc(value[1]).format('YYYY-MM-DDTHH:mm:ss') }
             : undefined,
       },
     },

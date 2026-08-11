@@ -4,6 +4,7 @@ import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { Button, Tag, App } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { userAPI } from '../../services/user';
+import { useAuth } from '../../hooks/useAuth';
 import type { User } from '../../types';
 
 const ROLE_MAP: Record<string, { color: string; text: string }> = {
@@ -17,6 +18,12 @@ export default function UserList() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const { message } = App.useApp();
+  const { user: me } = useAuth();
+
+  // #7：后端仅 admin 可变更角色，且任何人不能改自己（users.py update_user 403 语义）
+  // —— 非 admin 或编辑自己时，编辑请求不带 role、表单禁用角色选择
+  const editingIsSelf = !!editing && !!me && editing.id === me.id;
+  const canEditRole = me?.role === 'admin' && !editingIsSelf;
 
   const columns: ProColumns<User>[] = [
     { title: '用户名', dataIndex: 'username', width: 120 },
@@ -58,12 +65,15 @@ export default function UserList() {
           try {
             if (editing) {
               // 后端更新白名单是 full_name（users.py UPDATEABLE_FIELDS），name 不生效
-              await userAPI.update(editing.id, {
+              const payload: Partial<User> = {
                 full_name: values.full_name,
                 phone: values.phone,
-                role: values.role,
                 region: values.region,
-              });
+              };
+              // 仅 admin 且非本人时才带 role —— 否则后端必 403
+              // （manager 带 role 拒绝 / 自改 role 拒绝），manager 编辑不再 403
+              if (canEditRole) payload.role = values.role;
+              await userAPI.update(editing.id, payload);
             } else {
               const payload: Partial<User> = {
                 username: values.username,
@@ -91,6 +101,10 @@ export default function UserList() {
         <ProFormText name="full_name" label="姓名" rules={[{ required: true }]} />
         <ProFormText name="phone" label="手机号" rules={[{ required: true }]} />
         <ProFormSelect name="role" label="角色" rules={[{ required: true }]}
+          disabled={editing ? !canEditRole : me?.role !== 'admin'}
+          tooltip={editing
+            ? (canEditRole ? '可变更角色' : '仅 admin 可改角色，且不能改自己的角色')
+            : (me?.role === 'admin' ? '可指定角色' : '仅 admin 可指定角色，将按默认角色创建')}
           options={Object.entries(ROLE_MAP).map(([k, v]) => ({ label: v.text, value: k }))} />
         <ProFormText name="region" label="区域" />
       </ModalForm>
