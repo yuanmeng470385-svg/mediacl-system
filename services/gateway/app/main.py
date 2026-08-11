@@ -51,8 +51,13 @@ app = FastAPI(
 # - RateLimiter 最内层：已认证请求按 user_id 限流，未认证（public 路径）按 IP 限流。
 
 # 1. 限流（最内层：在 Auth 注入 scope["user"] 之后执行）
+# Redis 分布式滑动窗口（多 worker 共享计数）；Redis 不可用自动降级内存版
 rate_limit = int(_os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
-app.add_middleware(RateLimiter, max_requests_per_minute=rate_limit)
+app.add_middleware(
+    RateLimiter,
+    max_requests_per_minute=rate_limit,
+    redis_url=settings.REDIS_URL,
+)
 
 # 2. JWT 认证
 app.add_middleware(AuthMiddleware)
