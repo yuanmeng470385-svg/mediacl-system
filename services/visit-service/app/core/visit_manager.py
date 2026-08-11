@@ -31,6 +31,7 @@ from app.services.compliance_client import check_compliance
 from app.services.specialist_client import chat_with_specialist
 from app.services.audit_client import write_audit_log
 from app.core.objection_detector import ObjectionDetector
+from app.services.qwen_client import QwenClient
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +268,11 @@ class VisitManager:
         self,
         tingwu: Optional[TingwuClient] = None,
         detector: Optional[ObjectionDetector] = None,
+        qwen: Optional["QwenClient"] = None,
     ):
         self.tingwu = tingwu or TingwuClient()
         self.detector = detector or ObjectionDetector()
+        self.qwen = qwen or QwenClient()
 
     # ==================== 内部查询 ====================
 
@@ -452,12 +455,16 @@ class VisitManager:
             ai_response=text_content[:2000],
             compliance_result=compliance,
         )
+        # LLM 实时推荐（关键节点 + 话术建议）：节流触发、失败降级不阻塞
+        rec = await self._llm_recommend(db, visit_id, user_id, text_content)
         return {
             "visit_id": visit_id,
             "transcript": text_content,
             "compliance": compliance,
             "objections": objection_result,
             "suggestions": self._generate_suggestions(objection_result, compliance),
+            "key_nodes": (rec or {}).get("key_nodes", []),
+            "ai_suggestion": (rec or {}).get("ai_suggestion"),
         }
 
     def _generate_suggestions(self, objection_result: Dict, compliance: Dict) -> Dict:
@@ -470,6 +477,119 @@ class VisitManager:
             "objection_responses": objection_responses,
             "compliance_warnings": compliance.get("violations", []),
         }
+
+    # ==================== 拜访中：LLM 实时推荐（关键节点 + 话术建议） ====================
+
+    _LLM_REC_COOLDOWN_SECONDS = 20.0
+    _LLM_REC_MIN_LENGTH = 6
+
+    async def _llm_recommend(
+        self, db: Session, visit_id: int, user_id: int, text: str,
+    ) -> Optional[Dict]:
+        """LLM 实时推荐：生成关键节点标记（决策点/兴趣点）与话术建议
+
+        触发条件：新句去空白后 ≥6 字；同 visit 冷却 20s（以 key_nodes 最后一条的
+        created_at 计，进程重启/换实例同样生效）。
+        降级：LLM 超时/异常/解析失败 → 记 warning 日志并返回 None，不阻塞主流程。
+        """
+        stripped = text.strip()
+        if len(stripped) < self._LLM_REC_MIN_LENGTH:
+            return None
+
+        record = VisitRepo.get(db, visit_id)
+        if not record:
+            return None
+        nodes = list(record.key_nodes or [])
+        now = datetime.now()
+        if nodes and nodes[-1].get("created_at"):
+            try:
+                last = datetime.fromisoformat(str(nodes[-1]["created_at"]))
+                if (now - last).total_seconds() < self._LLM_REC_COOLDOWN_SECONDS:
+                    return None
+            except ValueError:
+                pass
+
+        recent_quotes = [str(n.get("quote", "")) for n in nodes[-3:] if n.get("quote")]
+        prompt = [
+            {"role": "system", "content": (
+                "你是医药代表拜访的实时陪访助手。根据刚发生的对话片段，标记关键节点并给应对话术。"
+                "只输出一个 JSON 对象，不要任何其他文字："
+                '{"key_nodes":[{"type":"decision_point|interest_point","label":"≤10字短标签",'
+                '"quote":"引用原话≤40字"}],"suggestion":{"topic":"异议主题",'
+                '"advice":"应对话术建议≤80字"} 或 null}。'
+                "没有值得标记的内容时 key_nodes 给空数组；没有异议时 suggestion 给 null。"
+                "type 只能是 decision_point（医生做决策表态/询问决策相关）或 interest_point（医生表现出兴趣/认可）。"
+            )},
+            {"role": "user", "content": (
+                f"对话片段：{stripped}\n"
+                f"最近已标记：{'；'.join(recent_quotes) if recent_quotes else '无'}"
+                "\n（不要重复标记已标记过的引用）"
+            )},
+        ]
+        try:
+            result = await asyncio.to_thread(
+                self.qwen.chat, prompt, temperature=0.2, max_tokens=800,
+            )
+            content = str(result.get("content", "") or "")
+            parsed = self._parse_recommendation_json(content)
+            if parsed is None:
+                logger.warning("visit %s LLM 推荐输出无法解析: %.200s", visit_id, content)
+                return None
+            key_nodes = []
+            for n in parsed.get("key_nodes") or []:
+                if not isinstance(n, dict):
+                    continue
+                ntype = n.get("type")
+                label = str(n.get("label", "")).strip()
+                quote = str(n.get("quote", "")).strip()
+                if ntype not in ("decision_point", "interest_point") or not label:
+                    continue
+                key_nodes.append({
+                    "type": ntype, "label": label[:20], "quote": quote[:60],
+                    "created_at": now.isoformat(),
+                })
+            suggestion = parsed.get("suggestion")
+            if not (isinstance(suggestion, dict) and suggestion.get("advice")):
+                suggestion = None
+            else:
+                suggestion = {
+                    "topic": str(suggestion.get("topic", "")).strip()[:50] or "对话要点",
+                    "advice": str(suggestion.get("advice", "")).strip()[:200],
+                }
+            if key_nodes:
+                record.key_nodes = nodes + key_nodes
+                db.commit()
+            await write_audit_log(
+                user_id=user_id, action="visit_llm_recommend",
+                resource_type="visit", resource_id=str(visit_id),
+                ai_involved=True, ai_model="qwen-plus",
+                ai_response=json.dumps({"key_nodes": key_nodes, "suggestion": suggestion}, ensure_ascii=False)[:2000],
+            )
+            return {"key_nodes": key_nodes, "ai_suggestion": suggestion}
+        except Exception as e:
+            # 降级铁律：推荐失败绝不影响转写/合规/异议主流程
+            logger.warning("visit %s LLM 实时推荐失败（不阻塞）: %s", visit_id, e)
+            return None
+
+    @staticmethod
+    def _parse_recommendation_json(content: str) -> Optional[Dict]:
+        """从 LLM 输出提取 JSON 对象：容忍 ```json 代码块与前后缀杂讯"""
+        text = content.strip()
+        # 去 markdown 代码块围栏
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start:end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
 
     # ==================== 拜访后：结构化记录 & 跟进建议 ====================
 
