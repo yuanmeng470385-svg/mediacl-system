@@ -39,12 +39,16 @@ class AuditLogger:
         client_ip: Optional[str] = None,
         user_agent: Optional[str] = None,
         request_id: Optional[str] = None,
+        **kwargs,
     ) -> Optional[int]:
         """
         写入一条审计日志
 
         如果 ai_prompt 或 ai_response 传入原文，只存 SHA-256 hash（安全 + 省空间）
         返回日志 ID，失败返回 None（不影响业务）
+
+        注意：**kwargs 吸收调用方多传的未知键（如 payload 里的业务扩展字段），
+        否则 `log(db, **request)` 会在函数体外抛 TypeError 导致 500 且日志静默丢失。
         """
         try:
             ai_prompt_hash = (

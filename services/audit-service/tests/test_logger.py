@@ -71,6 +71,19 @@ class TestAuditLogger:
         assert log_id is None
         mock_db.rollback.assert_called()
 
+    def test_log_ignores_unknown_keys(self):
+        """回归：#3 未知键不再抛 TypeError（log(db, **request) 白名单吸收）"""
+        mock_db = _make_mock_db()
+        log_id = self.logger.log(
+            mock_db,
+            service_name="test-service",
+            action="test_action",
+            biz_ext_field="多余字段",
+            extra_nested={"a": 1},
+        )
+        assert log_id == 1
+        mock_db.add.assert_called_once()
+
     def test_log_with_compliance_result(self):
         """带合规审核结果的审计日志"""
         mock_db = _make_mock_db()

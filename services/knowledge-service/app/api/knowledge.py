@@ -296,7 +296,8 @@ def validate_feedback_request(request: dict) -> dict:
     if rating not in (1, -1):
         raise ParamError("rating 必须是 1（有用）或 -1（无用）")
     return {"query": query, "rating": rating,
-            "doc_id": (request.get("doc_id") or "")[:100],
+            # doc_id 兼容 int/str（历史客户端传数字 id），强转 str 防 500
+            "doc_id": str(request.get("doc_id") or "")[:100],
             "comment": (request.get("comment") or "")[:500]}
 
 

@@ -39,12 +39,27 @@ def _fake_specialist(specialist_id: int) -> Specialist:
 
 
 def test_ws_无token关4401():
-    """无 token：握手被服务端拒绝，关闭码 4401（与 asr_ws 语义一致）"""
+    """无 token：握手成功（101）后立即以 4401 关闭 —— 先 accept 再 close，
+    关闭码可达客户端；旧实现未 accept 时 close 被吞成握手 403，网关兜底 4500。"""
     with TestClient(app) as client:
-        with pytest.raises(WebSocketDisconnect) as exc:
-            with client.websocket_connect("/ws/specialists/1/chat"):
-                pass  # 不应成功；TestClient 在握手被拒时抛 WebSocketDisconnect
-        assert exc.value.code == 4401
+        with client.websocket_connect("/ws/specialists/1/chat") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 4401
+
+
+def test_ws_专员不存在关4404(monkeypatch):
+    """专员不存在/非 active：握手成功后立即以 4404 关闭"""
+    monkeypatch.setattr(
+        "app.api.chat_ws._get_specialist",
+        lambda db, specialist_id: None,
+    )
+    token = create_token(user_id=1, username="tester", role="rep")
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/ws/specialists/999/chat?token={token}") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 4404
 
 
 def test_ws_question_delta_done_流程(monkeypatch):

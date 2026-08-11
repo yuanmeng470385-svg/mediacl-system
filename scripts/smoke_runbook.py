@@ -15,7 +15,11 @@ load_dotenv()  # 从仓库根 .env 加载（INTERNAL_API_KEY / 联调手机号�
 
 BASE = "http://localhost:8000"
 IK = os.getenv("INTERNAL_API_KEY", "")
-PHONE = os.getenv("SMOKE_PHONE", "13800138000")
+PHONE = os.getenv("SMOKE_PHONE", "")
+if not PHONE:
+    print("[FAIL] 请先设 SMOKE_PHONE=<已注册手机号>（如 admin 的 13812345678）再运行；"
+          "默认值只会撞上验证码冷却 + 未注册报错。")
+    sys.exit(2)
 
 
 def call(method, path, body=None, headers=None):
@@ -55,7 +59,9 @@ def main():
     token = None
     for attempt in range(3):
         st, resp = call("POST", "/api/v1/auth/send-code", {"phone": PHONE})
-        code_echo = (resp or {}).get("data", {}).get("code")
+        # 冷却响应 data 为 null —— 逐级 or {} 防 None.get（历史崩溃点）
+        data = (resp or {}).get("data") or {}
+        code_echo = data.get("code") if isinstance(data, dict) else None
         if st == 200 and code_echo:
             time.sleep(0.3)
             st2, resp2 = login_with_code(PHONE, code_echo)
@@ -65,8 +71,14 @@ def main():
                 break
             print(f"[!] 第{attempt+1}次: send-code 成功但 login={st2} {resp2.get('message') if resp2 else ''}")
         else:
-            print(f"[!] 第{attempt+1}次: send-code={st} {resp.get('message') if resp else ''}")
-        time.sleep(2)
+            msg = (resp or {}).get("message", "") if resp else ""
+            if "频繁" in msg or "冷却" in msg:
+                print(f"[!] 第{attempt+1}次: 验证码 60s 冷却中，等 62s 再试……")
+                time.sleep(62)
+            else:
+                print(f"[!] 第{attempt+1}次: send-code={st} {msg}")
+        if not code_echo:
+            time.sleep(2)
     if not token:
         print("[FAIL] 登录失败（可能验证码被其他客户端消费，稍后重试）")
         return 1

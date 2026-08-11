@@ -51,6 +51,10 @@ async def chat_ws(
     specialist_id: int,
     db: Session = Depends(get_db),
 ):
+    # 必须先 accept 再 close —— Starlette 在握手完成前调用 close() 只会让
+    # 握手失败（表现为 403），4401/4404 关闭码永远到不了客户端，网关会兜底
+    # 4500。先 accept 后 close，客户端能收到真实业务关闭码。
+    await websocket.accept()
     token = websocket.query_params.get("token", "")
     try:
         payload = verify_token(token)
@@ -64,7 +68,6 @@ async def chat_ws(
         await websocket.close(code=4404)
         return
 
-    await websocket.accept()
     send_lock = asyncio.Lock()
 
     async def send(frame: dict):
