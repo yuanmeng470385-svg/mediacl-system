@@ -316,7 +316,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 17 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 13（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
 
 **已知问题（2026-08-06 第四批后）**：
-- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮仅提示 stub（待 NLS 配置后接线）。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测；"录完突发推流 + 立即 stop"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏。
+- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮为入口提示 Alert（语音转写需在拜访中页使用——无拜访上下文），拜访中页为全链路流式语音输入。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测；M19 已修复——轮询增量流式推流（录音中每 2s 读增量推送，stop 推完剩余并发 stop 帧）。
 - 说话人标签已渲染（ASR 帧 speaker 字段，rep/doctor，缺省 rep）；服务端 NLS 分离参数名（enable_speaker_identity/speaker_diarization）待真机确认。
 - 聊天 WS 流式已接（走网关 8000），未配真实百炼 key 时未做模拟器端到端冒烟。
 - HelpCenter 已接合规规则接口（红线清单真实数据，reject 类规则）；联系方式仍为静态占位。
@@ -331,7 +331,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 服务端：`visit-service/app/services/realtime_asr.py`（`RealtimeAsrClient`：AK/SK 签名换 NLS 临时 Token → `wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1?token=` → StartTranscription → 二进制 PCM 推流 → SentenceBegin/ResultChanged/SentenceEnd 事件；`enable_intermediate_result=true` 实时出字）。未配置 `NLS_APPKEY` 自动降级 `MockRealtimeAsrClient`（模拟文本，可联调）。
 - WS 端点：`/ws/visits/{visit_id}/asr?token=<JWT>`（移动端推 PCM → 增量 JSON 回推 → 断句落库 conversation_transcript → 每句实时合规检查并回推 compliance 事件）。**注意 WS 不走网关**（网关 proxy 不支持升级），直连 visit-service:8002。
 - 听悟客户端保留用于拜访后归档（完整音频离线转写）。
-- 移动端接入点（已接，2026-08-06）：`react-native-audio-record` 录 WAV(16k/16bit/mono) → `readWavPcm` 跳过 44 字节头 → 16KB 分片经 `mobile/src/services/asr.ts` 推 WS（"录完再推"，非流式——audio-record 无流式回调）；`{"type":"stop"}` 结束；sentence 帧增量回填输入区，completed 帧回传末句全文走 `addTranscript` 落库。NLS_APPKEY 未配时服务端 fail-closed（error 帧 + 关 4500，不落假文本）。
+- 移动端接入点（已接，2026-08-06；M19 流式化 2026-08-11）：`react-native-audio-record` 录 WAV(16k/16bit/mono) → **流式推流**（M19 修复——录音期间每 2s 轮询读增量推送：Android 录音中读 `temp.pcm` 裸增量，iOS 读 WAV 增量；stop 后统一切 WAV，不再"录完再推"）→ 16KB 分片经 `mobile/src/services/asr.ts`（`connectAsrStreaming`）推 WS；`{"type":"stop"}` 结束；sentence 帧增量回填输入区，completed 帧回传末句全文走 `addTranscript` 落库。NLS_APPKEY 未配时服务端 fail-closed（error 帧 + 关 4500，不落假文本）。
 
 ## Known Gaps（后端已知缺口，勿误以为已实现）
 
@@ -360,7 +360,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~流式答案合规旁路~~（generate_stream 事后检查时违规文本已发出 → delta 逐帧 fast 门禁：跳语义层只跑关键词/正则，命中停发 + full 复核写审计/拦截记录 + compliance 帧 + 掩码 done；降级路径同门禁）
 - ~~hcp mass assignment~~（create/update 白名单外字段 400 + repo _filter_writable 兜底，id/created_at/updated_at 不可覆盖，批量导入不受影响）
 - ~~收藏多轮错配~~（toggle_favorite 以被收藏行为锚点取同轮问答，过滤 id<=锚点防快照到后续轮次）
-- 配套测试：compliance TestFastMode、specialist 中流阻断/降级阻断、hcp repo+API 白名单、收藏 3 个多轮场景；8 服务回归全绿（audit 13/auth 44/compliance 43/specialist 70/hcp 27/visit 53/knowledge 44/gateway 26）
+- 配套测试：compliance TestFastMode、specialist 中流阻断/降级阻断、hcp repo+API 白名单、收藏 3 个多轮场景；8 服务回归全绿（audit 13/auth 44/compliance 43/specialist 70/hcp 27/visit 53/knowledge 44/gateway 26）（此为 2026-08-11 首批提交时的快照）
 
 已修（2026-08-11 十项缺陷 + 向量链路根因，commit 012ab1a..2d0db2b + 6dce273，已推 origin/master；2026-08-11 全文件审计补记）：
 - ~~十项缺陷 #1-#9~~：compliance /rules·/blocks·/stats 收紧 require_roles(*RULE_ADMIN_ROLES) + 新增净化版 `/redlines`（rep/移动端红线清单，无 patterns/content，mobile compliance.ts 已切换）；hcp /{id}/interactions 角色感知（rep 强制 user_id 过滤）；audit `logger.log()` 加 `**kwargs` 吸收未知键（原请求体未知键 → 500 审计静默丢失）；chat_ws 先 accept 再 close 4401/4404（旧实现 close 被握手 403 吞掉落 4500）；web 时间 3+1 处 UTC 解析；knowledge /feedback doc_id str() 强转；web UserList 编辑按角色（manager 不带 role / admin 禁自改）；mobile content.ts doc_type→type 映射（Tab 过滤恒空）；smoke_runbook 强制 SMOKE_PHONE + 冷却响应 data:null 防护
