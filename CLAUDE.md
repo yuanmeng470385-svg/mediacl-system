@@ -26,9 +26,9 @@ Web 管理后台 (React+Vite, web/, :3000) ─┐
 
 **关键架构决策：** 每个数字专员 = 一个阿里云百炼多模态交互开发套件 App（自带知识库/文档解析/向量化/检索）。业务层不建文档处理流水线，百炼内部消化。陪访助手/医生管理不需要百炼App，全部通过千问直调（`DASHSCOPE_API_KEY`）或调用 specialist 的 chat 接口。
 
-**网关 ROUTE_MAP（main.py:81-93）：** 除 7 个服务前缀外，还映射了四个跨服务路由 —— `/api/v1/conversations`、`/api/v1/favorites`（→specialist）、`/api/v1/tasks`（→visit）、`/api/v1/users`（→auth），前端按资源路径访问无需关心服务归属。
+**网关 ROUTE_MAP（main.py:81-93）：** 除 7 个服务前缀外，还映射了五个跨服务路由 —— `/api/v1/conversations`、`/api/v1/favorites`（→specialist）、`/api/v1/tasks`（→visit）、`/api/v1/users`（→auth）、`/api/v1/nls`（→visit），前端按资源路径访问无需关心服务归属。
 
-**2026-08-11 审计补记的服务端点（此前未入文档）**：audit `GET /api/v1/audit/stats`（仪表盘聚合：总数/风险分布/服务分布/按日趋势）、hcp `POST/DELETE /api/v1/hcps/{hcp_id}/tags`（标签增删）、visit `GET /api/v1/tasks` + `PUT /api/v1/tasks/{task_id}` + `GET /api/v1/visits/{visit_id}/tasks`（tasks 模块，follow_up 自动建任务后管理）、compliance `POST /api/v1/compliance/rules/test`（规则试跑）与 `GET /api/v1/compliance/redlines`（见 Compliance Rules 章节）。
+**2026-08-11 审计补记的服务端点（此前未入文档）**：audit `GET /api/v1/audit/stats`（仪表盘聚合：总数/风险分布/服务分布/按日趋势）、hcp `POST/DELETE /api/v1/hcps/{hcp_id}/tags`（标签增删）、visit `GET /api/v1/tasks` + `PUT /api/v1/tasks/{task_id}` + `GET /api/v1/visits/{visit_id}/tasks`（tasks 模块，follow_up 自动建任务后管理）、compliance `POST /api/v1/compliance/rules/test`（规则试跑）与 `GET /api/v1/compliance/redlines`（见 Compliance Rules 章节）、visit `GET /api/v1/nls/tts-token`（TTS 合成凭证：require_roles rep/admin/manager；未配 NLS_APPKEY → BusinessError 4xxx；移动端 TTS 凭证）。
 
 ## Commands
 
@@ -56,11 +56,11 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-11 全量 377 passed）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-11 全量 385 passed）
 cd services/auth-service && python -m pytest tests/ -v        # 50 用例（含 test_jwt_failfast.py）
 cd services/specialist-service && python -m pytest tests/ -v  # 71
 cd services/hcp-service && python -m pytest tests/ -v         # 36
-cd services/visit-service && python -m pytest tests/ -v       # 53
+cd services/visit-service && python -m pytest tests/ -v       # 61
 cd services/compliance-service && python -m pytest tests/ -v  # 59
 cd services/knowledge-service && python -m pytest tests/ -v   # 51
 cd services/audit-service && python -m pytest tests/ -v       # 19
@@ -213,7 +213,7 @@ async with httpx.AsyncClient(timeout=10.0) as client:
 
 ## Database
 
-PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql）。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
+PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes` 列由迁移 006 新增（LLM 实时推荐落库））。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
 
 **审计表不可篡改（`scripts/migrations/002_audit_immutable.sql`）**：audit_logs 的 owner 是 NOLOGIN 占位角色 `medagent_audit_owner`；`medagent_audit`（审计服务专用，`AUDIT_DATABASE_URL` 配置）只有 INSERT/SELECT；`medagent` 只 SELECT。该 migration 还会把 medagent 从 superuser 降级（PostgreSQL 官方镜像默认把 `POSTGRES_USER` 设为 superuser，superuser 无视 REVOKE）。migration 只需执行一次（medagent 降级后无法重跑，补权限找表 owner 或单用户模式）。
 
@@ -283,7 +283,7 @@ API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；
 - 专员页：列表分页 + 创建/编辑/启停真实调用 + "数据"抽屉（stats）；知识库页：上传/审核/详情真实调用
 - 系统配置页：只读展示配置状态（`GET /api/v1/system/config`，admin），配置经 .env 环境变量管理，不支持在线保存
 - 新增端点：`/compliance/blocks/stats?days=N`（region join 失败自动降级 service 维度）、`/compliance/blocks/{id}`（完整内容+context）、`/system/config`（仅返回配置状态布尔，绝不返回密钥值）
-- **医生管理缺口（2026-08-11 全文件审计确认）**：`DoctorList`「新增医生」按钮仅 `message.info('新增医生功能')` 占位（web 六页真实接线不含医生管理）；`services/doctor.ts` 已定义 AI 画像接口 `GET /hcps/{id}/profile` 但无页面调用（`DoctorDetail` 只用 detail + interactions）；`components/HealthDot.tsx` 是全仓无引用的死代码；`tsconfig.tsbuildinfo` 构建产物残留在仓库（noEmit 下 tsc -b 生成，未 gitignore）
+- **医生管理缺口（2026-08-11 全文件审计确认）**：~~DoctorList「新增医生」按钮仅 message.info 占位~~（2026-08-11 已修 ModalForm 接线）；~~services/doctor.ts 的 AI 画像接口 GET /hcps/{id}/profile 已定义但无页面调用~~（2026-08-11 已修 DoctorDetail 画像卡片）；HealthDot.tsx 死代码（保留，可后续清理）；tsconfig.tsbuildinfo 残留（保留）
 
 **数字员工办公室 3D 视图（2026-08-10 v4 完成 + 2026-08-11 视觉调优#2，已推 origin/master）**：专员列表页 `/specialist/list` Segmented 切换「办公室」视图 = 左侧 280px 出勤面板（AttendancePanel.tsx：环形出勤率/状态分布/今日对话/明细列表，与 3D 双向联动）+ 右侧 Three.js 3D 场景（**`three ^0.185.1` + `@types/three` 为唯一需老板拍板的额外依赖**，打破原零依赖约定；dependencies 常规项为 axios/dayjs/react-router-dom，注意 @types/three 在 dependencies 而非 devDependencies）。模块在 `web/src/components/office3d/`：
 - `layout.ts` — 4×5=20 工位（COL_X 3.9 / ROW_Z 3.6，用户要求间距 1.5× 防拥挤；桌 2.08×1.17×0.96，人 1.3×）；`deskX/rowZ/sitPosOf/aislePosOf` 坐标函数
@@ -308,7 +308,7 @@ cd mobile && npx react-native start                   # Metro（Node v25 实测�
 # git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
 cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（50 用例 = 契约 29 + wsChat 9 + asr 8 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
+# 测试：cd mobile && npx jest（64 用例 = 契约 31 + wsChat 9 + asr 8 + tts 7 + asrStreaming 5 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
 ```
 
 结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；**注意 `HCPProfile`/`ComplianceRuleDetail` 是声明了但从未注册的死路由**）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
@@ -368,15 +368,24 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~听悟 _parse_result 恒空~~（按真实 GetTaskInfo 结构解析 result.text/result.sentences，speaker_id=0 用 is not None；另驳回写审计、归档清索引、登录失败写审计一并补上）
 - ~~**向量化链路从未真正生效**~~（EMBEDDING_DIM=1536 是错误假设，text-embedding-v3 最大 1024 维 → collection 以 1536 建库，每次 upsert 维度不匹配**静默失败**（DashVector 响应式 API 不抛异常 + 代码不查返回码），文档全部"上架成功但向量缺失"；已修 EMBEDDING_DIM=1024 + upsert/create 响应码检查（失败 raise）+ **删除重建 collection**；delete_doc 双 bug——Collection.delete 不支持 filter + filter 字符串必须双引号，改先 query(filter) 再 delete(ids=)）
 - ~~网关 knowledge 路由超时 30s→120s~~（百炼导入 ~28s + 向量化，30s 网关先断 → "业务完成但客户端 504"）
-- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 53 = **377 passed**；mobile jest 50；web build PASS
+- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 61 = **385 passed**；mobile jest 64；web build PASS
+
+已修（2026-08-11 第二批：web 医生管理 + 移动端语音链路，用户逐项拍板后实施）：
+- ~~web 新增医生占位 / AI 画像未展示~~（ModalForm 真实接线 POST /hcps；DoctorDetail 画像卡片含降级兼容；画像映射移植 mobile hcp.ts）
+- ~~移动端语音输入 stub~~（真实链路已接：录音 → PCM → visit-service WS → NLS；M19 修复：录完突发推流改轮询增量流式推流，服务端 asr_ws.py 零改动）
+- ~~听悟 TTS 未接~~（新端点 GET /api/v1/nls/tts-token 下发 {token, appkey, expires_at}，复用 realtime_asr.get_nls_token；mobile tts.ts 直调 NLS REST 合成 + react-native-sound 播放；未配 NLS_APPKEY 时 4xxx 报错、按钮禁用提示）
+- ~~关键节点标记/话术建议实时推荐（后续版本）~~（visit-service process_transcript 节流 20s + ≥6 字触发 qwen-plus 生成 {key_nodes, suggestion}，失败降级不阻塞；落库 visit_records.key_nodes（迁移 006）；transcript 响应新增 key_nodes/ai_suggestion；mobile 拜访中「AI 实时推荐」区展示 + 话术朗读）
+- ~~NLS_APPKEY 未配~~（.env 配置位就绪；NLS_MOCK=1 联调）
+- ~~百炼 App 未发布 → 对话恒降级 qwen~~（用户确认已发布，降级解决）
+- mobile host 集中：src/config.ts（API/ASR/聊天 WS 三处，真机改一处）
 
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做；ES_URL 未进 .env.example）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
-- web 医生管理：`DoctorList`「新增医生」按钮仅占位提示（无真实新增）；AI 画像接口 `GET /hcps/{id}/profile` 已定义但页面未展示（2026-08-11 全文件审计确认）
-- 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
-- NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
-- **百炼 App 未发布**（`mm_cd1af9fc5bf1444ebc50c5a8fe4e`）：真实 key 已配，但 2026-08-06 冒烟确认 App 未发布 → 对话恒降级 qwen（citations 空）。控制台发布并绑定已过审知识库后重跑 `smoke_runbook.py`，降级 warning 应消失
-- 真机端到端未跑（模拟器无麦克风；`client.ts`/`asr.ts`/`wsChat.ts` 三处 host 需改局域网 IP，见 runbook 2.4）——聊天 REST 已冒烟通过
+- ~~web 医生管理：DoctorList「新增医生」按钮仅占位提示（无真实新增）；AI 画像接口 GET /hcps/{id}/profile 已定义但页面未展示（2026-08-11 全文件审计确认）~~（2026-08-11 已修：ModalForm 真实接线 + DoctorDetail AI 画像卡片）
+- 移动端：~~语音输入仍是 stub~~（2026-08-11 已修：真实链路已接 + 流式推流）；~~关键节点标记/话术建议实时推荐（需求标"后续版本"）~~（2026-08-11 已做 LLM 版：visit-service 节流推荐 + mobile 推荐区）；~~听悟 TTS 未接~~（2026-08-11 已接：NLS REST 合成 + mobile 朗读按钮）
+- NLS_APPKEY 已在 .env 配置位就绪（用户填真实 AppKey 后生效；开发联调 NLS_MOCK=1，Mock 文本不落库）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
+- ~~百炼 App 未发布（对话恒降级 qwen）~~（用户确认已发布，对话降级已解决）
+- 真机端到端未跑（流式推流 / TTS / 说话人分离待真机确认；host 已集中 mobile/src/config.ts，见 runbook 2.4）
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - ~~网关限流为单进程内存版（--workers 2 时每 worker 独立限额）~~（486d440 接 Redis 分布式滑动窗口，内存版仅降级兜底）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
@@ -444,3 +453,6 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **shared/prompts/oncology_specialist.yaml 是孤儿资源**：话术模板文件，目前无任何服务加载（main.py 均未引用），改动它不会影响任何行为。
 - **web/ three 是唯一需拍板的额外依赖**：3D 办公室引入（老板拍板打破零依赖约定；axios/dayjs/react-router-dom 属常规框架依赖），新增前端依赖需同样先问；@types/three 在 dependencies 而非 devDependencies；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
 - **Metro 打包失败 = App 白屏/无法加载**：任何相对路径 import 解析失败（如 `SettingsScreen.tsx` 的 `require('../../package.json')` 少一层 `../`，2026-08-11 623a6cb 修复）会让整个 bundle 挂掉，`metro.log` 里 `Unable to resolve module ... from <file>` 即定位点；改完代码 App 不会自动重拉 bundle，需 `adb shell am force-stop com.medagent.mobile` 后重启 App。
+- **NLS TTS 合成**：mobile 直调 `https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?appkey&token&text&format=wav&sample_rate=16000`（REST 一次性合成，非流式）；appkey 非机密可放客户端，AK/SK 永不出服务端
+- **mobile/ react-native-sound 是首个音频播放依赖**（TTS 朗读；原生模块需重新 run-android）
+- **transcript 响应含 key_nodes/ai_suggestion**（LLM 推荐节流 20s/句；失败返回空数组/null 不阻塞）
