@@ -99,6 +99,9 @@ from shared.common.auth import get_current_user, create_token, require_roles
 # @router.get("/xxx") → async def api(current_user: dict = Depends(get_current_user)): ...
 # @router.post("/rules") → async def api(current_user: dict = Depends(require_roles("admin", "manager"))): ...
 #   require_roles 未登录 401、角色不符 403（code 3000）。角色：admin/manager/rep/compliance/medical/finance
+#   （2026-08-11）受限端点**每次实时查库**（注入 db 会话）：token 里的 role/status 只是登录时刻快照
+#   （最长 7 天），降级或停用后旧 token 立即失效——账号不存在/status != active → 403 "账号不存在或已停用"；
+#   角色不符 → 403 "无权限"；403 统一抛 PermissionError（AppError）走共享 exception_handler 渲染 {code, message, data}
 
 from shared.common.db_session import get_db
 # async def api(db: Session = Depends(get_db)): ...
@@ -220,6 +223,8 @@ class MyModel(Base, TimestampMixin):
 
 semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语义规则静默跳过。
 
+**fast 模式（2026-08-11 流式门禁引入）**：`POST /api/v1/compliance/check` 支持 `fast` 参数（透传给 `checker.check(fast=True)`）——**跳过 LLM 语义层，只跑关键词/正则**（毫秒级），fast 命中不写 compliance_blocks、不计 COMPLIANCE_BLOCKS 指标（阻断时由调用方对完整文本做 full 复核统一记录）。供 specialist 流式逐帧门禁使用。
+
 **语义检查安全行为（S7）**：内容包裹在 `<user_content>` 标记中（其中的任何指令都只是数据）；LLM 输出**解析失败**（JSON 错误/截断）时按违规拦截（R999, action=reject）——这是注入攻击与截断的迹象，fail-closed；只有**网络/API 错误**才 fail-open 降级。
 
 ## Bailian WebSocket Protocol
@@ -236,8 +241,9 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 **空答案兜底（2026-08-06 实测修复，commit 908af39）**：百炼 App **未发布**/知识库无内容时 WS 协议全程正常（Listening → 回声 → RespondingContent）但 `RespondingContent.text` 为空——`chat()` 无异常返回空串。`AnswerGenerator.generate/generate_stream` 现在对空答案抛 `BailianException` 统一走 qwen 降级（此前会空回答 + 合规审核对空 content 报 400）。排查：`python scripts/probe_bailian_ws.py` 直连 dump 帧；App 发布后降级 warning 应消失。
 
-**聊天 WS 流式链路（2026-08-06 三批实施后，REST `/chat` 保留为降级）**：
+**聊天 WS 流式链路（2026-08-06 三批实施后，REST `/chat` 保留为降级；2026-08-11 加逐帧合规门禁）**：
 - specialist：`BailianClient.chat_stream()`（逐帧 yield delta/done）→ `AnswerGenerator.generate_stream()`（合规预检 → 流式 → 答案合规审核 → 审计 → done 帧，字段与 REST 返回一致 + type）→ WS 端点 `/ws/specialists/{id}/chat?token=JWT`（`app/api/chat_ws.py`：token 无效关 4401、专员不存在关 4404、question 空/超时/异常关 4500；`start → delta* → done` 帧，done 前 `_persist_conversation` 落库并带 conversation_id；send 统一加锁防 ConcurrencyError）。
+- **逐帧合规门禁（2026-08-11）**：delta 帧路径每帧对累积文本做 fast 检查（关键词/正则，毫秒级），命中即停——**违规帧不转发**；随后对完整文本 full 复核（含语义层，写 chat_blocked 审计 + compliance_blocks），产出 `compliance` 帧（blocked + violations）+ 掩码 done（"该问题建议直接咨询医学顾问。"）。降级路径（Bailian 异常 → qwen）整段输出前同样过门禁。chat_ws 不转发 compliance 帧（RN 端 default case 忽略未知帧，onDone 处理 blocked），协议与前端零改动。
 - gateway：`/api/v1/specialists/{id}/chat/ws` 双向透传代理（token 原样转发，网关不重复鉴权——WS scope 不经 BaseHTTPMiddleware）。
 - mobile：`mobile/src/services/wsChat.ts` 走网关 8000（question 帧缓冲到 onopen 后发送）；`ChatScreen` 流式渲染增量气泡，8s 未收到 start 自动降级 REST（specialistAPI.sendMessage），blocked/violations 按 REST 同款拼装展示。
 
@@ -323,6 +329,13 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~百炼空答案绕过降级~~（App 未发布时 RespondingContent.text 空 → 空回答 + 合规 400；现抛 BailianException 走 qwen 降级）
 - 冒烟基线已建立（`scripts/smoke_runbook.py` 可一键复跑）：8 服务健康 / DEV_MODE 验证码登录 / 专员分页契约 / R001·R003 真实命中 / 审计 request_id 贯穿 —— 全部通过
 
+已修（2026-08-11 四合规/安全债，commit e6c0d75..b63f736，已推 origin/master）：
+- ~~require_roles 只信 token~~（降级/停用后旧 token 最长 7 天仍可访问受限端点 → 每次受限请求查库，role/status 以库为准，403 统一 PermissionError 渲染 {code,message,data}）
+- ~~流式答案合规旁路~~（generate_stream 事后检查时违规文本已发出 → delta 逐帧 fast 门禁：跳语义层只跑关键词/正则，命中停发 + full 复核写审计/拦截记录 + compliance 帧 + 掩码 done；降级路径同门禁）
+- ~~hcp mass assignment~~（create/update 白名单外字段 400 + repo _filter_writable 兜底，id/created_at/updated_at 不可覆盖，批量导入不受影响）
+- ~~收藏多轮错配~~（toggle_favorite 以被收藏行为锚点取同轮问答，过滤 id<=锚点防快照到后续轮次）
+- 配套测试：compliance TestFastMode、specialist 中流阻断/降级阻断、hcp repo+API 白名单、收藏 3 个多轮场景；8 服务回归全绿（audit 13/auth 44/compliance 43/specialist 70/hcp 27/visit 53/knowledge 44/gateway 26）
+
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
 - 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
@@ -333,15 +346,15 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - 网关限流为单进程内存版（--workers 2 时每 worker 独立限额）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
 
-**审计确认的技术债（2026-08-06，勿误以为已修）**：
-- **听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）
-- **流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）
-- **收藏多轮错配**：`conversations.py:77-82` 收藏锚定某轮 assistant 行，但 question/answer 取 session 第一条 → 多轮会话收藏展示错对问答
+**审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
+- ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
+- ~~**流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）~~（e6c0d75 起逐帧 fast 门禁，违规帧不转发）
+- ~~**收藏多轮错配**：`conversations.py:77-82` 收藏锚定某轮 assistant 行，但 question/answer 取 session 第一条 → 多轮会话收藏展示错对问答~~（b63f736 以被收藏行为锚点取同轮问答）
 - **无整体超时熔断**：bailian_client 每帧 wait_for 30s × 60 帧上限，最坏单条 chat 可挂约 30 分钟；证据等级为被动正则，降级（qwen）模式恒 None
-- **hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）；**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
+- ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
 - **knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环；PG 'simple' 分词不切中文（ts_rank 恒 0）
 - **compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）；warn/log 违规也计入拦截计数
-- **audit 导出 1 万条静默截断**（logs.py:155）、`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）；`AUDIT_LOG_RETENTION_DAYS` 死配置
+- **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；`AUDIT_LOG_RETENTION_DAYS` 死配置
 - 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
 ## Gotchas
