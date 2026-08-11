@@ -1,5 +1,6 @@
 """审计服务 API 路由"""
 import logging
+import json
 from typing import Optional
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -284,6 +285,20 @@ def _client_ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+def _as_json_dict(value):
+    """JSONB 列反序列化：PG 驱动可能返回 dict 或 str，统一成 dict"""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (ValueError, TypeError):
+            return value
+    return value
+
+
 def _log_to_dict(log: AuditLog) -> dict:
     return {
         "id": log.id,
@@ -293,6 +308,10 @@ def _log_to_dict(log: AuditLog) -> dict:
         "action": log.action,
         "resource_type": log.resource_type,
         "resource_id": log.resource_id,
+        # 合规取证：变更前后值/合规结果必须可读（此前列表与详情均不含 after_value）
+        "before_value": _as_json_dict(log.before_value),
+        "after_value": _as_json_dict(log.after_value),
+        "compliance_result": _as_json_dict(log.compliance_result),
         "ai_involved": log.ai_involved,
         "ai_model": log.ai_model,
         "ai_prompt_hash": log.ai_prompt_hash,
