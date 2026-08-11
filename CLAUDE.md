@@ -255,6 +255,17 @@ API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；
 - 系统配置页：只读展示配置状态（`GET /api/v1/system/config`，admin），配置经 .env 环境变量管理，不支持在线保存
 - 新增端点：`/compliance/blocks/stats?days=N`（region join 失败自动降级 service 维度）、`/compliance/blocks/{id}`（完整内容+context）、`/system/config`（仅返回配置状态布尔，绝不返回密钥值）
 
+**数字员工办公室 3D 视图（2026-08-10 v4 完成 + 2026-08-11 视觉调优#2，已推 origin/master）**：专员列表页 `/specialist/list` Segmented 切换「办公室」视图 = 左侧 280px 出勤面板（AttendancePanel.tsx：环形出勤率/状态分布/今日对话/明细列表，与 3D 双向联动）+ 右侧 Three.js 3D 场景（**web/ 唯一 npm 依赖 `three ^0.185.1` + @types/three**，打破原零依赖约定，老板拍板）。模块在 `web/src/components/office3d/`：
+- `layout.ts` — 4×5=20 工位（COL_X 3.9 / ROW_Z 3.6，用户要求间距 1.5× 防拥挤；桌 2.08×1.17×0.96，人 1.3×）；`deskX/rowZ/sitPosOf/aislePosOf` 坐标函数
+- `buildScene.ts` — CanvasTexture 深蓝网格地板 + 排间发光过道条
+- `buildDesk.ts` — 白色工位（桌面 #f8fafc + 浅灰腿 + 浅蓝桌沿）+ 深色电脑；状态三色 emissive 脉动（working #1677ff 0.5↔1），offline 仅熄屏不变色
+- `buildCharacter.ts` — 程序化白色人形（亮白主体 + 深炭四肢 #333），坐/站姿态插值 ≈0.4s（pose 0↔1）
+- `simulation.ts` — 3s 轮询 `GET /api/v1/specialists/live-status` 数据驱动状态机：idle 过道巡逻 0.8u/s / working 走位 1.4u/s 到点坐下 / **offline 走回自己工位站立灰化**（target=sitPosOf(index)）；状态色 working #1677ff / idle #faad14 / offline #bfbfbf
+- `labels.ts` — CSS2D 名牌（名字+状态色点+今日 N，y=2.0）
+- `OfficeScene3D.tsx` — WebGL+CSS2DRenderer+rAF+raycast 选中操作卡（数据/编辑/停用·启用），相机 (0,13,12) / fov 45 / camTarget (0,0,0.5)
+
+状态数据：后端 `live-status`（空时按 conversations 最近活跃推断，重启后 5 分钟降级窗口粗粒度报 working）。验证门 `cd web && npm run build`；E2E 在 `t10-office3d/e2e_v4.py`（**投影断言 project() 硬编码相机/布局常量，改相机或 layout.ts 必须同步改该脚本**）。
+
 ## Frontend — mobile/（React Native 移动端）
 
 React Native 0.75 + TypeScript + react-navigation，原生工程已齐（2026-08-06 bring-up 完成，Pixel_7 模拟器全链路实测通过）。包名/bundle ID `com.medagent.mobile`，App 显示名 `MedAgent`，入口 `mobile/index.js` → `src/App.tsx`（app.json name 与 MainActivity/AppDelegate moduleName 必须一致，否则首启红屏）。
@@ -352,3 +363,4 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **前端字段 camelCase、后端 snake_case**：映射统一收在 `mobile/src/api/*.ts`（`prepareVisit` 等已修，2026-08-06 实测 pre-visit 200）。改后端 schema 或响应形状时，同步改 api 层 + 契约测试，屏幕组件只消费 api 层的映射结果，不直接碰请求体。
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
+- **web/ 唯一 npm 依赖 three**：3D 办公室引入（老板拍板打破零依赖约定），新增前端依赖需同样先问；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
