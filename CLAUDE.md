@@ -26,6 +26,10 @@ Web 管理后台 (React+Vite, web/, :3000) ─┐
 
 **关键架构决策：** 每个数字专员 = 一个阿里云百炼多模态交互开发套件 App（自带知识库/文档解析/向量化/检索）。业务层不建文档处理流水线，百炼内部消化。陪访助手/医生管理不需要百炼App，全部通过千问直调（`DASHSCOPE_API_KEY`）或调用 specialist 的 chat 接口。
 
+**网关 ROUTE_MAP（main.py:81-93）：** 除 7 个服务前缀外，还映射了四个跨服务路由 —— `/api/v1/conversations`、`/api/v1/favorites`（→specialist）、`/api/v1/tasks`（→visit）、`/api/v1/users`（→auth），前端按资源路径访问无需关心服务归属。
+
+**2026-08-11 审计补记的服务端点（此前未入文档）**：audit `GET /api/v1/audit/stats`（仪表盘聚合：总数/风险分布/服务分布/按日趋势）、hcp `POST/DELETE /api/v1/hcps/{hcp_id}/tags`（标签增删）、visit `GET /api/v1/tasks` + `PUT /api/v1/tasks/{task_id}` + `GET /api/v1/visits/{visit_id}/tasks`（tasks 模块，follow_up 自动建任务后管理）、compliance `POST /api/v1/compliance/rules/test`（规则试跑）与 `GET /api/v1/compliance/redlines`（见 Compliance Rules 章节）。
+
 ## Commands
 
 ```bash
@@ -52,20 +56,26 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd）
-cd services/auth-service && python -m pytest tests/ -v
-cd services/specialist-service && python -m pytest tests/ -v
-cd services/hcp-service && python -m pytest tests/ -v
-cd services/visit-service && python -m pytest tests/ -v
-cd services/compliance-service && python -m pytest tests/ -v
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-11 全量 377 passed）
+cd services/auth-service && python -m pytest tests/ -v        # 50 用例（含 test_jwt_failfast.py）
+cd services/specialist-service && python -m pytest tests/ -v  # 71
+cd services/hcp-service && python -m pytest tests/ -v         # 36
+cd services/visit-service && python -m pytest tests/ -v       # 53
+cd services/compliance-service && python -m pytest tests/ -v  # 59
+cd services/knowledge-service && python -m pytest tests/ -v   # 51
+cd services/audit-service && python -m pytest tests/ -v       # 19
+cd services/gateway && python -m pytest tests/ -v             # 38
+cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
 cd services/specialist-service && python tests/eval_specialist.py --app-id <百炼AppId>
 
 # 联调冒烟（runbook 第 3 节：登录/专员/对话/R001/R003/审计，全走网关）
-python scripts/smoke_runbook.py            # 需根 .env 的 INTERNAL_API_KEY + AUTH_DEV_MODE=true（验证码响应回传）
+python scripts/smoke_runbook.py            # 需根 .env 的 INTERNAL_API_KEY + AUTH_DEV_MODE=true（验证码响应回传）+ SMOKE_PHONE（已注册手机号，未设则直接报错退出）
 # 百炼 WS 协议探针（诊断 App 发布状态/返回帧：直连 dump Started→Listening→RespondingContent）
 python scripts/probe_bailian_ws.py [app_id]
+# 知识库示例文档种子（3 个 txt 上架 → 向量化；离线上架，可用于无真实文献时联调检索）
+python scripts/seed_demo_docs.py
 
 # 全部 8 个服务同时启动
 docker-compose up -d
@@ -82,6 +92,12 @@ cd services/gateway && python -m uvicorn app.main:app --port 8000
 
 # 单独构建某个镜像：build context 必须是仓库根目录（镜像要 COPY shared/）
 docker build -f services/auth-service/Dockerfile -t medagent/auth-service .
+
+# 部署/CI 相关（deploy/ + scripts/ 下，CLAUDE.md 2026-08-11 补记）
+#   deploy/docker-compose.prod.yml   生产 compose（DB_USER/DB_PASSWORD/REDIS_PASSWORD/AUDIT_DB_PASSWORD 必填校验）
+#   deploy/arms-monitor.py           ARMS 监控上报（RPC 签名，HMAC 密钥 = AK Secret + "&"，--dry-run）
+#   deploy/arms-alerts.yaml          ARMS 告警规则源文件（只保留有真实指标源的规则）
+#   scripts/ci-pipeline.yaml         阿里云云效 Flow 流水线；scripts/docker-verify.sh Docker 验证脚本
 ```
 
 **运行测试必须在服务目录下执行** — 所有测试用 `sys.path.insert(0, ...)` 回溯三层找到 shared 模块，路径依赖 cwd。
@@ -114,6 +130,8 @@ from shared.models.base import Base, TimestampMixin  # ORM 基类（id, created_
 ```
 
 错误码区间：1000-1999 参数 / 2000-2999 认证 / 3000-3999 权限 / 4000-4999 业务（含合规拦截）/ 5000-5999 系统 / 6000-6999 第三方。
+
+shared 层自带测试 `shared/common/tests/`（test_internal_auth.py + conftest.py），从 `shared/` 目录跑：`python -m pytest common/tests/ -v`。
 
 ## main.py 标准模板
 
@@ -169,6 +187,7 @@ POST /api/v1/hcps/profile-update
 # PUBLIC_PATHS —— 真正公开（免 JWT 免 key）
 POST /api/v1/auth/login
 POST /api/v1/auth/send-code
+# 另有 /health、/docs、/openapi.json、/redoc（网关自身路径；M11 缺口即指未认证可经 `..` 归一化拉 7 个后端 /docs/metrics）
 ```
 （2026-08-06：`/api/v1/knowledge/search` 已移出 INTERNAL_PATHS —— 它是 web 检索的用户向接口，服务端挂 JWT 鉴权；`hcps/profile-update` 是 visit→hcp 的内部接口，双重校验齐全。）
 
@@ -194,7 +213,7 @@ async with httpx.AsyncClient(timeout=10.0) as client:
 
 ## Database
 
-PostgreSQL（Docker `postgres:15`），10 张表均在 `scripts/init_db.sql` 定义。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
+PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql）。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
 
 **审计表不可篡改（`scripts/migrations/002_audit_immutable.sql`）**：audit_logs 的 owner 是 NOLOGIN 占位角色 `medagent_audit_owner`；`medagent_audit`（审计服务专用，`AUDIT_DATABASE_URL` 配置）只有 INSERT/SELECT；`medagent` 只 SELECT。该 migration 还会把 medagent 从 superuser 降级（PostgreSQL 官方镜像默认把 `POSTGRES_USER` 设为 superuser，superuser 无视 REVOKE）。migration 只需执行一次（medagent 降级后无法重跑，补权限找表 owner 或单用户模式）。
 
@@ -223,6 +242,8 @@ class MyModel(Base, TimestampMixin):
 
 semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语义规则静默跳过。
 
+**compliance 端点全集（2026-08-11 补记）：** `/check`（内部）、`/rules` + `/rules/reload` + `/rules/test`（admin/manager 管理，test 为规则试跑工具不入库）、`/redlines`（**净化版红线清单**——只含 rule_code/rule_name/rule_type/severity/action/description/enabled，绝不含 patterns/content，供 rep/移动端 HelpCenter 展示）、`/blocks` + `/blocks/{id}`（拦截记录）、`/blocks/stats?days=N&action=`（仪表盘热力图）、`/report/export`（3 Sheet 监管自查 xlsx）、`/stats`。2026-08-11 起除 /check /redlines 外全部 require_roles(*RULE_ADMIN_ROLES)。
+
 **fast 模式（2026-08-11 流式门禁引入）**：`POST /api/v1/compliance/check` 支持 `fast` 参数（透传给 `checker.check(fast=True)`）——**跳过 LLM 语义层，只跑关键词/正则**（毫秒级），fast 命中不写 compliance_blocks、不计 COMPLIANCE_BLOCKS 指标（阻断时由调用方对完整文本做 full 复核统一记录）。供 specialist 流式逐帧门禁使用。
 
 **语义检查安全行为（S7）**：内容包裹在 `<user_content>` 标记中（其中的任何指令都只是数据）；LLM 输出**解析失败**（JSON 错误/截断）时按违规拦截（R999, action=reject）——这是注入攻击与截断的迹象，fail-closed；只有**网络/API 错误**才 fail-open 降级。
@@ -249,19 +270,22 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 ## Frontend — web/（Web 管理后台）
 
-Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 代理到网关 `localhost:8000`（`vite.config.ts`），生产由反代同路径转发。
+Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 和 `/health` 代理到网关 `localhost:8000`（`vite.config.ts`，/health 是 M54 网关状态卡探活），生产由反代同路径转发。
 
-9 模块 11 路由（`web/src/constants/routes.ts`，懒加载）：仪表盘 `/dashboard`、数字专员 `/specialist/list` + `/specialist/create`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、系统配置 `/system/config`。
+9 模块 11 路由（`web/src/constants/routes.ts`，懒加载）：仪表盘 `/dashboard`、数字专员 `/specialist/list` + `/specialist/create`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、系统配置 `/system/config`。另有登录页 `/login`。
 
 API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。非 401 的 4xx（含 403）由拦截器统一弹后端 message。
+
+认证体系（2026-08-11 补记）：`context/AuthContext.tsx`（AuthProvider）持登录态，`pages/Login` 登录页，`components/RequireAuth.tsx` 路由守卫 + 401 跳登录，`services/auth.ts` 调 `/auth/login` + `/auth/me`；路由守卫只验登录态不验角色（M17 已知）。API 层按模块拆 `web/src/services/` 八文件（auth/audit/compliance/doctor/knowledge/specialist/system/user）。仪表盘另有 `components/LiveStatusStrip.tsx`（5s 轮询 live-status 迷你工位条，复用 `components/office/SpecialistCharacter.tsx` SVG 小人）。
 
 **已知问题（2026-08-06 审计修复后，页面均已真实接线）**：
 - 仪表盘：风险热力图（区域 × 近 7 天拦截量，数据来自 `GET /api/v1/compliance/blocks/stats`）、实时动态（审计日志 5s 轮询）、网关状态卡（真实探活 `/health`）
 - 专员页：列表分页 + 创建/编辑/启停真实调用 + "数据"抽屉（stats）；知识库页：上传/审核/详情真实调用
 - 系统配置页：只读展示配置状态（`GET /api/v1/system/config`，admin），配置经 .env 环境变量管理，不支持在线保存
 - 新增端点：`/compliance/blocks/stats?days=N`（region join 失败自动降级 service 维度）、`/compliance/blocks/{id}`（完整内容+context）、`/system/config`（仅返回配置状态布尔，绝不返回密钥值）
+- **医生管理缺口（2026-08-11 全文件审计确认）**：`DoctorList`「新增医生」按钮仅 `message.info('新增医生功能')` 占位（web 六页真实接线不含医生管理）；`services/doctor.ts` 已定义 AI 画像接口 `GET /hcps/{id}/profile` 但无页面调用（`DoctorDetail` 只用 detail + interactions）；`components/HealthDot.tsx` 是全仓无引用的死代码；`tsconfig.tsbuildinfo` 构建产物残留在仓库（noEmit 下 tsc -b 生成，未 gitignore）
 
-**数字员工办公室 3D 视图（2026-08-10 v4 完成 + 2026-08-11 视觉调优#2，已推 origin/master）**：专员列表页 `/specialist/list` Segmented 切换「办公室」视图 = 左侧 280px 出勤面板（AttendancePanel.tsx：环形出勤率/状态分布/今日对话/明细列表，与 3D 双向联动）+ 右侧 Three.js 3D 场景（**web/ 唯一 npm 依赖 `three ^0.185.1` + @types/three**，打破原零依赖约定，老板拍板）。模块在 `web/src/components/office3d/`：
+**数字员工办公室 3D 视图（2026-08-10 v4 完成 + 2026-08-11 视觉调优#2，已推 origin/master）**：专员列表页 `/specialist/list` Segmented 切换「办公室」视图 = 左侧 280px 出勤面板（AttendancePanel.tsx：环形出勤率/状态分布/今日对话/明细列表，与 3D 双向联动）+ 右侧 Three.js 3D 场景（**`three ^0.185.1` + `@types/three` 为唯一需老板拍板的额外依赖**，打破原零依赖约定；dependencies 常规项为 axios/dayjs/react-router-dom，注意 @types/three 在 dependencies 而非 devDependencies）。模块在 `web/src/components/office3d/`：
 - `layout.ts` — 4×5=20 工位（COL_X 3.9 / ROW_Z 3.6，用户要求间距 1.5× 防拥挤；桌 2.08×1.17×0.96，人 1.3×）；`deskX/rowZ/sitPosOf/aislePosOf` 坐标函数
 - `buildScene.ts` — CanvasTexture 深蓝网格地板 + 排间发光过道条
 - `buildDesk.ts` — 白色工位（桌面 #f8fafc + 浅灰腿 + 浅蓝桌沿）+ 深色电脑；状态三色 emissive 脉动（working #1677ff 0.5↔1），offline 仅熄屏不变色
@@ -284,10 +308,12 @@ cd mobile && npx react-native start                   # Metro（Node v25 实测�
 # git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
 cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（48 用例：契约/WS/ASR/日期，锁 URL/method/body/响应形状）
+# 测试：cd mobile && npx jest（50 用例 = 契约 29 + wsChat 9 + asr 8 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
 ```
 
-结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）；`mobile/src/api/` 按服务拆分，统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
+结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；**注意 `HCPProfile`/`ComplianceRuleDetail` 是声明了但从未注册的死路由**）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
+
+其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 17 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 13（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
 
 **已知问题（2026-08-06 第四批后）**：
 - 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮仅提示 stub（待 NLS 配置后接线）。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测；"录完突发推流 + 立即 stop"与 NLS 实时流式要求存在设计级不匹配，真机联调前应调整推送节奏。
@@ -336,8 +362,17 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~收藏多轮错配~~（toggle_favorite 以被收藏行为锚点取同轮问答，过滤 id<=锚点防快照到后续轮次）
 - 配套测试：compliance TestFastMode、specialist 中流阻断/降级阻断、hcp repo+API 白名单、收藏 3 个多轮场景；8 服务回归全绿（audit 13/auth 44/compliance 43/specialist 70/hcp 27/visit 53/knowledge 44/gateway 26）
 
+已修（2026-08-11 十项缺陷 + 向量链路根因，commit 012ab1a..2d0db2b + 6dce273，已推 origin/master；2026-08-11 全文件审计补记）：
+- ~~十项缺陷 #1-#9~~：compliance /rules·/blocks·/stats 收紧 require_roles(*RULE_ADMIN_ROLES) + 新增净化版 `/redlines`（rep/移动端红线清单，无 patterns/content，mobile compliance.ts 已切换）；hcp /{id}/interactions 角色感知（rep 强制 user_id 过滤）；audit `logger.log()` 加 `**kwargs` 吸收未知键（原请求体未知键 → 500 审计静默丢失）；chat_ws 先 accept 再 close 4401/4404（旧实现 close 被握手 403 吞掉落 4500）；web 时间 3+1 处 UTC 解析；knowledge /feedback doc_id str() 强转；web UserList 编辑按角色（manager 不带 role / admin 禁自改）；mobile content.ts doc_type→type 映射（Tab 过滤恒空）；smoke_runbook 强制 SMOKE_PHONE + 冷却响应 data:null 防护
+- ~~网关 WS 代理 websockets 15.x 适配~~（send_text/receive_text 在 15.x 改名 send/recv，AttributeError 被吞 → WS 流式转发实际一直坏的；_upstream_send/_upstream_recv 兼容适配，实机走网关 4401 + start→delta→done 全链路通过）
+- ~~听悟 _parse_result 恒空~~（按真实 GetTaskInfo 结构解析 result.text/result.sentences，speaker_id=0 用 is not None；另驳回写审计、归档清索引、登录失败写审计一并补上）
+- ~~**向量化链路从未真正生效**~~（EMBEDDING_DIM=1536 是错误假设，text-embedding-v3 最大 1024 维 → collection 以 1536 建库，每次 upsert 维度不匹配**静默失败**（DashVector 响应式 API 不抛异常 + 代码不查返回码），文档全部"上架成功但向量缺失"；已修 EMBEDDING_DIM=1024 + upsert/create 响应码检查（失败 raise）+ **删除重建 collection**；delete_doc 双 bug——Collection.delete 不支持 filter + filter 字符串必须双引号，改先 query(filter) 再 delete(ids=)）
+- ~~网关 knowledge 路由超时 30s→120s~~（百炼导入 ~28s + 向量化，30s 网关先断 → "业务完成但客户端 504"）
+- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 53 = **377 passed**；mobile jest 50；web build PASS
+
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
-- 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
+- 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做；ES_URL 未进 .env.example）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
+- web 医生管理：`DoctorList`「新增医生」按钮仅占位提示（无真实新增）；AI 画像接口 `GET /hcps/{id}/profile` 已定义但页面未展示（2026-08-11 全文件审计确认）
 - 移动端：语音输入仍是 stub（待 NLS 配置后接线）；关键节点标记/话术建议实时推荐（需求标"后续版本"）；听悟 TTS 未接
 - NLS_APPKEY 未配（录音链路已接，未配置时识别 fail-closed 提示）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
 - **百炼 App 未发布**（`mm_cd1af9fc5bf1444ebc50c5a8fe4e`）：真实 key 已配，但 2026-08-06 冒烟确认 App 未发布 → 对话恒降级 qwen（citations 空）。控制台发布并绑定已过审知识库后重跑 `smoke_runbook.py`，降级 warning 应消失
@@ -404,6 +439,8 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **前端字段 camelCase、后端 snake_case**：映射统一收在 `mobile/src/api/*.ts`（`prepareVisit` 等已修，2026-08-06 实测 pre-visit 200）。改后端 schema 或响应形状时，同步改 api 层 + 契约测试，屏幕组件只消费 api 层的映射结果，不直接碰请求体。
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
-- **005 迁移（audit 清理角色）需 superuser**：002 后无 superuser，GRANT DELETE 会失败；现场已用 `postgres --single` 单用户模式建 `medagent_root`（rolsuper=t，NOLOGIN）与 `medagent_audit_cleanup`（仅 SELECT+DELETE on audit_logs），应用账号仍仅 INSERT/SELECT。新环境跑 005 前先造 superuser（停容器 → `echo "SQL" | postgres --single -D <datadir> medagent`，-c 参数会被 entrypoint 截胡）。
-- **web/ 唯一 npm 依赖 three**：3D 办公室引入（老板拍板打破零依赖约定），新增前端依赖需同样先问；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
+- **005 迁移（audit 清理角色）需 superuser**：002 后无 superuser，GRANT DELETE 会失败；现场已用 `postgres --single` 单用户模式建 `medagent_root`（rolsuper=t，NOLOGIN）与 `medagent_audit_cleanup`（仅 SELECT+DELETE on audit_logs），应用账号仍仅 INSERT/SELECT。新环境跑 005 前先造 superuser（停容器 → `echo "SQL" | postgres --single -D <datadir> medagent`，-c 参数会被 entrypoint 截胡）。配套环境变量 `AUDIT_CLEANUP_DATABASE_URL`（medagent_audit_cleanup 账号专用连接串，.env.example 已有，默认占位密码 medagent123）。
+- **EMBEDDING_DIM 已硬编码 1024**（`knowledge-service/app/services/dashvector_client.py`）：text-embedding-v3 最大 1024 维，collection 已按 1024 重建；别改回 1536，改维度必须删除重建 collection（删了会自动重建）。**ES_URL 未进 .env.example**（代码 `os.getenv("ES_URL", "")` 读取，配了才启用 ES 检索路径，现环境未启用）。
+- **shared/prompts/oncology_specialist.yaml 是孤儿资源**：话术模板文件，目前无任何服务加载（main.py 均未引用），改动它不会影响任何行为。
+- **web/ three 是唯一需拍板的额外依赖**：3D 办公室引入（老板拍板打破零依赖约定；axios/dayjs/react-router-dom 属常规框架依赖），新增前端依赖需同样先问；@types/three 在 dependencies 而非 devDependencies；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
 - **Metro 打包失败 = App 白屏/无法加载**：任何相对路径 import 解析失败（如 `SettingsScreen.tsx` 的 `require('../../package.json')` 少一层 `../`，2026-08-11 623a6cb 修复）会让整个 bundle 挂掉，`metro.log` 里 `Unable to resolve module ... from <file>` 即定位点；改完代码 App 不会自动重拉 bundle，需 `adb shell am force-stop com.medagent.mobile` 后重启 App。

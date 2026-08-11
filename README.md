@@ -18,6 +18,7 @@
 | 合规审核 | compliance-service | 8004 | 三层审核引擎（关键词+正则+LLM语义） |
 | 审计留痕 | audit-service | 8005 | 不可篡改审计日志、监管报告导出 |
 | 医生管理 | hcp-service | 8006 | 医生档案、画像、互动历史 |
+| 认证服务 | auth-service | 8007 | 手机验证码/密码登录、用户管理、JWT 签发 |
 | API 网关 | gateway | 8000 | 统一入口、路由转发、认证限流 |
 
 ### 技术栈
@@ -58,7 +59,7 @@ cp .env.example .env
 ### 4. 启动开发环境
 
 ```bash
-# 启动所有服务（PostgreSQL + Redis + 7 个微服务）
+# 启动所有服务（PostgreSQL + Redis + 8 个微服务）
 docker-compose up -d
 
 # 查看日志
@@ -81,6 +82,7 @@ curl http://localhost:8003/health  # knowledge
 curl http://localhost:8004/health  # compliance
 curl http://localhost:8005/health  # audit
 curl http://localhost:8006/health  # hcp
+curl http://localhost:8007/health  # auth
 ```
 
 ### 6. 本地开发（不使用 Docker）
@@ -93,9 +95,10 @@ docker-compose up -d postgres redis
 pip install -r services/specialist-service/requirements.txt
 # ... 依此类推
 
-# 3. 逐个启动服务
+# 3. 逐个启动服务（8 个服务同样方式，端口见模块表）
 cd services/specialist-service && python -m app.main
 cd services/visit-service && python -m app.main
+cd services/auth-service && python -m app.main
 # ...
 ```
 
@@ -110,6 +113,7 @@ medagent/
 │   ├── compliance-service/    # 合规审核
 │   ├── audit-service/         # 审计留痕
 │   ├── hcp-service/           # 医生管理
+│   ├── auth-service/          # 认证服务（验证码/密码登录、JWT）
 │   └── gateway/               # API 网关
 ├── mobile/                    # 移动端 (React Native)
 ├── web/                       # Web 后台 (React + Ant Design Pro)
