@@ -59,7 +59,7 @@ def client(monkeypatch):
         hcps_api.HcpRepo, "get",
         staticmethod(lambda db, hcp_id: Hcp(id=hcp_id, name="张伟", hospital="协和医院")),
     )
-    monkeypatch.setattr(hcps_api, "list_interactions", lambda db, hcp_id: _FAKE_INTERACTIONS)
+    monkeypatch.setattr(hcps_api, "list_interactions", lambda db, hcp_id, user_id=None: _FAKE_INTERACTIONS)
 
     app.dependency_overrides[get_db] = lambda: FakeDb()
     app.dependency_overrides[get_current_user] = _fake_current_user
@@ -79,6 +79,30 @@ def test_interactions_returns_bare_array(client):
     assert len(data) == 2
     assert data[0]["ai_summary"] == "交流良好，认可产品"
     assert data[1]["visit_time"] == "2026-07-20T14:00:00"
+
+
+def test_interactions_rep_only_sees_own(client, monkeypatch):
+    """S7：rep 访问时强制传 user_id 过滤；admin/manager 不过滤"""
+    seen = {}
+    def _recording_mock(db, hcp_id, user_id=None):
+        seen["user_id"] = user_id
+        return _FAKE_INTERACTIONS
+
+    monkeypatch.setattr(hcps_api, "list_interactions", _recording_mock)
+
+    # admin → 不过滤
+    resp = client.get("/api/v1/hcps/1/interactions")
+    assert resp.status_code == 200
+    assert seen["user_id"] is None
+
+    # rep → 只看自己的
+    async def _fake_rep_user():
+        return {"id": 7, "username": "rep1", "role": "rep"}
+    app.dependency_overrides[get_current_user] = _fake_rep_user
+    resp = client.get("/api/v1/hcps/1/interactions")
+    assert resp.status_code == 200
+    assert seen["user_id"] == 7
+    app.dependency_overrides[get_current_user] = _fake_current_user
 
 
 def test_interactions_404_when_hcp_missing(client, monkeypatch):

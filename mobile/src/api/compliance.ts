@@ -9,11 +9,15 @@ import { apiClient } from './client';
 import type { ComplianceRule } from '../types';
 
 export const complianceAPI = {
-  /** 合规规则列表（后端返回分页对象 rules.py:110，此处解出 items） */
+  /**
+   * 红线速览列表（rep 面向用户）。
+   * 走 /redlines 净化端点（rules.py）—— /rules 含 patterns/content 已收紧为
+   * admin/manager/compliance 专属，移动端仅需展示字段，不暴露匹配细节。
+   */
   async listRules(): Promise<ComplianceRule[]> {
     const data = await apiClient.request<{ items: ComplianceRule[] }>(
       'GET',
-      '/api/v1/compliance/rules'
+      '/api/v1/compliance/redlines'
     );
     return data.items || [];
   },

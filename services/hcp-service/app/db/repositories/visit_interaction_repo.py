@@ -1,6 +1,6 @@
 """互动历史只读查询 — 读取 visit-service 的 visit_records 表（同库直读，不跨服务调用）"""
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -13,15 +13,23 @@ _INTERACTION_SQL = text("""
            follow_up_suggestions, next_visit_plan
     FROM visit_records
     WHERE hcp_id = :hcp_id
+      AND (:user_id IS NULL OR user_id = :user_id)
     ORDER BY visit_time DESC
     LIMIT :limit
 """)
 
 
-def list_interactions(db: Session, hcp_id: int, limit: int = 20) -> List[Dict]:
-    """查询某医生的最近互动记录（按拜访时间倒序）"""
+def list_interactions(db: Session, hcp_id: int, limit: int = 20, user_id: Optional[int] = None) -> List[Dict]:
+    """查询某医生的最近互动记录（按拜访时间倒序）。
+
+    user_id 非空时只返回该代表本人的记录（防跨用户泄漏，与 visit 侧 S4 一致）；
+    None 表示不过滤（仅 admin/manager 使用）。
+    """
     try:
-        rows = db.execute(_INTERACTION_SQL, {"hcp_id": hcp_id, "limit": limit}).mappings().all()
+        rows = db.execute(
+            _INTERACTION_SQL,
+            {"hcp_id": hcp_id, "limit": limit, "user_id": user_id},
+        ).mappings().all()
         return [
             {
                 "id": r["id"],

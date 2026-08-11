@@ -164,10 +164,10 @@ async def list_rules(
     rule_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """规则列表（分页、筛选）"""
+    """规则列表（分页、筛选）—— 含 patterns/content，仅限规则管理员"""
     query = db.query(ComplianceRule)
     if enabled is not None:
         query = query.filter(ComplianceRule.enabled == enabled)
@@ -181,6 +181,39 @@ async def list_rules(
 
     return success(paginate(
         [r.to_dict() for r in items],
+        total=total,
+        page=page,
+        page_size=page_size
+    ))
+
+
+@router.get("/redlines")
+async def list_redlines(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """红线速览（面向 rep/移动端）：仅返回展示字段，不暴露 patterns/content。
+
+    移动端合规页与帮助中心展示的是"哪些红线不可触碰"，无需匹配规则细节。
+    """
+    query = db.query(ComplianceRule).filter(ComplianceRule.enabled == True)  # noqa: E712
+    total = query.count()
+    items = query.order_by(ComplianceRule.id).offset(
+        (page - 1) * page_size
+    ).limit(page_size).all()
+
+    return success(paginate(
+        [{
+            "rule_code": r.rule_code,
+            "rule_name": r.rule_name,
+            "rule_type": r.rule_type,
+            "severity": r.severity,
+            "action": r.action,
+            "description": r.description,
+            "enabled": r.enabled,
+        } for r in items],
         total=total,
         page=page,
         page_size=page_size
@@ -320,7 +353,7 @@ async def test_rule(request: dict, current_user: dict = Depends(require_roles(*R
 @router.get("/blocks/stats")
 async def blocks_stats(
     days: int = Query(7, ge=1, le=90, description="统计最近 N 天（仪表盘热力图）"),
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """合规拦截聚合：区域 × 日期 热力图数据（驾驶舱"风险热力图"数据源）。
@@ -373,7 +406,7 @@ async def blocks_stats(
 @router.get("/blocks/{block_id}")
 async def get_block_detail(
     block_id: int,
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """拦截记录详情：完整内容 + 上下文（列表接口 content 截断到 200 字、不含 context）"""
@@ -400,10 +433,10 @@ async def list_blocks(
     page_size: int = Query(20, ge=1, le=100),
     user_id: Optional[int] = Query(None),
     rule_code: Optional[str] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """拦截记录查询"""
+    """拦截记录查询 —— 含他人 user_id 与内容片段，仅限规则管理员"""
     query = db.query(ComplianceBlock)
     if user_id:
         query = query.filter(ComplianceBlock.user_id == user_id)
@@ -435,7 +468,7 @@ async def list_blocks(
 
 @router.get("/stats")
 async def compliance_stats(
-    current_user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """合规统计数据"""

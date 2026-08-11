@@ -99,10 +99,18 @@ async def get_hcp_interactions(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """互动历史（读 visit-service 的拜访记录）"""
+    """互动历史（读 visit-service 的拜访记录）。
+
+    S7 权限：admin/manager 可见全部代表的记录；其他角色（rep 等）只能看到
+    自己的记录 —— 与 visit 侧 S4 规则一致，防跨用户泄漏他人拜访总结。
+    """
     _get_hcp_or_404(db, hcp_id)
+    if current_user.get("role") in HCP_ADMIN_ROLES:
+        user_id = None  # 管理角色：不过滤
+    else:
+        user_id = current_user.get("id")
     # 契约：返回裸数组（web/mobile 两端均按数组解包，勿再包 {items: ...}）
-    return success(list_interactions(db, hcp_id))
+    return success(list_interactions(db, hcp_id, user_id=user_id))
 
 
 # ==================== 新增 & 编辑 ====================
