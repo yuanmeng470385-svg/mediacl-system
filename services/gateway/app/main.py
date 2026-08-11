@@ -329,6 +329,24 @@ async def _default_upstream(url: str):
     return ws  # 原生 websockets WebSocket 已具备 send_text/receive_text/close 等
 
 
+async def _upstream_send(upstream, text: str) -> None:
+    """上游发送适配：websockets <15 用 send_text，>=15 用 send（API 更名）"""
+    send_text = getattr(upstream, "send_text", None)
+    if send_text is not None:
+        await send_text(text)
+    else:
+        await upstream.send(text)
+
+
+async def _upstream_recv(upstream):
+    """上游接收适配：websockets <15 用 receive_text，>=15 用 recv"""
+    receive_text = getattr(upstream, "receive_text", None)
+    if receive_text is not None:
+        return await receive_text()
+    data = await upstream.recv()
+    return data.decode("utf-8") if isinstance(data, bytes) else data
+
+
 @app.websocket("/api/v1/specialists/{specialist_id}/chat/ws")
 async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
     token = websocket.query_params.get("token", "")
@@ -359,9 +377,10 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
                 msg = await websocket.receive()
                 if msg["type"] == "websocket.receive":
                     if "text" in msg and msg["text"] is not None:
-                        await upstream.send_text(msg["text"])
+                        await _upstream_send(upstream, msg["text"])
                     elif "bytes" in msg and msg["bytes"] is not None:
-                        await upstream.send_bytes(msg["bytes"])
+                        # 上游是文本 WS 协议（帧均为 JSON 文本），bytes 帧不转发
+                        pass
                 elif msg["type"] == "websocket.disconnect":
                     break
         except Exception:
@@ -376,7 +395,7 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
         try:
             while True:
                 try:
-                    text = await upstream.receive_text()
+                    text = await _upstream_recv(upstream)
                     async with send_lock:
                         await websocket.send_text(text)
                 except websockets.exceptions.ConnectionClosed as exc:
