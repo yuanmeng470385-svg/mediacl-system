@@ -124,6 +124,14 @@ class ComplianceChecker:
                     rule["_compiled"] = compiled
                     valid.append(rule)
             else:  # semantic
+                # 2026-08-11：语义规则同样做字段校验（对齐坏正则隔离）——缺
+                # id/name/action/severity 的单条剔除 + error 日志，不拖垮引擎。
+                # 缺 id/name/action 会在 LLM 审核时 KeyError 500 或 prompt 乱码；
+                # 缺 severity 会破坏指标 labels 契约。
+                missing = [k for k in ("id", "name", "action", "severity") if not rule.get(k)]
+                if missing:
+                    logger.error("语义规则 %s 缺少必填字段 %s，整条规则剔除", rule.get("id"), missing)
+                    continue
                 valid.append(rule)
         self.rules = valid
 
@@ -187,9 +195,7 @@ class ComplianceChecker:
             # fast（逐帧门禁）不记拦截指标：帧级命中不落库也不计数，
             # 阻断时调用方会以真实文本做全量复核（fast=False），由那次统一记录
             if not fast:
-                from app.api.metrics import COMPLIANCE_BLOCKS
-                for v in violations:
-                    COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
+                self._count_violations(violations)
             return self._result(True, violations)
 
         # ----- 第 3 关：LLM 语义审核 -----
@@ -200,10 +206,21 @@ class ComplianceChecker:
 
         blocked = any(v["action"] == "reject" for v in violations)
         if not fast:
-            from app.api.metrics import COMPLIANCE_BLOCKS
-            for v in violations:
-                COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
+            self._count_violations(violations)
         return self._result(blocked, violations)
+
+    @staticmethod
+    def _count_violations(violations: List[Dict]) -> None:
+        """指标口径（2026-08-11 修复）：拦截数只计 reject（与 blocked 语义一致），
+        全量命中（含 warn/log）另记 violations 指标保持可观测——warn/log 不再虚增"拦截"数。
+        执行语义：reject=拦截（blocked True），warn/log=记录在案不拦截（blocked False）。
+        """
+        from app.api.metrics import COMPLIANCE_BLOCKS, COMPLIANCE_VIOLATIONS
+        for v in violations:
+            action = v["action"]
+            if action == "reject":
+                COMPLIANCE_BLOCKS.labels(action=action, severity=v["severity"]).inc()
+            COMPLIANCE_VIOLATIONS.labels(action=action, severity=v["severity"]).inc()
 
     # ==================== 第 1 关 + 第 2 关：文本匹配 ====================
 
@@ -234,8 +251,10 @@ class ComplianceChecker:
                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
             )
 
+        # 2026-08-11：.get() 兜底 —— semantic 规则缺 id/name/action 时不再 KeyError 500
+        #（_compile_rules 已剔除缺必填字段的规则，此处双保险）
         rules_desc = "\n".join([
-            f"- {r['id']}: {r['name']}（{r.get('description', '')}）→ 动作: {r['action']}"
+            f"- {r.get('id')}: {r.get('name')}（{r.get('description', '')}）→ 动作: {r.get('action')}"
             for r in semantic_rules
         ])
 
@@ -298,6 +317,16 @@ class ComplianceChecker:
                         "matched_text": v.get("matched_text", ""),
                         "reason": v.get("reason", ""),
                     })
+                else:
+                    # 2026-08-11：LLM 返回未知 rule_code（模型幻觉 code、规则已禁用、
+                    # 或返回了 keyword/regex 规则 code）——不再静默丢弃：
+                    # 打 warning 让漏检可观测 + 计数指标（前端/监控可发现语义层异常）。
+                    logger.warning(
+                        "语义审核返回未知 rule_code %r（该违规被忽略，漏检可观测）: %s",
+                        v.get("rule_code"), v,
+                    )
+                    from app.api.metrics import COMPLIANCE_SEMANTIC_DROPS
+                    COMPLIANCE_SEMANTIC_DROPS.labels(reason="unknown_rule_code").inc()
             return violations
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             # 输出不是合法 JSON / 形状不对 / 无有效输出：多半是提示注入生效（内容诱导

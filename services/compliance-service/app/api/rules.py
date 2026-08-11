@@ -357,10 +357,15 @@ async def test_rule(request: dict, current_user: dict = Depends(require_roles(*R
 @router.get("/blocks/stats")
 async def blocks_stats(
     days: int = Query(7, ge=1, le=90, description="统计最近 N 天（仪表盘热力图）"),
+    action: Optional[str] = Query(None, description="按动作过滤统计口径：reject=仅拦截 / warn / log / 缺省=全量命中"),
     _admin: dict = Depends(require_roles(*RULE_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """合规拦截聚合：区域 × 日期 热力图数据（驾驶舱"风险热力图"数据源）。
+
+    口径（2026-08-11）：执行语义里仅 reject 算"拦截"（warn/log 是记录在案），
+    热力图默认仍统计全量命中（warn 也是风险信号）；前端要"拦截"口径传 action=reject。
+
 
     区域维度：compliance_blocks.user_id join users.region 获得 ——
     shared.models.user.User 各服务共用，且 compliance-service 与 auth-service
@@ -375,6 +380,8 @@ async def blocks_stats(
 
     since = datetime.utcnow() - timedelta(days=days)
     dimension = "region"
+    # action 过滤：None=全量命中（热力图默认），"reject"=仅拦截口径
+    action_filter = (ComplianceBlock.action == action) if action else None
     try:
         rows = (
             db.query(
@@ -384,6 +391,7 @@ async def blocks_stats(
             )
             .outerjoin(User, ComplianceBlock.user_id == User.id)
             .filter(ComplianceBlock.blocked_at >= since)
+            .filter(*([action_filter] if action_filter is not None else []))
             .group_by(User.region, sqlfunc.date(ComplianceBlock.blocked_at))
             .all()
         )
@@ -399,6 +407,7 @@ async def blocks_stats(
                 sqlfunc.count(ComplianceBlock.id),
             )
             .filter(ComplianceBlock.blocked_at >= since)
+            .filter(*([action_filter] if action_filter is not None else []))
             .group_by(ComplianceBlock.service_name, sqlfunc.date(ComplianceBlock.blocked_at))
             .all()
         )
