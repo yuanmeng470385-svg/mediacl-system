@@ -119,7 +119,8 @@ export default function VisitInProgressScreen() {
 
   // 真实录音 → 流式推流 ASR 转写（录音 start 即建立会话，asr.ts 轮询读 WAV 增量持续推流；
   // 结果走 addTranscript → 异议/合规检测 → 落库。不能录完再连：connectAsrStreaming 内部接管
-  // onReady，且 sendAudioChunk/stop 在 WS OPEN 前调用会被静默丢弃）
+  // onReady，且 sendAudioChunk/stop 在 WS OPEN 前调用会被静默丢弃。
+  // 快按快放竞态：release 早于会话建立时，press 分支 resume 后按 recordingRef 判定弃建会话）
   const handleVoice = useCallback(async () => {
     if (transcribing) return;
     if (!recording) {
@@ -133,6 +134,14 @@ export default function VisitInProgressScreen() {
       recordingRef.current = true;
       try {
         const token = (await apiClient.getToken()) || '';
+        // 快按快放：等待 token 期间用户已松键（release 分支已同步把 recordingRef 置 false）→
+        // 会话已无意义。绝不能再补建会话：release 的 stop() 只会落到非 null 的 ref 上，而
+        // WS OPEN 前发的 stop 帧会被 asr.ts 静默丢弃、服务端收不到 stop 就一直挂接收循环
+        // （asr_ws.py 无空闲超时）→ onCompleted 永不触发 → transcribing 卡死、WS 孤儿到卸载
+        if (!recordingRef.current) {
+          setTranscribing(false); // 复位 release 分支挂起的转写态（无会话 → 不会有 completed 帧）
+          return;
+        }
         const session = connectAsrStreaming(visitId, token, recordingPath(), {
           // onReady 由 connectAsrStreaming 内部接管（影子回调，屏侧无需也收不到）；
           // 空实现仅满足 AsrCallbacks 类型约束，实际从不触发
@@ -169,7 +178,9 @@ export default function VisitInProgressScreen() {
         });
         asrSessionRef.current = session;
       } catch (e: any) {
-        // 会话建立失败（token 通道异常等）：回滚录音态，避免"停止录音"按钮但无会话可 stop 的悬空态
+        // 会话建立失败（token 通道异常等）：回滚录音态，避免"停止录音"按钮但无会话可 stop 的悬空态；
+        // 若 release 已先行（快按快放），此处同样复位转写态（无会话 → 不会有 completed 帧）
+        setTranscribing(false);
         setRecording(false);
         recordingRef.current = false;
         stopRecording().catch(() => {});
@@ -183,7 +194,13 @@ export default function VisitInProgressScreen() {
     recordingRef.current = false;
     setTranscribing(true);
     try { await stopRecording(); } catch {}
-    asrSessionRef.current?.stop();
+    if (asrSessionRef.current) {
+      asrSessionRef.current.stop();
+    }
+    // else：会话尚未建立（press 分支仍在 getToken/建连途中）→ 不补 stop。
+    // press 分支 resume 时发现 recordingRef=false 将直接弃建会话（快按快放 → 本次录音作废）。
+    // 两种顺序均安全：release 的 stop 若落在 press 同步建会话块之后 → ref 非 null 正常收尾；
+    // 落在之前 → press 弃建，transcribing 由 press 复位
   }, [recording, transcribing, visitId, addTranscript]);
 
   return (
