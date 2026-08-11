@@ -114,12 +114,23 @@ export function connectAsrStreaming(
   const chunkSize = opts.chunkSize ?? 16 * 1024;
   let offset = 0; // 已推送的 PCM 字节偏移
   let timer: ReturnType<typeof setInterval> | null = null;
+  let opened = false; // WS 已 open（onReady 已触发）；open 前禁止任何发送
   let stopped = false;
+  // stop 早于 open（快按快放 / 亚握手双击）：此时 flush 的分片与 stop 帧都会被 connectAsr 的
+  // OPEN 门禁静默丢弃、offset 还会被白白推进 → 挂起到 open 后由 onReady 分支真正收尾
+  let stopPending = false;
 
   const session = connectAsr(visitId, token, {
     ...cbs,
     onReady: () => {
-      start();
+      opened = true;
+      if (stopPending) {
+        // 已被 stop() 请求：跳过常规轮询，直接收尾（flush 剩余 PCM + stop 帧，此刻 OPEN 发送生效）
+        stopPending = false;
+        void finalizeStop();
+      } else {
+        start();
+      }
     },
   });
 
@@ -157,6 +168,18 @@ export function connectAsrStreaming(
     }, pollMs);
   }
 
+  /**
+   * 收尾：推完剩余 PCM 再发 stop 帧；flush 绕过 stopped 门禁
+   *（否则 stopped 置位后 pushSince 空转，最后 pollMs 内的尾音被静默丢弃）。
+   * 仅在 WS 已 open 后调用（stop() 或 onReady 的 stopPending 分支保证）。
+   */
+  function finalizeStop(): void {
+    pcmSourceLength(wavPath)
+      .then((total) => flushTo(total))
+      .catch(() => {})
+      .finally(() => session.stop());
+  }
+
   return {
     sendAudioChunk: session.sendAudioChunk.bind(session),
     stop() {
@@ -166,12 +189,14 @@ export function connectAsrStreaming(
         clearInterval(timer);
         timer = null;
       }
-      // 推完剩余 PCM 再发 stop 收尾；flush 绕过 stopped 门禁
-      //（否则 stopped 置位后 pushSince 空转，最后 pollMs 内的尾音被静默丢弃）
-      pcmSourceLength(wavPath)
-        .then((total) => flushTo(total))
-        .catch(() => {})
-        .finally(() => session.stop());
+      if (!opened) {
+        // WS 尚未 open：不执行 flush/stop——发送会被 OPEN 门禁静默丢弃、服务端收不到 stop 帧
+        // 且无空闲超时（asr_ws.py 接收循环永远等）→ onCompleted 永不触发 → 客户端卡死。
+        // 挂起，open 后由 onReady 分支 finalizeStop（flush 全部已录 PCM + stop 帧，正常收尾路径）。
+        stopPending = true;
+        return;
+      }
+      finalizeStop();
     },
     close() {
       stopped = true;

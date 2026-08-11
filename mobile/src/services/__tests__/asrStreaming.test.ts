@@ -134,11 +134,37 @@ describe('connectAsrStreaming', () => {
     expect(frames[2]).toBe(JSON.stringify({ type: 'stop' }));
   });
 
+  test('stop 早于 WS open：不发送任何帧，open 后补 flush + stop 帧（防按钮卡死与服务端孤儿）', async () => {
+    // CONNECTING 起步的 WS 变体：readyState 从 0 开始，手动 open() 触发 onopen 才置 OPEN
+    class ConnectingWebSocket extends MockWebSocket {
+      readyState = MockWebSocket.CONNECTING;
+      open() {
+        this.readyState = MockWebSocket.OPEN;
+        this.onopen && this.onopen();
+      }
+    }
+    (global as any).WebSocket = ConnectingWebSocket;
+    const cbs = { onReady: jest.fn(), onSentence: jest.fn(), onCompliance: jest.fn(), onError: jest.fn(), onCompleted: jest.fn() };
+    const session = connectAsrStreaming(1, 't', '/tmp/rec.wav', cbs);
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1] as ConnectingWebSocket;
+    // 建连前 stop：pre-open 的任何发送（分片/stop 帧）都会被 connectAsr 的 OPEN 门禁丢弃，
+    // offset 也不能被白白推进 → 挂起，此时必须零发送
+    session.stop();
+    expect(ws.sent.length).toBe(0);
+    // WS 打开 → onReady → 挂起的收尾执行：flush 全部已录 PCM（offset 从头算）→ stop 帧
+    ws.open();
+    await settle();
+    const frames = ws.sent;
+    expect(frames.length).toBe(2); // flush 分片 + stop 帧
+    expect(Array.from(new Uint8Array(frames[0]))).toEqual(Array.from(pcmBuffer));
+    expect(frames[1]).toBe(JSON.stringify({ type: 'stop' }));
+  });
+
   test('Android：录音中增量读源为 temp.pcm（裸 PCM 无头），temp 删除后切回 wav(+44)', async () => {
     // jest 预设（Platform.ios.js）下 Platform.OS 是平铺属性 'ios'，临时切 android，用毕还原
     const origOS = Platform.OS;
     Platform.OS = 'android';
-    // 恢复全局 WebSocket 为普通 OPEN 起步 mock（其他用例可能换成 CONNECTING 变体）
+    // 上一条用例（pre-open stop）把全局 WebSocket 换成了 CONNECTING 起步的变体，这里恢复
     (global as any).WebSocket = MockWebSocket;
     try {
       const wavPath = `${RNFS.DocumentDirectoryPath}/medagent_rec.wav`;
