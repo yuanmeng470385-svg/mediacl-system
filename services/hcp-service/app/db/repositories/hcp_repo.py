@@ -7,6 +7,20 @@ from app.models.hcp import Hcp
 
 logger = logging.getLogger(__name__)
 
+# 可写字段白名单（防 mass assignment）：id/created_at/updated_at 由系统管理，
+# 白名单外的 key 一律剔除。create/update/batch_create 共用兜底过滤；
+# API 层另有严格校验（白名单外字段直接 400，见 hcps.py _validate_hcp_fields）。
+HCP_WRITABLE_FIELDS = {
+    "name", "hospital", "department", "title", "specialty", "phone", "email",
+    "region", "academic_background", "prescription_preference",
+    "influence_level", "tags", "status",
+}
+
+
+def _filter_writable(data: Dict) -> Dict:
+    """白名单过滤：系统字段（id/created_at/updated_at）与未知 key 一律剔除"""
+    return {k: v for k, v in (data or {}).items() if k in HCP_WRITABLE_FIELDS}
+
 
 def _to_tags(tags: Any) -> List[str]:
     """把 tags 统一成字符串列表（兼容 list / 逗号分隔字符串 / None）"""
@@ -83,8 +97,8 @@ class HcpRepo:
 
     @staticmethod
     def create(db: Session, data: Dict) -> Hcp:
-        """创建医生档案"""
-        data = dict(data)
+        """创建医生档案（仅接受白名单字段，系统字段/未知 key 忽略）"""
+        data = _filter_writable(data)
         data["tags"] = _to_tags(data.get("tags"))
         hcp = Hcp(**data)
         db.add(hcp)
@@ -95,11 +109,11 @@ class HcpRepo:
 
     @staticmethod
     def update(db: Session, hcp: Hcp, data: Dict) -> Hcp:
-        """更新医生档案（仅更新传入字段）"""
-        for key, value in data.items():
+        """更新医生档案（仅更新白名单内传入字段）"""
+        for key, value in _filter_writable(data).items():
             if key == "tags":
                 value = _to_tags(value)
-            if hasattr(hcp, key) and value is not None:
+            if value is not None:
                 setattr(hcp, key, value)
         db.commit()
         db.refresh(hcp)

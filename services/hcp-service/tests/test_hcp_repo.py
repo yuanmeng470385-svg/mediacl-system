@@ -66,3 +66,25 @@ def test_update_only_provided_fields():
     hcp = HcpRepo.update(db, hcp, {"hospital": "仁济医院"})
     assert hcp.hospital == "仁济医院"
     assert hcp.title == "主任医师"  # 未传入字段保持不变
+
+
+def test_create_ignores_system_and_unknown_fields():
+    """防 mass assignment：create 忽略 id/created_at/updated_at 与未知 key"""
+    db = FakeDb()
+    hcp = HcpRepo.create(db, {
+        "name": "王芳", "hospital": "中山医院", "tags": ["KOL"],
+        "id": 999, "created_at": "2099-01-01T00:00:00", "hack": "x",
+    })
+    assert hcp.id != 999          # 主键未被覆盖
+    assert hcp.created_at is None  # 系统时间戳未被写入
+    assert not hasattr(hcp, "hack")
+
+
+def test_update_ignores_system_and_unknown_fields():
+    """防 mass assignment：update 忽略 id/created_at/updated_at 与未知 key"""
+    db = FakeDb()
+    hcp = _make_hcp(id=5, created_at="2026-01-01T00:00:00")
+    hcp = HcpRepo.update(db, hcp, {"hospital": "仁济医院", "id": 99, "hack": "x"})
+    assert hcp.id == 5            # 主键未被覆盖
+    assert hcp.created_at == "2026-01-01T00:00:00"  # 时间戳未被覆盖
+    assert hcp.hospital == "仁济医院"

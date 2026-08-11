@@ -12,7 +12,7 @@ HCP_ADMIN_ROLES = ("admin", "manager")
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from app.models.hcp import Hcp
-from app.db.repositories.hcp_repo import HcpRepo
+from app.db.repositories.hcp_repo import HcpRepo, HCP_WRITABLE_FIELDS
 from app.db.repositories.visit_interaction_repo import list_interactions
 from app.services.excel_parser import parse_hcp_excel
 from app.services.profile_generator import ProfileGenerator
@@ -27,6 +27,18 @@ def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
     if not hcp:
         raise HTTPException(status_code=404, detail="医生档案不存在")
     return hcp
+
+
+def _validate_hcp_fields(request: dict) -> dict:
+    """白名单校验（防 mass assignment，与 specialist-service 契约一致）。
+
+    只接受 HCP_WRITABLE_FIELDS 字段；id/created_at/updated_at 等系统字段
+    与未知 key 一律 400 —— 否则客户端可借此覆盖主键/时间戳/任意列。
+    """
+    extra = set(request.keys()) - HCP_WRITABLE_FIELDS
+    if extra:
+        raise ParamError(f"不允许的字段: {sorted(extra)}")
+    return request
 
 
 # ==================== 列表 & 详情 ====================
@@ -121,11 +133,12 @@ async def create_hcp(
     current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """新增医生档案"""
-    name = (request.get("name") or "").strip()
+    """新增医生档案（仅白名单字段）"""
+    data = _validate_hcp_fields(request)
+    name = (data.get("name") or "").strip()
     if not name:
         raise ParamError("name 不能为空")
-    hcp = HcpRepo.create(db, request)
+    hcp = HcpRepo.create(db, data)
     return success(hcp.to_dict(), "医生档案已创建")
 
 
@@ -136,11 +149,12 @@ async def update_hcp(
     current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """编辑医生档案（仅更新传入字段）"""
+    """编辑医生档案（仅白名单字段）"""
+    data = _validate_hcp_fields(request)
     hcp = _get_hcp_or_404(db, hcp_id)
-    if "name" in request and not (request.get("name") or "").strip():
+    if "name" in data and not (data.get("name") or "").strip():
         raise ParamError("name 不能为空")
-    hcp = HcpRepo.update(db, hcp, request)
+    hcp = HcpRepo.update(db, hcp, data)
     return success(hcp.to_dict())
 
 
