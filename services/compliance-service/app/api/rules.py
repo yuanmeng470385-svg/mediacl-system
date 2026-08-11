@@ -141,7 +141,11 @@ async def check_content(
             try:
                 db.add(ComplianceBlock(
                     user_id=context.get("user_id"),
-                    service_name=context.get("service_name") or context.get("type"),
+                    # service_name 必须由调用方显式传入（specialist/visit 客户端已在
+                    # 请求体顶层带 service_name）——不再回落到 context.type，否则监管
+                    # 报告"按服务"统计显示的会是内容类型（user_input/ai_output）
+                    service_name=request.get("service_name")
+                        or context.get("service_name") or "unknown",
                     content=content[:500],  # 截断防表膨胀，展示用
                     rule_code=v.get("rule_code"),
                     rule_name=v.get("rule_name"),
@@ -371,8 +375,8 @@ async def blocks_stats(
     shared.models.user.User 各服务共用，且 compliance-service 与 auth-service
     使用同一 shared/common/db_session.py（同一 DATABASE_URL，同库直连），
     直接可 join；若独立库部署导致 users 不可达（ProgrammingError 等），
-    自动降级为 service_name 维度兜底（注意 M31：service_name 实为内容类型
-    user_input/ai_output，兜底值仅供参考），dimension 字段告知前端实际维度。
+    自动降级为 service_name 维度兜底（2026-08-11：service_name 由调用方显式传入
+    specialist/visit，不再混入内容类型），dimension 字段告知前端实际维度。
     """
     from datetime import datetime, timedelta
     from sqlalchemy import func as sqlfunc

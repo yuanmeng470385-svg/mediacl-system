@@ -196,18 +196,23 @@ class ComplianceChecker:
             # 阻断时调用方会以真实文本做全量复核（fast=False），由那次统一记录
             if not fast:
                 self._count_violations(violations)
-            return self._result(True, violations)
+            return self._result(True, violations, checked_rules)
 
         # ----- 第 3 关：LLM 语义审核 -----
         semantic_rules = [r for r in self.rules if r["type"] == "semantic"]
         if semantic_rules and not fast:
+            # checked_rules 只含"实际执行"的规则：语义规则仅在 LLM 会真的被调用时
+            # 列入（qwen_client 已初始化或 DASHSCOPE_API_KEY 已配）——未配置/降级
+            # 跳过语义层时，语义规则不虚报为"已检查"（监管报告真实化）
+            if self.qwen_client is not None or os.getenv("DASHSCOPE_API_KEY"):
+                checked_rules.extend(r["id"] for r in semantic_rules)
             semantic_violations = self._semantic_check(content, semantic_rules, context)
             violations.extend(semantic_violations)
 
         blocked = any(v["action"] == "reject" for v in violations)
         if not fast:
             self._count_violations(violations)
-        return self._result(blocked, violations)
+        return self._result(blocked, violations, checked_rules)
 
     @staticmethod
     def _count_violations(violations: List[Dict]) -> None:
@@ -348,10 +353,17 @@ class ComplianceChecker:
 
     # ==================== 辅助方法 ====================
 
-    def _result(self, blocked: bool, violations: List[Dict]) -> Dict:
-        """构建审核结果"""
+    def _result(self, blocked: bool, violations: List[Dict], checked_rules: List[str]) -> Dict:
+        """构建审核结果（checked_rules 由 check() 收集实际执行的规则，不再全量虚报）"""
         if not violations:
-            return self._safe_result()
+            # 检查过但无违规：仍返回实际执行过的规则（此前 _safe_result 恒空，
+            # 无法区分"没检查"与"检查了但安全"——监管报告需要真实覆盖面）
+            return {
+                "blocked": blocked,
+                "violations": [],
+                "risk_level": "none",
+                "checked_rules": checked_rules,
+            }
 
         # 计算风险等级
         if any(v["severity"] == "high" for v in violations):
@@ -365,7 +377,7 @@ class ComplianceChecker:
             "blocked": blocked,
             "violations": violations,
             "risk_level": risk_level,
-            "checked_rules": [r["id"] for r in self.rules],
+            "checked_rules": checked_rules,
         }
 
     def _safe_result(self) -> Dict:
