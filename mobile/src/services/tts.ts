@@ -24,9 +24,10 @@ export async function getTtsToken(): Promise<{ token: string; appkey: string }> 
 
 /**
  * 合成并播放话术文本；正在播放时打断重播，fetch/加载期间被 stopSpeaking 打断后不再发声。
- * 代际计数（speakEpoch）：speak 入口即抢占本代，stopSpeaking / 更新的 speak 推进会计数，
- * 使仍在 fetch/加载中的旧 speak 在回调里发现代际不匹配而丢弃实例（release）不播放——
- * 修复"停止后仍发声"以及两个 speak 加载窗口重叠时双播的竞态。
+ * 代际计数（speakEpoch）：speak 入口即抢占本代，stopSpeaking / 更新的 speak 推进计数。
+ * 两重门禁：executor 先查代际（过时的 speak 直接 resolve，不构造 Sound——不误停最新播放、
+ * 也不读半覆盖的 tts_tmp.wav），加载回调再查代际（加载窗口内被抢占则丢弃实例不播放）。
+ * 修复"停止后仍发声"、"双播"以及"过时 speak 停掉最新播放"三类竞态。
  */
 export async function speak(text: string): Promise<void> {
   const epoch = ++speakEpoch; // 在 fetch 之前抢占本代，stopSpeaking 才有机会在 fetch 期间使其失效
@@ -42,10 +43,16 @@ export async function speak(text: string): Promise<void> {
   await RNFS.writeFile(path, b64, 'base64');
 
   await new Promise<void>((resolve, reject) => {
+    if (epoch !== speakEpoch) {
+      // 本代已被更新的 speak / stopSpeaking() 取代：不构造 Sound——
+      // 既不会误停最新播放（过时 executor 停掉新播放的场景），也避免读半覆盖的 tts_tmp.wav
+      resolve();
+      return;
+    }
     stopCurrent(); // 立即打断正在播放的旧 sound（本 speak 已自持本代，不 bump 计数）
     const s = new Sound(path, '', (err) => {
       if (epoch !== speakEpoch) {
-        // 本代已被更新的 speak / stopSpeaking() 抢占：无论加载成败都丢弃实例，不再发声
+        // 加载窗口内被更新的 speak / stopSpeaking() 抢占：丢弃实例不再发声
         s.release();
         resolve();
         return;

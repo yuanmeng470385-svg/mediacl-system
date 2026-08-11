@@ -43,8 +43,8 @@ describe('tts', () => {
     await expect(getTtsToken()).rejects.toThrow('未配置');
   });
 
-  // 放在 speak 成功用例之前：避免前者把 current 置为旧实例，污染本用例的 release 计数断言
-  test('fetch 期间 stopSpeaking 打断后不再播放且实例被释放', async () => {
+  // 竞态用例放在 speak 成功用例之前：避免后者把 current 置为旧实例，污染 release 计数断言
+  test('fetch 期间 stopSpeaking 打断后不再构造 Sound 发声', async () => {
     (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
     let resolveFetch: (r: any) => void = () => {};
     const pending = new Promise<any>((r) => { resolveFetch = r; });
@@ -52,10 +52,36 @@ describe('tts', () => {
     const speakP = speak('主任您好'); // NLS 合成请求挂起中
     stopSpeaking(); // 在 fetch 窗口内打断
     resolveFetch({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2]).buffer });
-    await speakP; // 被无效分支应正常 resolve 而非 reject
-    const SoundMock = Sound as unknown as { __mockPlay: jest.Mock; __mockRelease: jest.Mock };
+    await speakP; // executor 门禁直接 resolve，不构造 Sound
+    const SoundMock = Sound as unknown as jest.Mock & { __mockPlay: jest.Mock; __mockRelease: jest.Mock };
+    expect(Sound).not.toHaveBeenCalled();
     expect(SoundMock.__mockPlay).not.toHaveBeenCalled();
-    expect(SoundMock.__mockRelease).toHaveBeenCalledTimes(1);
+    expect(SoundMock.__mockRelease).not.toHaveBeenCalled();
+  });
+
+  test('Sound 加载窗口内 stopSpeaking 打断后不播放且实例被释放', async () => {
+    jest.useFakeTimers();
+    try {
+      (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => new Uint8Array([1, 2]).buffer,
+      }) as any;
+      const SoundMock = Sound as unknown as jest.Mock & { __mockPlay: jest.Mock; __mockRelease: jest.Mock };
+      const speakP = speak('主任您好');
+      // 推进微任务直到 speak 到达 executor（new Sound 已构造，deferred cb 因 fake timers 未触发）
+      for (let i = 0; i < 20 && !SoundMock.mock.calls.length; i++) {
+        await Promise.resolve();
+      }
+      expect(Sound).toHaveBeenCalledTimes(1);
+      stopSpeaking(); // Sound 加载窗口中打断
+      jest.runAllTimers(); // 触发 deferred cb → 代际不匹配 → release + resolve
+      await speakP; // 无效分支应正常 resolve
+      expect(SoundMock.__mockPlay).not.toHaveBeenCalled();
+      expect(SoundMock.__mockRelease).toHaveBeenCalledTimes(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('speak 合成 URL 带 appkey/token/text 并写文件播放', async () => {
