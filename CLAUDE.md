@@ -344,17 +344,17 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 真机端到端未跑（模拟器无麦克风；`client.ts`/`asr.ts`/`wsChat.ts` 三处 host 需改局域网 IP，见 runbook 2.4）——聊天 REST 已冒烟通过
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
-- 网关限流为单进程内存版（--workers 2 时每 worker 独立限额）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
+- ~~网关限流为单进程内存版（--workers 2 时每 worker 独立限额）~~（486d440 接 Redis 分布式滑动窗口，内存版仅降级兜底）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
 
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
 - ~~**流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）~~（e6c0d75 起逐帧 fast 门禁，违规帧不转发）
 - ~~**收藏多轮错配**：`conversations.py:77-82` 收藏锚定某轮 assistant 行，但 question/answer 取 session 第一条 → 多轮会话收藏展示错对问答~~（b63f736 以被收藏行为锚点取同轮问答）
 - **无整体超时熔断**：bailian_client 每帧 wait_for 30s × 60 帧上限，最坏单条 chat 可挂约 30 分钟；证据等级为被动正则，降级（qwen）模式恒 None
-- ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
-- **knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环；PG 'simple' 分词不切中文（ts_rank 恒 0）
-- **compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）；warn/log 违规也计入拦截计数
-- **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；`AUDIT_LOG_RETENTION_DAYS` 死配置
+- ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；~~**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）~~（2485943 HcpCache Redis 缓存 hcp:{id}+profile:{id}，TTL 300s，写路径失效）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
+- ~~**knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环~~（7422a74 线程池 + 原子抢占）；PG 'simple' 分词不切中文（ts_rank 恒 0）
+- **compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）；~~warn/log 违规也计入拦截计数~~（85aebf3 compliance_blocks_total 只计 reject，新增 violations_total 全量 + semantic 缺 key 剔除可观测，/blocks/stats 加 action 参数）
+- **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；~~`AUDIT_LOG_RETENTION_DAYS` 死配置~~（f50a8de lifespan 定时清理 + medagent_audit_cleanup 专职角色，迁移 005 需 superuser）
 - 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
 ## Gotchas
@@ -377,5 +377,6 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **前端字段 camelCase、后端 snake_case**：映射统一收在 `mobile/src/api/*.ts`（`prepareVisit` 等已修，2026-08-06 实测 pre-visit 200）。改后端 schema 或响应形状时，同步改 api 层 + 契约测试，屏幕组件只消费 api 层的映射结果，不直接碰请求体。
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
+- **005 迁移（audit 清理角色）需 superuser**：002 后无 superuser，GRANT DELETE 会失败；现场已用 `postgres --single` 单用户模式建 `medagent_root`（rolsuper=t，NOLOGIN）与 `medagent_audit_cleanup`（仅 SELECT+DELETE on audit_logs），应用账号仍仅 INSERT/SELECT。新环境跑 005 前先造 superuser（停容器 → `echo "SQL" | postgres --single -D <datadir> medagent`，-c 参数会被 entrypoint 截胡）。
 - **web/ 唯一 npm 依赖 three**：3D 办公室引入（老板拍板打破零依赖约定），新增前端依赖需同样先问；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
 - **Metro 打包失败 = App 白屏/无法加载**：任何相对路径 import 解析失败（如 `SettingsScreen.tsx` 的 `require('../../package.json')` 少一层 `../`，2026-08-11 623a6cb 修复）会让整个 bundle 挂掉，`metro.log` 里 `Unable to resolve module ... from <file>` 即定位点；改完代码 App 不会自动重拉 bundle，需 `adb shell am force-stop com.medagent.mobile` 后重启 App。
