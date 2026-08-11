@@ -353,7 +353,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **无整体超时熔断**：bailian_client 每帧 wait_for 30s × 60 帧上限，最坏单条 chat 可挂约 30 分钟；证据等级为被动正则，降级（qwen）模式恒 None
 - ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；~~**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）~~（2485943 HcpCache Redis 缓存 hcp:{id}+profile:{id}，TTL 300s，写路径失效）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
 - ~~**knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环~~（7422a74 线程池 + 原子抢占）；PG 'simple' 分词不切中文（ts_rank 恒 0）
-- **compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）；~~warn/log 违规也计入拦截计数~~（85aebf3 compliance_blocks_total 只计 reject，新增 violations_total 全量 + semantic 缺 key 剔除可观测，/blocks/stats 加 action 参数）
+- ~~**compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）~~（4e770a6 specialist/visit 客户端请求体显式传 service_name、缺省 unknown；checked_rules 只列实际执行的规则——keyword/regex 全跑、semantic 仅 LLM 真会调用时列入，无违规也返回真实覆盖面）；~~warn/log 违规也计入拦截计数~~（85aebf3 compliance_blocks_total 只计 reject，新增 violations_total 全量 + semantic 缺 key 剔除可观测，/blocks/stats 加 action 参数）
 - **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；~~`AUDIT_LOG_RETENTION_DAYS` 死配置~~（f50a8de lifespan 定时清理 + medagent_audit_cleanup 专职角色，迁移 005 需 superuser）
 - 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
