@@ -11,9 +11,11 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { visitAPI, mapComplianceViolations } from '../../api/visit';
+import type { KeyNode, AiSuggestion } from '../../api/visit';
 import { apiClient } from '../../api/client';
-import { connectAsr } from '../../services/asr';
-import { startRecording, stopRecording, readWavPcm } from '../../services/recorder';
+import { connectAsrStreaming } from '../../services/asr';
+import { startRecording, stopRecording, recordingPath } from '../../services/recorder';
+import { speak } from '../../services/tts';
 import Icon from '../../components/Icon';
 import { ActionIcons, StatusIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -35,6 +37,8 @@ export default function VisitInProgressScreen() {
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [objections, setObjections] = useState<ObjectionAlert[]>([]);
   const [complianceAlerts, setComplianceAlerts] = useState<ComplianceAlert[]>([]);
+  const [keyNodes, setKeyNodes] = useState<KeyNode[]>([]);
+  const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [sending, setSending] = useState(false);
   const [showRedLine, setShowRedLine] = useState<string | null>(null);
@@ -43,7 +47,7 @@ export default function VisitInProgressScreen() {
   const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
   // ASR 帧的说话人标签（visit-service 新字段 'rep'/'doctor'，缺省 undefined → 按代表处理）
   const [liveSpeaker, setLiveSpeaker] = useState<string | undefined>(undefined);
-  const asrSessionRef = useRef<ReturnType<typeof connectAsr> | null>(null);
+  const asrSessionRef = useRef<ReturnType<typeof connectAsrStreaming> | null>(null);
   const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const scrollRef = useRef<ScrollView>(null);
@@ -78,8 +82,20 @@ export default function VisitInProgressScreen() {
         const critical = result.compliance_alerts.find((a) => a.critical);
         if (critical) setShowRedLine(critical.description);
       }
+      // LLM 实时推荐：关键节点累加、话术建议取最新一轮（后端每轮 transcript 都带）
+      if (result.key_nodes?.length) setKeyNodes((prev) => [...prev, ...result.key_nodes]);
+      if (result.ai_suggestion) setAiSuggestion(result.ai_suggestion);
     } catch {} finally { setSending(false); }
   }, [visitId, elapsed]);
+
+  // 朗读话术（TTS 失败只 Alert 提示，不阻塞转写流程）
+  const speakTts = useCallback(async (text: string) => {
+    try {
+      await speak(text);
+    } catch (e: any) {
+      Alert.alert('语音合成', e?.message || '合成失败，请检查 NLS 配置');
+    }
+  }, []);
 
   // 只调一次 end：结果放进 navigation params 传给 VisitEndScreen，避免第二次 end 触发后端"已结束"锁
   const handleEndVisit = () => {
@@ -101,75 +117,73 @@ export default function VisitInProgressScreen() {
     addTranscript(samples[speaker][Math.floor(Math.random() * 3)], speaker);
   };
 
-  // 真实录音 → 推流 ASR 转写（结果走 addTranscript → 异议/合规检测 → 落库）
+  // 真实录音 → 流式推流 ASR 转写（录音 start 即建立会话，asr.ts 轮询读 WAV 增量持续推流；
+  // 结果走 addTranscript → 异议/合规检测 → 落库。不能录完再连：connectAsrStreaming 内部接管
+  // onReady，且 sendAudioChunk/stop 在 WS OPEN 前调用会被静默丢弃）
   const handleVoice = useCallback(async () => {
     if (transcribing) return;
     if (!recording) {
       try {
         await startRecording();
-        setRecording(true);
-        recordingRef.current = true;
       } catch (e: any) {
         Alert.alert('提示', '无法开始录音：' + (e.message || '麦克风不可用'));
+        return;
+      }
+      setRecording(true);
+      recordingRef.current = true;
+      try {
+        const token = (await apiClient.getToken()) || '';
+        const session = connectAsrStreaming(visitId, token, recordingPath(), {
+          // onReady 由 connectAsrStreaming 内部接管（影子回调，屏侧无需也收不到）；
+          // 空实现仅满足 AsrCallbacks 类型约束，实际从不触发
+          onReady: () => {},
+          // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"，带说话人标签
+          onSentence: (text, _final, speaker) => {
+            setLiveText(text);
+            if (speaker) setLiveSpeaker(speaker);
+          },
+          // ASR WS compliance 帧：与 transcript 的 compliance_alerts 同一套映射与展示状态
+          onCompliance: (blocked, violations) => {
+            const alerts = mapComplianceViolations(violations);
+            if (alerts.length) {
+              setComplianceAlerts((prev) => [...prev, ...alerts]);
+              const critical = alerts.find((a) => a.critical);
+              if (critical) setShowRedLine(critical.description);
+            }
+          },
+          onError: (msg) => {
+            setLiveText('');
+            setTranscribing(false); // 服务端 error 帧后即断开（无 completed 帧），必须复位防按钮卡死
+            Alert.alert('语音转写', msg.includes('NLS') ? 'NLS 识别通道未配置，暂不可用' : msg);
+          },
+          // speaker：visit-service 帧的说话人标签（'doctor' → 医生，其余按代表）
+          onCompleted: async (fullText, speaker) => {
+            asrSessionRef.current = null;
+            setTranscribing(false);
+            setLiveText('');
+            setLiveSpeaker(undefined);
+            if (fullText && fullText.trim()) {
+              await addTranscript(fullText.trim(), speaker === 'doctor' ? 'hcp' : 'rep'); // 走异议/合规检测 + 落库
+            }
+          },
+        });
+        asrSessionRef.current = session;
+      } catch (e: any) {
+        // 会话建立失败（token 通道异常等）：回滚录音态，避免"停止录音"按钮但无会话可 stop 的悬空态
+        setRecording(false);
+        recordingRef.current = false;
+        stopRecording().catch(() => {});
+        Alert.alert('提示', '转写通道启动失败：' + (e.message || '请重试'));
       }
       return;
     }
-    // 停止录音 → 推流转写
+    // 停止录音 → 流式会话收尾：stop() 推完剩余 PCM 再发 stop 帧（asr.ts M19 契约），
+    // 服务端据此 finalize 并回 completed 帧 → onCompleted → addTranscript
     setRecording(false);
     recordingRef.current = false;
     setTranscribing(true);
-    try {
-      const wavPath = await stopRecording();
-      const pcm = await readWavPcm(wavPath);
-      if (pcm.length === 0) {
-        setTranscribing(false);
-        Alert.alert('提示', '未检测到有效录音');
-        return;
-      }
-      const token = (await apiClient.getToken()) || '';
-      const CHUNK = 16 * 1024;
-      const session = connectAsr(visitId, token, {
-        onReady: () => {
-          for (let i = 0; i < pcm.length; i += CHUNK) {
-            session.sendAudioChunk(pcm.subarray(i, i + CHUNK));
-          }
-          session.stop();
-        },
-        // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"，带说话人标签
-        onSentence: (text, _final, speaker) => {
-          setLiveText(text);
-          if (speaker) setLiveSpeaker(speaker);
-        },
-        // ASR WS compliance 帧：与 transcript 的 compliance_alerts 同一套映射与展示状态
-        onCompliance: (blocked, violations) => {
-          const alerts = mapComplianceViolations(violations);
-          if (alerts.length) {
-            setComplianceAlerts((prev) => [...prev, ...alerts]);
-            const critical = alerts.find((a) => a.critical);
-            if (critical) setShowRedLine(critical.description);
-          }
-        },
-        onError: (msg) => {
-          setLiveText('');
-          setTranscribing(false); // 服务端 error 帧后即断开（无 completed 帧），必须复位防按钮卡死
-          Alert.alert('语音转写', msg.includes('NLS') ? 'NLS 识别通道未配置，暂不可用' : msg);
-        },
-        // speaker：visit-service 帧的说话人标签（'doctor' → 医生，其余按代表）
-        onCompleted: async (fullText, speaker) => {
-          asrSessionRef.current = null;
-          setTranscribing(false);
-          setLiveText('');
-          setLiveSpeaker(undefined);
-          if (fullText && fullText.trim()) {
-            await addTranscript(fullText.trim(), speaker === 'doctor' ? 'hcp' : 'rep'); // 走异议/合规检测 + 落库
-          }
-        },
-      });
-      asrSessionRef.current = session;
-    } catch (e: any) {
-      setTranscribing(false);
-      Alert.alert('提示', '转写失败：' + (e.message || '请重试'));
-    }
+    try { await stopRecording(); } catch {}
+    asrSessionRef.current?.stop();
   }, [recording, transcribing, visitId, addTranscript]);
 
   return (
@@ -241,8 +255,45 @@ export default function VisitInProgressScreen() {
                 >
                   <Text style={styles.objectionText} numberOfLines={2}>{obj.description}</Text>
                   {obj.suggested_response && <Text style={styles.tipLabel}>点击查看话术</Text>}
+                  {obj.suggested_response && (
+                    <TouchableOpacity
+                      style={styles.speakBtn}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      onPress={() => speakTts(obj.suggested_response!)}>
+                      <Icon name="volume-high" size={12} color={Colors.primary} />
+                      <Text style={styles.speakText}>朗读</Text>
+                    </TouchableOpacity>
+                  )}
                 </TouchableOpacity>
               ))}
+            </View>
+          )}
+
+          {/* AI 实时推荐：关键节点 + 话术建议（后端 transcript 响应 key_nodes/ai_suggestion） */}
+          {(keyNodes.length > 0 || aiSuggestion) && (
+            <View style={styles.sideSection}>
+              <View style={styles.sideTitleRow}>
+                <Icon name="bulb-outline" size={14} color={Colors.primary} />
+                <Text style={styles.sideTitle}>AI 实时推荐</Text>
+              </View>
+              {keyNodes.slice(-5).map((n, i) => (
+                <View key={`kn_${i}`} style={styles.keyNodeRow}>
+                  <Text style={[styles.keyNodeBadge, n.type === 'decision_point' ? styles.keyNodeDecision : styles.keyNodeInterest]}>
+                    {n.type === 'decision_point' ? '决策点' : '兴趣点'}
+                  </Text>
+                  <Text style={styles.keyNodeLabel} numberOfLines={2}>{n.label}</Text>
+                </View>
+              ))}
+              {aiSuggestion && (
+                <View style={styles.aiSuggestionCard}>
+                  <Text style={styles.aiSuggestionTopic}>{aiSuggestion.topic}</Text>
+                  <Text style={styles.aiSuggestionAdvice} numberOfLines={3}>{aiSuggestion.advice}</Text>
+                  <TouchableOpacity style={styles.speakBtn} onPress={() => speakTts(aiSuggestion.advice)}>
+                    <Icon name="volume-high" size={14} color={Colors.primary} />
+                    <Text style={styles.speakText}>朗读话术</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
 
@@ -365,6 +416,16 @@ const styles = StyleSheet.create({
   },
   objectionText: { fontSize: FontSize.xs, color: Colors.textPrimary, lineHeight: 18 },
   tipLabel: { fontSize: 10, color: Colors.primary, marginTop: 4, fontWeight: '600' },
+  keyNodeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  keyNodeBadge: { fontSize: 10, color: Colors.textWhite, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginRight: 6, overflow: 'hidden' },
+  keyNodeDecision: { backgroundColor: '#1677ff' },
+  keyNodeInterest: { backgroundColor: '#52c41a' },
+  keyNodeLabel: { flex: 1, fontSize: 12, color: Colors.textPrimary },
+  aiSuggestionCard: { backgroundColor: Colors.backgroundAlt, borderRadius: 8, padding: 8, marginTop: 4 },
+  aiSuggestionTopic: { fontSize: 12, fontWeight: '600', color: Colors.primary, marginBottom: 4 },
+  aiSuggestionAdvice: { fontSize: 12, color: Colors.textPrimary, marginBottom: 6, lineHeight: 18 },
+  speakBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start' },
+  speakText: { fontSize: 12, color: Colors.primary, marginLeft: 4 },
   complianceItem: {
     backgroundColor: Colors.dangerLight, padding: Spacing.sm,
     borderRadius: BorderRadius.sm, marginBottom: Spacing.xs,

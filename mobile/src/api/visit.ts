@@ -23,7 +23,11 @@ import type {
   TranscriptResult,
   FollowUpResult,
   PaginatedResponse,
+  KeyNode,
 } from '../types';
+
+// KeyNode / AiSuggestion 定义在 src/types（与 TranscriptResult 同址），此处再导出供屏幕按 api 层路径消费
+export type { KeyNode, AiSuggestion } from '../types';
 
 // ==================== 内部映射工具 ====================
 
@@ -177,7 +181,7 @@ export function mapComplianceViolations(violations: unknown): ComplianceAlert[] 
 }
 
 /** process_transcript 响应 → 屏幕消费形状（后端 objections 是 {objections:[...]} 对象，compliance 是嵌套对象） */
-function mapTranscriptResult(raw: any): TranscriptResult {
+export function mapTranscriptResult(raw: any): TranscriptResult {
   const rawObjections = raw?.objections;
   const objectionList = Array.isArray(rawObjections)
     ? rawObjections
@@ -213,6 +217,26 @@ function mapTranscriptResult(raw: any): TranscriptResult {
     transcript: String(raw?.transcript ?? ''),
     objections,
     compliance_alerts: mapComplianceViolations(raw?.compliance?.violations),
+    // LLM 实时推荐：key_nodes 只保留服务端两种已知节点类型（未知类型按契约测试语义忽略，
+    // 避免垃圾帧被兜底映射成"决策点"渲染进推荐区）；label 空白的节点同样丢弃
+    key_nodes: Array.isArray(raw?.key_nodes)
+      ? raw.key_nodes
+          .filter((n: any): n is Record<string, unknown> => !!n && typeof n === 'object')
+          .filter((n: any) => n.type === 'decision_point' || n.type === 'interest_point')
+          .map((n: any) => ({
+            type: n.type === 'interest_point' ? ('interest_point' as const) : ('decision_point' as const),
+            label: String(n.label ?? '').slice(0, 20),
+            quote: String(n.quote ?? '').slice(0, 60),
+          }))
+          .filter((n: KeyNode) => n.label)
+      : [],
+    ai_suggestion:
+      raw?.ai_suggestion && typeof raw.ai_suggestion === 'object' && raw.ai_suggestion.advice
+        ? {
+            topic: String(raw.ai_suggestion.topic ?? '对话要点').slice(0, 50),
+            advice: String(raw.ai_suggestion.advice).slice(0, 200),
+          }
+        : null,
   };
 }
 

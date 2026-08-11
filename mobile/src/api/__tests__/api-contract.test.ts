@@ -3,7 +3,7 @@
  * 这一类 bug（路径漂移、camelCase 与 snake_case 错配）编译器抓不到，
  * 2026-08-05 审计一次性发现了 7 处。
  */
-import { visitAPI, mapComplianceViolations } from '../visit';
+import { visitAPI, mapComplianceViolations, mapTranscriptResult } from '../visit';
 import { specialistAPI } from '../specialist';
 import { complianceAPI } from '../compliance';
 import { hcpAPI } from '../hcp';
@@ -193,6 +193,28 @@ describe('visitAPI', () => {
     expect(r.hcp_name).toBe('医生 #3');
     expect(r.planned_date).toBe('2026-08-06');
     expect(r.ai_summary).toBeUndefined();
+  });
+
+  it('mapTranscriptResult 解析 LLM 推荐字段（key_nodes/ai_suggestion）', () => {
+    const result = mapTranscriptResult({
+      transcript: '主任表示考虑使用',
+      objections: { objections: [] },
+      compliance: { violations: [] },
+      key_nodes: [
+        { type: 'decision_point', label: '决策表态', quote: '主任表示考虑使用' },
+        { type: 'unknown_type', label: '忽略', quote: '' },
+      ],
+      ai_suggestion: { topic: '价格', advice: '建议强调药物经济学优势' },
+    });
+    expect(result.key_nodes).toHaveLength(1);
+    expect(result.key_nodes[0]).toMatchObject({ type: 'decision_point', label: '决策表态' });
+    expect(result.ai_suggestion).toEqual({ topic: '价格', advice: '建议强调药物经济学优势' });
+  });
+
+  it('mapTranscriptResult 缺推荐字段时容错为空', () => {
+    const result = mapTranscriptResult({ transcript: 'x', objections: [], compliance: { violations: [] } });
+    expect(result.key_nodes).toEqual([]);
+    expect(result.ai_suggestion).toBeNull();
   });
 
   it('prepareVisit 把平铺 hcp_profile 包成 basic_info、recommendations 兼容中文键', async () => {

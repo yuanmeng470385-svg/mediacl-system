@@ -212,13 +212,9 @@ export default function ChatScreen() {
       .catch((e) => Alert.alert('提示', e.message || '操作失败'));
   };
 
-  // 语音转写需在拜访流程中使用（ASR WS 校验真实 visit_id），聊天页仅提示入口
+  // 语音转写绑定真实 visit_id（ASR WS 校验归属），聊天页无拜访上下文 → 仅提示入口
   const handleVoice = useCallback(() => {
-    Alert.alert(
-      '语音转写',
-      '语音转写需在拜访流程中使用。\n（NLS 识别通道待配置后可用）',
-      [{ text: '知道了' }]
-    );
+    Alert.alert('语音转写', '语音转写需在拜访流程中使用，请在拜访中页点击录音按钮。', [{ text: '知道了' }]);
   }, []);
 
   const renderMessage = ({ item }: { item: Message }) => {

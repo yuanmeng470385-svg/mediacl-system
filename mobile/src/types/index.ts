@@ -131,11 +131,26 @@ export interface ComplianceAlert {
   critical?: boolean;
 }
 
+/** LLM 实时推荐：关键节点标记（服务端 visit_records.key_nodes 元素） */
+export interface KeyNode {
+  type: 'decision_point' | 'interest_point';
+  label: string;
+  quote: string;
+}
+
+/** LLM 实时推荐：话术建议 */
+export interface AiSuggestion {
+  topic: string;
+  advice: string;
+}
+
 /** sendTranscript 的映射结果 —— 屏幕消费形状（后端 objection/compliance 键位错位在此抹平） */
 export interface TranscriptResult {
   transcript: string;
   objections: ObjectionAlert[];
   compliance_alerts: ComplianceAlert[];
+  key_nodes: KeyNode[];
+  ai_suggestion: AiSuggestion | null;
 }
 
 export interface FollowUpResult {

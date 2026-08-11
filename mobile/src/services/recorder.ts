@@ -28,6 +28,11 @@ export async function stopRecording(): Promise<string> {
   });
 }
 
+/** 录音文件完整路径（react-native-audio-record 按 DocumentDirectoryPath + wavFile 落盘；流式推流在 stop 前就需要路径） */
+export function recordingPath(): string {
+  return `${RNFS.DocumentDirectoryPath}/${RECORD_OPTIONS.wavFile}`;
+}
+
 /** 读 wav 文件，跳过 44 字节头，返回 PCM 数据 */
 export async function readWavPcm(path: string): Promise<Uint8Array> {
   const base64 = await RNFS.readFile(path, 'base64');
