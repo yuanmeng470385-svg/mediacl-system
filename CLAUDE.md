@@ -308,7 +308,7 @@ cd mobile && npx react-native start                   # Metro（Node v25 实测�
 # git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
 cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（64 用例 = 契约 31 + wsChat 9 + asr 8 + tts 7 + asrStreaming 5 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
+# 测试：cd mobile && npx jest（70 用例 = 契约 31 + wsChat 9 + asr 8 + tts 10 + asrStreaming 8 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
 ```
 
 结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；**注意 `HCPProfile`/`ComplianceRuleDetail` 是声明了但从未注册的死路由**）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
@@ -368,7 +368,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~听悟 _parse_result 恒空~~（按真实 GetTaskInfo 结构解析 result.text/result.sentences，speaker_id=0 用 is not None；另驳回写审计、归档清索引、登录失败写审计一并补上）
 - ~~**向量化链路从未真正生效**~~（EMBEDDING_DIM=1536 是错误假设，text-embedding-v3 最大 1024 维 → collection 以 1536 建库，每次 upsert 维度不匹配**静默失败**（DashVector 响应式 API 不抛异常 + 代码不查返回码），文档全部"上架成功但向量缺失"；已修 EMBEDDING_DIM=1024 + upsert/create 响应码检查（失败 raise）+ **删除重建 collection**；delete_doc 双 bug——Collection.delete 不支持 filter + filter 字符串必须双引号，改先 query(filter) 再 delete(ids=)）
 - ~~网关 knowledge 路由超时 30s→120s~~（百炼导入 ~28s + 向量化，30s 网关先断 → "业务完成但客户端 504"）
-- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 61 = **385 passed**；mobile jest 64；web build PASS
+- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 61 = **385 passed**；mobile jest 70；web build PASS
 
 已修（2026-08-11 第二批：web 医生管理 + 移动端语音链路，用户逐项拍板后实施）：
 - ~~web 新增医生占位 / AI 画像未展示~~（ModalForm 真实接线 POST /hcps；DoctorDetail 画像卡片含降级兼容；画像映射移植 mobile hcp.ts）
