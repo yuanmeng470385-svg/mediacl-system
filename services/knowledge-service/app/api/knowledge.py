@@ -235,8 +235,15 @@ async def review_document(
         doc = manager.approve_document(doc_id, current_user["id"])
     else:
         doc = manager.reject_document(doc_id, current_user["id"])
-        # M23: 驳回时说明索引已清理；已上架文档被驳回时响应 message 提示
+        # 合规硬伤回归：驳回曾是 early return，跳过了 write_audit_log ——
+        # 审核动作（尤其驳回）必须留痕。先写审计再响应。
         if doc.status == "rejected":
+            await write_audit_log(
+                user_id=current_user["id"], action="doc_review",
+                resource_type="knowledge_document", resource_id=str(doc_id),
+                after_value={"approved": False, "status": "rejected"},
+            )
+            # M23: 驳回时说明索引已清理；已上架文档被驳回时响应 message 提示
             return success(doc.to_dict(), message="文档已驳回，检索索引已同步清理")
     await write_audit_log(
         user_id=current_user["id"], action="doc_review",
