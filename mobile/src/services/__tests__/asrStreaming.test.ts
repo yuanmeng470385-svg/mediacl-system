@@ -7,12 +7,15 @@ jest.mock('react-native-audio-record', () => ({
   default: { init: jest.fn(), start: jest.fn(), stop: jest.fn(), on: jest.fn() },
 }));
 
-// readWavPcmFrom 用 RNFS.read(path, length, position, encoding) 做增量读（readFile 不支持 position/length）
+// readPcmSource 用 RNFS.read(path, length, position, encoding) 做增量读（readFile 不支持 position/length）；
+// DocumentDirectoryPath 供 Android temp.pcm 源判定（recorder.ts 的 TEMP_PCM_PATH 组合用）
 jest.mock('react-native-fs', () => ({
+  DocumentDirectoryPath: '/data/user/0/com.medagent/files',
   read: jest.fn(),
   stat: jest.fn(),
 }));
 import RNFS from 'react-native-fs';
+import { Platform } from 'react-native';
 
 const pcmBuffer = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
@@ -129,5 +132,59 @@ describe('connectAsrStreaming', () => {
     expect(frames.length).toBe(3); // 初始分片 + 剩余分片 + stop 帧
     expect(Array.from(new Uint8Array(frames[1]))).toEqual(Array.from(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20])));
     expect(frames[2]).toBe(JSON.stringify({ type: 'stop' }));
+  });
+
+  test('Android：录音中增量读源为 temp.pcm（裸 PCM 无头），temp 删除后切回 wav(+44)', async () => {
+    // jest 预设（Platform.ios.js）下 Platform.OS 是平铺属性 'ios'，临时切 android，用毕还原
+    const origOS = Platform.OS;
+    Platform.OS = 'android';
+    // 恢复全局 WebSocket 为普通 OPEN 起步 mock（其他用例可能换成 CONNECTING 变体）
+    (global as any).WebSocket = MockWebSocket;
+    try {
+      const wavPath = `${RNFS.DocumentDirectoryPath}/medagent_rec.wav`;
+      const tempPath = `${RNFS.DocumentDirectoryPath}/temp.pcm`;
+      // 录音中：temp.pcm 存在（10 字节裸 PCM），wav 尚未生成
+      (RNFS.stat as jest.Mock).mockImplementation(async (p: string) => {
+        if (p === tempPath) return { size: 10 };
+        throw new Error('ENOENT: wav not yet materialized');
+      });
+      // temp 分支读的是裸文件字节偏移（无 44 头）
+      (RNFS.read as jest.Mock).mockImplementation(async (p: string, len: number, pos: number) => {
+        const slice = pcmBuffer.subarray(pos, pos + len);
+        return toBase64(slice);
+      });
+      const cbs = { onReady: jest.fn(), onSentence: jest.fn(), onCompliance: jest.fn(), onError: jest.fn(), onCompleted: jest.fn() };
+      connectAsrStreaming(1, 't', wavPath, cbs);
+      const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+      ws.onopen && ws.onopen();
+      // Android 路径每次源判定多 1 次 stat（tempPcmExists + stat），start 链约 12 跳（iOS 约 7 跳）
+      await settle(24);
+      // 录音中：temp.pcm 的 10 字节整段推走（证明读的是裸 PCM，不是不存在的 wav）
+      const firstChunks = ws.sent.filter((s) => s instanceof ArrayBuffer);
+      expect(firstChunks.length).toBe(1);
+      expect(Array.from(new Uint8Array(firstChunks[0]))).toEqual(Array.from(pcmBuffer));
+      // 裸 PCM 契约：文件偏移 = PCM 偏移（无 44 头）
+      expect((RNFS.read as jest.Mock).mock.calls[0]).toEqual([tempPath, 10, 0, 'base64']);
+      // stop 完成：temp.pcm 已删，wav 落盘（44 头 + 20 PCM）→ 下一轮轮询切回 wav 契约（文件偏移 = PCM 偏移 + 44）
+      (RNFS.stat as jest.Mock).mockImplementation(async (p: string) => {
+        if (p === tempPath) throw new Error('ENOENT: temp deleted after stop');
+        return { size: 44 + 20 };
+      });
+      (RNFS.read as jest.Mock).mockImplementation(async (p: string, len: number, pos: number) => {
+        const start = pos - 44; // wav 契约：文件偏移 = PCM 偏移 + 44
+        const extra = new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+        const slice = start >= 10 ? extra.subarray(start - 10, start - 10 + (len === 0 ? extra.length : len)) : new Uint8Array(0);
+        return toBase64(slice);
+      });
+      flushTimers();
+      await settle(24);
+      // 切源后 offset 连续（temp 的 10 字节已推过）：只推 wav 新增的 11-20，且读位置带 44 头偏移
+      const chunks = ws.sent.filter((s) => s instanceof ArrayBuffer);
+      expect(chunks.length).toBe(2);
+      expect(Array.from(new Uint8Array(chunks[1]))).toEqual(Array.from(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20])));
+      expect((RNFS.read as jest.Mock).mock.calls[1]).toEqual([wavPath, 10, 54, 'base64']);
+    } finally {
+      Platform.OS = origOS;
+    }
   });
 });

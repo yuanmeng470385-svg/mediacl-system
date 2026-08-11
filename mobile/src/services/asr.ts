@@ -6,7 +6,7 @@
  *   - 服务端→客户端：ready / sentence(index,text,final) / compliance(blocked,violations) / error / completed
  */
 import { ASR_HOST } from '../config';
-import { readWavPcmFrom, wavDataLength } from './recorder';
+import { readPcmSource, pcmSourceLength } from './recorder';
 
 export interface AsrCallbacks {
   onReady: () => void;
@@ -126,7 +126,7 @@ export function connectAsrStreaming(
   /** 推 [offset, until) 的 PCM 分片，不带 stopped 门禁（stop() 收尾 flush 专用） */
   async function flushTo(until: number) {
     while (offset < until) {
-      const chunk = await readWavPcmFrom(wavPath, offset, Math.min(chunkSize, until - offset));
+      const chunk = await readPcmSource(wavPath, offset, Math.min(chunkSize, until - offset));
       if (chunk.length === 0) break;
       session.sendAudioChunk(chunk);
       offset += chunk.length;
@@ -141,7 +141,7 @@ export function connectAsrStreaming(
 
   async function start() {
     try {
-      const total = await wavDataLength(wavPath);
+      const total = await pcmSourceLength(wavPath);
       await pushSince(total);
     } catch {
       // 初始读失败忽略，下一轮重试
@@ -149,7 +149,7 @@ export function connectAsrStreaming(
     if (stopped) return;
     timer = setInterval(async () => {
       try {
-        const total = await wavDataLength(wavPath);
+        const total = await pcmSourceLength(wavPath);
         await pushSince(total);
       } catch {
         // 读失败忽略，下一轮重试
@@ -168,7 +168,7 @@ export function connectAsrStreaming(
       }
       // 推完剩余 PCM 再发 stop 收尾；flush 绕过 stopped 门禁
       //（否则 stopped 置位后 pushSince 空转，最后 pollMs 内的尾音被静默丢弃）
-      wavDataLength(wavPath)
+      pcmSourceLength(wavPath)
         .then((total) => flushTo(total))
         .catch(() => {})
         .finally(() => session.stop());
