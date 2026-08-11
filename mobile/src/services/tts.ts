@@ -33,7 +33,19 @@ export async function speak(text: string): Promise<void> {
   const epoch = ++speakEpoch; // 在 fetch 之前抢占本代，stopSpeaking 才有机会在 fetch 期间使其失效
   const { token, appkey } = await getTtsToken();
   const url = `${TTS_URL}?appkey=${encodeURIComponent(appkey)}&token=${encodeURIComponent(token)}&text=${encodeURIComponent(text)}&format=wav&sample_rate=16000`;
-  const resp = await fetch(url);
+  // 30s 超时（client.ts 惯例）：NLS 挂起不能让 speak 永挂；超时判定用 signal.aborted
+  //（不依赖 reject 错误的 name——RN 各环境 abort 错误形状不一）
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let resp: Response;
+  try {
+    resp = await fetch(url, { signal: controller.signal });
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error('语音合成请求超时（30s）');
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!resp.ok) throw new Error(`语音合成失败(${resp.status})`);
   const bytes = new Uint8Array(await resp.arrayBuffer());
   let bin = '';
@@ -58,7 +70,7 @@ export async function speak(text: string): Promise<void> {
         return;
       }
       if (err) {
-        reject(new Error('音频播放初始化失败'));
+        reject(new Error(`音频播放初始化失败：${err.message}`));
         return;
       }
       current = s;

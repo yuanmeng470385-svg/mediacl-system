@@ -16,9 +16,10 @@ jest.mock('react-native-sound', () => {
     setTimeout(() => cb(null), 0);
     return { play: mockPlay, release: mockRelease, stop: mockStop };
   });
-  // 暴露子 mock，供竞态测试断言 play/release 调用
+  // 暴露子 mock，供竞态测试断言 play/release/stop 调用
   (SoundMock as any).__mockPlay = mockPlay;
   (SoundMock as any).__mockRelease = mockRelease;
+  (SoundMock as any).__mockStop = mockStop;
   return SoundMock;
 });
 jest.mock('../../api/client', () => ({
@@ -84,6 +85,24 @@ describe('tts', () => {
     }
   });
 
+  // 真实路径驱动 current：await speak 完成后 current 已置位（play 完成回调被 mock 挂起不触发）
+  // 位置必须在「speak 合成 URL 带 appkey/token/text 并写文件播放」用例之前——
+  // Sound mock 的 stop/release 是模块级共享 jest.fn，若其后的 speak 成功用例先跑，
+  // 其 executor 的 stopCurrent() 会先 stop 掉本测试残留实例，计数被污染；
+  // 本测试以 stopSpeaking 收尾（current 置 null），不污染其后的 speak 成功用例
+  test('stopSpeaking 打断正在播放的 sound（stop + release）', async () => {
+    (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([1, 2]).buffer,
+    }) as any;
+    const SoundMock = Sound as unknown as jest.Mock & { __mockPlay: jest.Mock; __mockRelease: jest.Mock; __mockStop: jest.Mock };
+    await speak('主任您好');
+    stopSpeaking();
+    expect(SoundMock.__mockStop).toHaveBeenCalledTimes(1);
+    expect(SoundMock.__mockRelease).toHaveBeenCalledTimes(1);
+  });
+
   test('speak 合成 URL 带 appkey/token/text 并写文件播放', async () => {
     (apiClient.request as jest.Mock).mockResolvedValue({ token: 'tok-1', appkey: 'app-1' });
     global.fetch = jest.fn().mockResolvedValue({
@@ -92,9 +111,10 @@ describe('tts', () => {
     }) as any;
     const RNFS = require('react-native-fs');
     await speak('主任您好');
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('appkey=app-1'));
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('token=tok-1'));
-    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('text='));
+    // fetch 现在带第二个参数 { signal }（30s 超时 AbortController）
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('appkey=app-1'), expect.anything());
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('token=tok-1'), expect.anything());
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('text='), expect.anything());
     expect(RNFS.writeFile).toHaveBeenCalledWith('/mock/doc/tts_tmp.wav', expect.any(String), 'base64');
     expect(Sound).toHaveBeenCalled();
   });
@@ -105,9 +125,55 @@ describe('tts', () => {
     await expect(speak('x')).rejects.toThrow('500');
   });
 
-  test('stopSpeaking 释放当前播放', () => {
-    const s = new Sound('/x', '', () => {});
-    (global as any).__ttsCurrent = s; // 内部 current 无法直接触碰，只验证不抛错
-    expect(() => stopSpeaking()).not.toThrow();
+  test('NLS 合成请求 30s 无响应 → 超时报错', async () => {
+    jest.useFakeTimers();
+    try {
+      (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
+      // fetch 永不 resolve，只监听 abort 后 reject（模拟 RN 挂起请求被 AbortController 取消）
+      global.fetch = jest.fn().mockImplementation(
+        (_url: string, opts?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener('abort', () => reject(new Error('Aborted')));
+          }),
+      ) as any;
+      const p = speak('x');
+      // 微任务冲洗：speak 此刻挂在 getTtsToken 的 await 上，30s abort 定时器尚未注册；
+      // 原生 Promise 微任务不随 fake clock 的同步 tick 冲洗（与「Sound 加载窗口内」用例同款循环），
+      // 不先冲洗则 advanceTimersByTime 无定时器可触发，测试永挂
+      for (let i = 0; i < 20 && !(global.fetch as jest.Mock).mock.calls.length; i++) {
+        await Promise.resolve();
+      }
+      jest.advanceTimersByTime(30_000);
+      await expect(p).rejects.toThrow('超时');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('合成请求网络错误原样上抛（不被超时包裹吞掉）', async () => {
+    (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
+    global.fetch = jest.fn().mockRejectedValue(new TypeError('Network request failed')) as any;
+    await expect(speak('x')).rejects.toThrow('Network request failed');
+  });
+
+  test('播放初始化失败透传底层 err.message', async () => {
+    (apiClient.request as jest.Mock).mockResolvedValue({ token: 't', appkey: 'a' });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => new Uint8Array([1, 2]).buffer,
+    }) as any;
+    // 本用例内 Sound 加载回调改报错
+    const origImpl = (Sound as unknown as jest.Mock).getMockImplementation();
+    (Sound as unknown as jest.Mock).mockImplementationOnce(
+      (_path: string, _base: string, cb: (e: Error | null) => void) => {
+        setTimeout(() => cb(new Error('file not found')), 0);
+        return { play: jest.fn(), release: jest.fn(), stop: jest.fn() };
+      },
+    );
+    try {
+      await expect(speak('x')).rejects.toThrow('file not found');
+    } finally {
+      (Sound as unknown as jest.Mock).mockImplementation(origImpl as any);
+    }
   });
 });
