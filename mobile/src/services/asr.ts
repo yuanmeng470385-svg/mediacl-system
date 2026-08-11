@@ -6,6 +6,7 @@
  *   - 服务端→客户端：ready / sentence(index,text,final) / compliance(blocked,violations) / error / completed
  */
 import { ASR_HOST } from '../config';
+import { readWavPcmFrom, wavDataLength } from './recorder';
 
 export interface AsrCallbacks {
   onReady: () => void;
@@ -85,6 +86,92 @@ export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): A
     },
     close() {
       ws.close();
+    },
+  };
+}
+
+export interface AsrStreamingOptions {
+  /** 轮询读录音增量间隔 ms */
+  pollMs?: number;
+  /** 单次推流分片字节数 */
+  chunkSize?: number;
+}
+
+/**
+ * 流式转写（M19 修复）：录音进行中每 pollMs 轮询读 WAV 增量 → 持续推流，
+ * 替代旧的"录完一次性推全部 + 立即 stop"（与 NLS 流式识别不匹配）。
+ * 服务端 asr_ws.py 已支持持续二进制 feed + stop 收尾，零改动。
+ * 使用方式：录音 start 后调用，stop 录音后调用返回会话的 stop()。
+ */
+export function connectAsrStreaming(
+  visitId: number,
+  token: string,
+  wavPath: string,
+  cbs: AsrCallbacks,
+  opts: AsrStreamingOptions = {},
+): AsrSession {
+  const pollMs = opts.pollMs ?? 2000;
+  const chunkSize = opts.chunkSize ?? 16 * 1024;
+  let offset = 0; // 已推送的 PCM 字节偏移
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+
+  const session = connectAsr(visitId, token, {
+    ...cbs,
+    onReady: () => {
+      start();
+    },
+  });
+
+  async function pushSince(until: number) {
+    while (offset < until && !stopped) {
+      const chunk = await readWavPcmFrom(wavPath, offset, Math.min(chunkSize, until - offset));
+      if (chunk.length === 0) break;
+      session.sendAudioChunk(chunk);
+      offset += chunk.length;
+    }
+  }
+
+  async function start() {
+    try {
+      const total = await wavDataLength(wavPath);
+      await pushSince(total);
+    } catch {
+      // 初始读失败忽略，下一轮重试
+    }
+    if (stopped) return;
+    timer = setInterval(async () => {
+      try {
+        const total = await wavDataLength(wavPath);
+        await pushSince(total);
+      } catch {
+        // 读失败忽略，下一轮重试
+      }
+    }, pollMs);
+  }
+
+  return {
+    sendAudioChunk: session.sendAudioChunk.bind(session),
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      // 推完剩余 PCM 再发 stop 收尾
+      wavDataLength(wavPath)
+        .then((total) => pushSince(total))
+        .catch(() => {})
+        .finally(() => session.stop());
+    },
+    close() {
+      stopped = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      session.close();
     },
   };
 }

@@ -1,5 +1,16 @@
 import { connectAsr } from '../asr';
 
+// asr.ts 现会 import recorder.ts（其模块级 import react-native-audio-record：ESM 且 jest
+// 不转译 node_modules，且 jest 下 Platform.OS=ios 时 NativeEventEmitter(null) 抛错；
+// react-native-fs 的 FS.common.js 含 Flow 注解同样不被转译）→ 必须 mock，本测试不调用其方法
+jest.mock('react-native-audio-record', () => ({
+  default: { init: jest.fn(), start: jest.fn(), stop: jest.fn(), on: jest.fn() },
+}));
+jest.mock('react-native-fs', () => ({
+  read: jest.fn(),
+  stat: jest.fn(),
+}));
+
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
   static OPEN = 1;
