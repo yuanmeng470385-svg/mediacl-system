@@ -2,7 +2,7 @@
 
 > 目标：在真实 Android/iOS 设备上完成端到端验证 —— 录音实时转写、聊天 WS 流式、说话人分离、拜访全流程。
 > 前置：本地后端可跑（见 CLAUDE.md Commands）；本指南假定已配齐阿里云密钥（百炼 + NLS + 短信）。
-> 版本：2026-08-06（对应第四批修复后的代码状态）
+> 版本：2026-08-11（M19 流式转写 / TTS 朗读 / host 集中配置后）
 
 ---
 
@@ -38,6 +38,7 @@
 |------|------|---------|
 | `ALIYUN_ACCESS_KEY_ID` / `ALIYUN_ACCESS_KEY_SECRET` | NLS token 换取 + 短信 | RAM 子账号 AK/SK |
 | `NLS_APPKEY` | 实时语音识别 Appkey | NLS 控制台项目 Appkey |
+| `NLS_MOCK` | `1` 时启用 Mock 实时转写（开发联调，Mock 文本不落库） | `1`，配真 AppKey 后删除 |
 | `NLS_SPEAKER_ENABLED` | 说话人分离开关（`1`/`true`/`yes`/`on`） | 先不配（默认关），验证 4.6 时开启 |
 | `BAILIAN_API_KEY` | 百炼 WS 对话 | 百炼 API-KEY |
 | `BAILIAN_APP_ID` | 数字专员=百炼 App（`digital_specialists.bailian_app_id`） | 每个专员一个 |
@@ -47,6 +48,8 @@
 | `AUTH_DEV_MODE` | `true` 时 `send-code` 响应回传验证码（**本地联调利器**） | 本地 `true`，生产必须 `false` |
 | `NLS_WS_URL` / `NLS_TOKEN_URL` | NLS 网关地址（默认华东） | 默认即可，区域不同才改 |
 | `INTERNAL_API_KEY` / `JWT_SECRET` | 内部鉴权 / JWT 签名 | `openssl rand -hex 32` 生成，**不得用模板值** |
+
+> NLS：`.env` 加 `NLS_APPKEY=<真实 AppKey>`（NLS 管控台项目 Appkey）；开发联调设 `NLS_MOCK=1`（Mock 文本不落库，配真 AppKey 后删除）。
 
 > ⚠️ 改完 `.env` 后必须**重启**对应服务（env 启动时读取）。
 
@@ -73,17 +76,18 @@ cd services/gateway && python -m uvicorn app.main:app --port 8000
 
 ### 2.4 移动端准备（真机）
 
-**⚠️ 关键：真机无法访问 `10.0.2.2`（那是模拟器专用地址）**，需把三个 host 常量改为宿主机局域网 IP（如 `192.168.1.100`）：
+**⚠️ 关键：真机无法访问 `10.0.2.2`（那是模拟器专用地址）**。后端 host 已集中到 `mobile/src/config.ts` 一处（API/ASR/聊天 WS 三处共用 `DEV_HOST`），真机联调只需改它：
 
-| 文件 | 当前（模拟器） | 改法 |
-|------|--------------|------|
-| `mobile/src/api/client.ts:11-13` | `android: 'http://10.0.2.2:8000'` | `'http://<宿主机IP>:8000'` |
-| `mobile/src/services/asr.ts:11-13` | `android: '10.0.2.2:8002'`（**直连 visit-service，不走网关**） | `'<宿主机IP>:8002'` |
-| `mobile/src/services/wsChat.ts:8-10` | `android: '10.0.2.2:8000'` | `'<宿主机IP>:8000'` |
+```ts
+// mobile/src/config.ts —— 模拟器用上行（Android 10.0.2.2 / iOS localhost），
+// 真机取消下行注释并改为宿主机局域网 IP（如 '192.168.1.100'）：
+const DEV_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
+// const DEV_HOST = '192.168.1.100';
+```
 
-> iOS 真机无此项（localhost 即真机自身）——iOS 需走 `localhost:8000`，真机场景要改为电脑 IP + **HTTPS 或 ATS 例外**（另见 5.3）。
+> 后端各服务需监听 `0.0.0.0`（uvicorn 默认只绑 `127.0.0.1`，真机连不上）。**宿主机防火墙放行 8000-8007 端口**（Windows：控制面板 → 防火墙 → 入站规则放行；或 `netsh advfirewall firewall add rule ...`）。
 
-**宿主机防火墙放行 8000-8007 端口**（Windows：控制面板 → 防火墙 → 入站规则放行；或 `netsh advfirewall firewall add rule ...`）。
+> iOS 真机无 10.0.2.2 问题（localhost 即真机自身），但真机场景同样要把 `DEV_HOST` 改为电脑局域网 IP + **HTTPS 或 ATS 例外**（另见 5.3）。
 
 ```bash
 # 构建安装（Android）
@@ -174,13 +178,21 @@ curl -s "localhost:8000/api/v1/audit/logs?page_size=3" -H "Authorization: $T"
 | 9 | 医生详情 → 互动历史 | 本次拜访记录在列（visit_time/ai_summary 真实渲染） |
 
 **录音链路注意**：
-- 当前实现是"录完再推"（audio-record 无流式回调，停止后一次性突发推 16KB×N 分片 + 立即 stop）——**与 NLS 实时流式要求存在设计级不匹配**，长音频（>1 分钟）可能丢帧/拒收。联调时：先试 30s 内短音频；若长音频转写不全，记录现象（这是已知待修点，不是配置问题）。
+- 流式推流已落地（M19 修复）：录音进行中每 2s 轮询读增量推送（Android 录音期间读 `temp.pcm` 裸增量，iOS 读 WAV 增量），stop 后推完剩余 PCM 再发 stop 帧——**不再"录完再推"**，与 NLS 实时流式要求对齐。
 - 录音权限弹窗必须允许（Android 13+ 麦克风权限）。
 
-### 4.4 说话人分离（4.6 节单独验证）
-`.env` 设 `NLS_SPEAKER_ENABLED=1` → 重启 visit-service → 重新拜访录音 → 观察转写区是否出现"代表/医生"标签。**注意**：参数名 `enable_speaker_identity`/`speaker_diarization` 是按阿里云文档写的，**真机验证时若报错或无效，需按实际返回调整 `realtime_asr.py` 的 `_build_start_payload()`**（代码注释已标注待确认点）。
+### 4.4 流式转写验证（M19 修复后）
+真机录音说话 → 转写文字随说话**渐进出现**（不再等停止后一次性出）；停止后断句落库（sentence 帧增量回填输入区，completed 帧回传末句全文走 `addTranscript` 落库，每句实时合规检查回推 compliance 事件）。
 
-### 4.5 其余页面抽查
+### 4.5 TTS 合成验证
+配好 `NLS_APPKEY` → 真机进入拜访中 → 异议卡片「朗读」（及 AI 实时推荐「朗读话术」）→ 应听到合成语音（服务端 `GET /api/v1/nls/tts-token` 换发 token → NLS REST 一次性合成 → `react-native-sound` 播放）；未配 `NLS_APPKEY` 时 tts-token 返回业务错误（code 4xxx），按钮应提示"语音合成未配置"。
+
+已知项：`react-native-sound` 为原生模块，装后需重新 `run-android`。
+
+### 4.6 说话人分离
+`.env` 设 `NLS_SPEAKER_ENABLED=1` → 重启 visit-service → 重新拜访录音 → 观察转写区是否出现"代表/医生"标签。**验证方法**：开启 `NLS_SPEAKER_ENABLED=1` 后实测说话，观察回推帧 `speaker` 字段（服务端映射：`0`=代表→`rep`，`1`=医生→`doctor`，缺省 `rep`），确认两人对话时 `'doctor'` 标签是否准确。**注意**：参数名 `enable_speaker_identity`/`speaker_diarization` 是按阿里云文档写的（**参数名待真机确认**），真机验证时若报错或无效，需按实际返回调整 `realtime_asr.py` 的 `_build_start_payload()`（代码注释已标注待确认点）。
+
+### 4.7 其余页面抽查
 - 内容页：分类 Tab 有数据（知识库有 ready 文档时；空库时"全部"为空属正常）
 - 合规手册：红线清单来自真实规则（reject 类）；失败显示错误态
 - 我的：统计概览真实（拜访总数不再显示 undefined）；设置页各入口有响应
@@ -194,7 +206,7 @@ curl -s "localhost:8000/api/v1/audit/logs?page_size=3" -H "Authorization: $T"
 |---|---------|------|---------|
 | 1 | NLS 说话人分离参数名/取值（`enable_speaker_identity`/`speaker_diarization`） | `visit-service/app/services/realtime_asr.py` `_build_start_payload()` | 开 NLS_SPEAKER_ENABLED 实测；报错则按 NLS 实际文档修正 |
 | 2 | NLS speaker_id → rep/doctor 对应约定（现按 0=代表/1=医生） | `visit-service/app/api/asr_ws.py` `_map_speaker()` | 两人对话实测标签是否正确，不对就调映射 |
-| 3 | "录完突发推流"长音频丢帧 | `mobile/src/services/asr.ts` | 30s/60s/3min 音频各测一次，记录转写完整度 |
+| 3 | ~~"录完突发推流"长音频丢帧~~（M19 已修——轮询增量流式推流：录音中每 2s 读增量推送，stop 推完剩余并发 stop 帧） | `mobile/src/services/asr.ts` | 30s/60s/3min 音频各测一次，验证流式转写完整度 |
 | 4 | 百炼流式 60 帧上限（超长回答第 61 帧断） | `specialist-service/app/services/bailian_client.py:162-191` | 问一个超长问题观察是否中断 |
 | 5 | iOS 首次构建（本机无 Xcode，未验证过） | mobile/ios | Mac 上 `pod install` + Xcode 构建；moduleName 已对齐但未实测 |
 | 6 | iOS 真机访问后端需 HTTPS/ATS 例外 | mobile/ios Info.plist | 或改用局域网 IP + ATS 白名单 |
@@ -227,7 +239,7 @@ curl -s "localhost:8000/api/v1/audit/logs?page_size=3" -H "Authorization: $T"
 | WS 关 4500 | question 空/超时/异常——看服务端日志具体原因 |
 | 验证码收不到短信 | 先确认 console 模式捞日志；切 aliyun 需配齐签名+模板，缺配**启动即抛错**（fail-fast） |
 | 真机连不上后端 | ① host 改局域网 IP（不是 10.0.2.2）② 防火墙放行 8000-8007 ③ 手机与电脑同一 WiFi |
-| ASR 能连但一直不出字 | 麦克风权限未给；或长音频突发推流丢帧（见 5.3） |
+| ASR 能连但一直不出字 | 麦克风权限未给；或录音中增量读源异常（Android 录音中读 `temp.pcm` / stop 后读 wav，见 `mobile/src/services/recorder.ts`） |
 | 审计页看不到数据 | 角色非 admin/manager/compliance（已加角色限制）；或 AUDIT_DATABASE_URL 未配（002 后写入静默失败——启动前必查） |
 | 知识库检索空 | 文档未 ready（需审核通过）；knowledge-base 无内容（当前空库属预期） |
 | 对话 answer 为空 | **已修（908af39）**：百炼空答案按失败降级 qwen，用户拿到 qwen 回答；若看到"百炼调用失败/返回空答案"降级 warning → 去百炼控制台确认 App 已发布、知识库有已过审文档 |
