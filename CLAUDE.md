@@ -357,6 +357,33 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；~~`AUDIT_LOG_RETENTION_DAYS` 死配置~~（f50a8de lifespan 定时清理 + medagent_audit_cleanup 专职角色，迁移 005 需 superuser）
 - 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
+**2026-08-11 全量审计（8 域 8 代理并行，60 发现合并去重，用户确认仅归档暂缓修复；划线=已修）**：
+- ~~**H1 JWT_SECRET 静默默认回退 + 6 业务服务无 fail-fast 守卫**：`shared/common/auth.py:29,48` `os.getenv("JWT_SECRET", "dev-secret-change-me")` 同时用于 create_token/verify_token，specialist/visit/knowledge/compliance/hcp/audit 均无启动守卫（仅 auth/gateway 有）→ 漏配时可用公开密钥伪造任意角色 token 直连 8001-8007。修法：守卫下沉 shared 或各服务 main.py 统一 fail-fast，默认回退从 shared 移除~~（2026-08-11 已修：shared `WEAK_JWT_SECRETS` + `validate_jwt_secret` fail-fast，6 服务 main.py 启动守卫，config 默认值删除，test_jwt_failfast.py 回归）
+- ~~**H2 停用/降级账号旧 token 7 天内仍有效**（require_roles 实时查库只覆盖受限端点）：`get_current_user`（auth.py:64-74）只信 token 快照 → 停用 admin 旧 token 可经 admin 旁路操作他人收藏/对话（`conversations.py:30,163` 的 `current_user.get("role") != "admin"`）、knowledge 未上架文档可见性（`_can_view_all_documents` 读 token role）、visit WS/REST 归属与 admin 判定、specialist/visit 两个 WS 端点。修法：状态/角色查库下沉 get_current_user 与 WS 鉴权公共路径~~（2026-08-11 已修：get_current_user 每次请求主键查库 401 code 2003，chat_ws/asr_ws 同语义 4401，specialist/visit/audit/auth 停用用例）
+- ~~**H3 hcp /profile 画像跨用户泄露**：`hcps.py:93-125` 只挂 get_current_user（无角色限制）；`profile_generator.py:46` 调 `list_interactions(db, hcp.id)` 不传 user_id（SQL `:user_id IS NULL` 不过滤，注释写明"仅 admin/manager 使用"但接口未接角色校验）→ 任意 rep 可拉含全部代表互动细节（ai_summary/key_points/objections）的画像，profile:{id} 全用户共享缓存。修法：接口挂 require_roles 或按 user_id 过滤~~（2026-08-11 已修：admin/manager 全量 :all，rep 本人 :u{uid}，缓存分键 + scan_iter 前缀失效，profile_generator user_id 过滤）
+- ~~**H4 knowledge 审核状态机竞态**：`document_manager.py:142` approve 抢占 processing（百炼导入最长 1h）后 `update_status(doc_id, "ready")` 无条件写终态；reject 允许 draft/processing/ready 驳回（:190）→ 审核期间驳回/归档被 1h 后翻回 ready 重新上架。修法：终态条件更新（`WHERE status='processing'`），驳回同样原子抢占~~（2026-08-11 已修：try_mark_final/try_restore_status 条件更新，approve_without_bailian 补同锁，竞态单测 2 例）
+- **H5 mobile 全链路明文 HTTP/WS**：`client.ts:10`/`wsChat.ts:7`/`asr.ts:10` JWT 与患者对话明文传输可被中间人截获
+- **H6 WS token 明文 query string + 网关 WS 零鉴权零限流**：`gateway main.py:362-381` proxy_chat_ws accept 前不验 token 不限流，token 原样透传上游；mobile `wsChat.ts:42`/`asr.ts:33` 拼 URL；specialist `chat_ws.py:58`、visit `asr_ws.py:73-85` 依赖 query token。修法：网关握手前验 token + 按 user_id 限流，token 改 Sec-WebSocket-Protocol 或首帧
+- **M1 compliance 语义层 fail-open 覆盖"内容拒审"**：`checker.py:336-352` fail-closed 元组只收 (JSONDecodeError, KeyError, TypeError, ValueError)，内容过滤/拒答以 HTTP 400（BadRequestError，属 Exception）落入宽 except fail-open → R003/R004/R006 整体跳过，与 S7 口径冲突。修法：4xx 内容策略类异常归 R999 fail-closed，仅超时/连接类 fail-open
+- **M2 compliance Unicode 变体绕过**：`checker.py:232-243` 匹配前无 NFKC/零宽字符剥离 → "１００％有效"、插 U+200B、"返 点"绕过 R001/R002，且 fast 流式门禁只跑文本层整体跳过
+- **M3 compliance 同步 LLM 阻塞事件循环**：`checker.py:287-295` 同步 create 跑 async 端点（默认超时 600s）→ LLM 变慢时 specialist/visit 调用方 10s 超时系统性 fail-open。修法：asyncio.to_thread + timeout 15s
+- **M4 compliance xlsx 导出公式注入**：`report.py:43-47` 拦截明细/规则快照原样写入 → `=HYPERLINK(...)`/`=cmd|` 开头内容按公式执行；audit 导出（logs.py:178-190）字符串列同理。修法：`= + - @ \t \r` 开头前置单引号或强制 data_type='s'
+- **M5 visit full_transcript 可覆盖真实转写**：`visit_manager.py:515-517` 客户端提交整段覆盖 conversation_transcript 且覆盖后不再过合规检查 → 被标记过 R002/R006 的对话可被洗白。修法：提交前全量合规检查并累加 compliance_flags，或仅允许追加 + 前缀匹配校验
+- **M6 visit follow_up 结构化输出零合规检查**：`visit_manager.py:561-569` 只查 ai_summary，key_points/hcp_interests/hcp_objections/follow_up_suggestions/next_visit_plan 及自动建任务完全不过合规
+- **M7 visit LLM prompt 注入**：`visit_manager.py:336-359/519-537/622-636`、`objection_detector.py:92-93` 用户可控转写/画像/历史无 `<user_content>` 定界直接内插（与 compliance S7 已修标准不一致）
+- **M8 specialist fast 门禁不覆盖语义层**：违规内容在 full 复核前到达客户端（fast 只跑 keyword/regex）
+- **M9 密码登录无账号级失败锁定**：`auth.py:263-272` 仅受网关 60/min/IP 限流，轮换 IP 可无限试弱密码。修法：Redis 账号级失败计数 + 临时锁定
+- **M10 网关限流不读 X-Forwarded-For**：`rate_limiter.py:154-158` 取 request.client.host → 反代部署下全站共享一桶，刷 login/send-code 可整体 DoS
+- **M11 网关 `..` 路径归一化绕过公开前缀**：`main.py:257` + `auth_middleware.py:110-116`，`/api/v1/auth/login/../../docs` 命中 PUBLIC_PATHS 免 JWT 且 httpx 建连归一化 → 未认证可拉全部 7 后端 /docs、/openapi.json、/metrics
+- **M12 knowledge 解压炸弹**：50MB 只管压缩体积，`document_processor.py:8-33` 解压/渲染到内存无输出上限 → approve 线程池撑爆。修法：页数/文本长度硬上限 + 解析超时
+- **M13 hcp Excel 批量导入无大小限制**（zip 炸弹）
+- **M14 visit ASR WS 直连 8002 无连接数/帧大小/时长限制**（绕过网关限流，每条连接拉一条 NLS 付费会话 + conversation_transcript 无限追加 + 无界并发合规调用）
+- **M15 visit 合规内部调用与用户请求共用网关 IP 限流配额**：`rate_limiter.py:145-171` 内部路径无豁免 → 多 ASR 并发超 60/min 后合规 429 → 客户端 fail-open 静默放行且无告警
+- **M16 specialist chat 无长度/并发限制**（网关 WS 绕过限流）
+- **M17 web localStorage JWT 无 CSP + 前端零角色访问控制**（`client.ts:10`/`AuthContext.tsx:37`；`App.tsx:43-64` 路由守卫只验登录态）
+- **M18 specialist /live-status question_snippet 跨用户**（`specialists.py:101` + `activity_registry.py:54`）
+- **Low 批**（归档）：mobile release debug 签名（build.gradle:53-60）/AsyncStorage 明文 JWT/无 FLAG_SECURE/401 无全局登出；web CORS `*`+credentials（gateway main.py:68-69）、/health 泄露 backends 内网拓扑（:147-165）；specialist draft/disabled 专员配置对所有登录用户可见、默认 DB 口令硬编码（db_session.py:13-16）、/metrics 无鉴权；knowledge 上传仅校验扩展名不校验魔数（XSS 载体）、/search-test 泄露内部异常、/stats 泄露云资源 ID 与未上架计数、检索参数健壮性（product_id 非法值静默丢过滤/无长度限制）、feedback doc_id 不校验、被驳回文档百炼索引未清理（降级路径仍可命中）；compliance 报告导出无上限（report.py:90）、正则 ReDoS 可入库（rules.py:90-95）、审计 client_ip 信 XFF 首段（logs.py:280-285）、拦截记录/审计 JSONB 明文留存敏感片段；visit audio_url 无 scheme/域名校验（tingwu_client.py:50-53 SSRF/费用滥用）、end_visit 状态锁非原子 + 任务幂等 TOCTOU、NLS 会话失败静默吞掉无 error 帧、任务状态变更无审计日志；auth 验证码取号/作废非原子（code_store.py:92-111 并发可用两次）、审计 client_ip 可被 XFF 伪造
+
 ## Gotchas
 
 - **Docker build context 是仓库根目录**：所有镜像都要 `COPY shared/`，所以 Dockerfile 里的路径都写成 `services/<name>/...`，构建时用 `docker build -f services/<name>/Dockerfile .`。docker-compose 里已配好 `context: .`。
