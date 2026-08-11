@@ -7,7 +7,7 @@ import { visitAPI, mapComplianceViolations } from '../visit';
 import { specialistAPI } from '../specialist';
 import { complianceAPI } from '../compliance';
 import { hcpAPI } from '../hcp';
-import { contentAPI } from '../content';
+import { contentAPI, mapDocType } from '../content';
 import { authAPI } from '../auth';
 
 const okResponse = (data: any = {}) => ({
@@ -290,9 +290,9 @@ describe('specialistAPI', () => {
 });
 
 describe('complianceAPI', () => {
-  it('只保留 listRules（checkContent 已删：网关 INTERNAL_PATHS 恒 403）', async () => {
+  it('listRules 走 /redlines 净化端点（/rules 含 patterns 已收紧为规则管理员）', async () => {
     await complianceAPI.listRules();
-    expect(lastCall().url).toContain('/api/v1/compliance/rules');
+    expect(lastCall().url).toContain('/api/v1/compliance/redlines');
     expect((complianceAPI as any).checkContent).toBeUndefined();
   });
 
@@ -357,5 +357,29 @@ describe('contentAPI', () => {
     const c = lastCall();
     expect(c.url).toContain('/api/v1/knowledge/documents/7');
     expect(c.method).toBe('GET');
+  });
+
+  it('mapDocType：后端 doc_type → 前端 type（Tab 过滤恒空的回归）', () => {
+    // 后端 6 种枚举（knowledge.py ALLOWED_DOC_TYPES）
+    expect(mapDocType('literature')).toBe('literature');
+    expect(mapDocType('guideline')).toBe('guideline');
+    expect(mapDocType('regulation')).toBe('guideline');
+    expect(mapDocType('product')).toBe('manual');
+    expect(mapDocType('competitor')).toBe('news');
+    expect(mapDocType('other')).toBe('news');
+    expect(mapDocType(undefined)).toBe('news');
+  });
+
+  it('getDocuments 返回项已做 doc_type→type 映射', async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({
+        code: 0,
+        message: 'success',
+        data: { items: [{ id: 1, title: '某产品说明书', doc_type: 'product' }], total: 1, page: 1, page_size: 50 },
+      }),
+    });
+    const res = await contentAPI.getDocuments({ page: 1 });
+    expect(res.items[0].type).toBe('manual');
+    expect(res.items[0].title).toBe('某产品说明书');
   });
 });
