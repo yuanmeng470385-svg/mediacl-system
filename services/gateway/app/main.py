@@ -251,7 +251,14 @@ async def proxy(request: Request, path: str):
 
     target_url = f"{backend_url}/{path}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    # 知识审核链路（百炼导入 ~30s + 向量化）对 30s 默认超时太紧，
+    # 网关先超时导致"业务完成但客户端看到 504"（合规硬伤回归见 M48）
+    if path.startswith("knowledge/"):
+        proxy_timeout = 120.0
+    else:
+        proxy_timeout = 30.0
+
+    async with httpx.AsyncClient(timeout=proxy_timeout) as client:
         try:
             body = await request.body()
             headers = dict(request.headers)
