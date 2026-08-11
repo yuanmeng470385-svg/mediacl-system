@@ -14,7 +14,7 @@ import type { RootStackParamList } from '../../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-const APP_VERSION: string = require('../../package.json').version;
+const APP_VERSION: string = require('../../../package.json').version;
 
 type RowAction = 'profile' | 'notifications' | 'coming' | 'about';
 
