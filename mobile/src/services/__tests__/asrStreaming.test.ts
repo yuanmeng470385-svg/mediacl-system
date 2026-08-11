@@ -50,9 +50,10 @@ function flushTimers() {
 
 /**
  * 让 mock 异步链跑完：每次 mock 调用（stat/read）的 await 占一跳，
- * start/轮询链约 3 跳、stop 链约 5 跳；多跑几跳保证时序稳定（不改变断言含义）。
+ * start/轮询链约 3-4 跳、stop 收尾链（stat → then → read → send → 完成 → catch → finally）约 7 跳；
+ * 多跑几跳保证时序稳定（不改变断言含义）。
  */
-async function settle(turns = 6) {
+async function settle(turns = 8) {
   for (let i = 0; i < turns; i++) await Promise.resolve();
 }
 
@@ -113,9 +114,20 @@ describe('connectAsrStreaming', () => {
   test('stop 推完剩余并发 stop 帧', async () => {
     const { ws, session } = openSession();
     await settle();
+    // 录音增长：10 → 20 字节（最后 pollMs 内录下的尾音尚未被轮询推走）
+    (RNFS.stat as jest.Mock).mockResolvedValue({ size: 44 + 20 });
+    (RNFS.read as jest.Mock).mockImplementation(async (_p: string, len: number, pos: number) => {
+      const start = pos - 44;
+      const extra = new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+      const slice = start >= 10 ? extra.subarray(start - 10, start - 10 + (len === 0 ? extra.length : len)) : new Uint8Array(0);
+      return toBase64(slice);
+    });
     session.stop();
     await settle();
-    const textFrames = ws.sent.filter((s) => typeof s === 'string');
-    expect(textFrames).toEqual([JSON.stringify({ type: 'stop' })]);
+    // 帧顺序：剩余 PCM 二进制分片在前，stop 帧在后
+    const frames = ws.sent;
+    expect(frames.length).toBe(3); // 初始分片 + 剩余分片 + stop 帧
+    expect(Array.from(new Uint8Array(frames[1]))).toEqual(Array.from(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20])));
+    expect(frames[2]).toBe(JSON.stringify({ type: 'stop' }));
   });
 });

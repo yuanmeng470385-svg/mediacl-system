@@ -123,12 +123,19 @@ export function connectAsrStreaming(
     },
   });
 
-  async function pushSince(until: number) {
-    while (offset < until && !stopped) {
+  /** 推 [offset, until) 的 PCM 分片，不带 stopped 门禁（stop() 收尾 flush 专用） */
+  async function flushTo(until: number) {
+    while (offset < until) {
       const chunk = await readWavPcmFrom(wavPath, offset, Math.min(chunkSize, until - offset));
       if (chunk.length === 0) break;
       session.sendAudioChunk(chunk);
       offset += chunk.length;
+    }
+  }
+
+  async function pushSince(until: number) {
+    while (offset < until && !stopped) {
+      await flushTo(Math.min(offset + chunkSize, until));
     }
   }
 
@@ -159,9 +166,10 @@ export function connectAsrStreaming(
         clearInterval(timer);
         timer = null;
       }
-      // 推完剩余 PCM 再发 stop 收尾
+      // 推完剩余 PCM 再发 stop 收尾；flush 绕过 stopped 门禁
+      //（否则 stopped 置位后 pushSince 空转，最后 pollMs 内的尾音被静默丢弃）
       wavDataLength(wavPath)
-        .then((total) => pushSince(total))
+        .then((total) => flushTo(total))
         .catch(() => {})
         .finally(() => session.stop());
     },
