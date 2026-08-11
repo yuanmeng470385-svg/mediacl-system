@@ -81,18 +81,44 @@ class TingwuClient:
         return self.get_result(task_id)
 
     def _parse_result(self, result) -> Dict:
-        """从 SDK result 对象提取文本与说话人（结构以 SDK 版本为准，容错解析）"""
+        """从 SDK result 对象提取文本与说话人。
+
+        听悟 GetTaskInfo（tingwu20230930）的真实 result 结构是：
+            result.text（全文）+ result.sentences（句级，元素含 speaker_id/text）
+        旧实现只找 transcripts 字段 —— 该字段在真实响应中不存在，text/sentences
+        恒为空，转写静默"成功"但无内容（合规硬伤：拜访总结基于空转写生成）。
+        这里按真实结构解析，同时保留 transcripts 嵌套的旧兼容。
+        """
         result_map = result.to_map() if hasattr(result, "to_map") else result
-        text = ""
+        if not isinstance(result_map, dict):
+            result_map = {}
+
+        # 全文直读顶层 text（有全文就不再累加句子文本，避免重复拼接）
+        text = str(result_map.get("text") or "")
+        has_full_text = bool(text.strip())
+
         sentences = []
-        for tr in (result_map.get("transcripts") or []):
-            t = tr.get("transcript") or tr  # 兼容不同 SDK 版本的嵌套
-            for s in (t.get("sentences") or []):
-                sentence = s.get("sentence") or s
-                seg = sentence.get("text", "")
+        raw_sentences = result_map.get("sentences") or []
+        if not raw_sentences:
+            # 旧结构兼容：transcripts[].sentences 嵌套
+            for tr in (result_map.get("transcripts") or []):
+                if isinstance(tr, dict):
+                    raw_sentences = tr.get("sentences") or []
+                if raw_sentences:
+                    break
+        for item in raw_sentences or []:
+            s = item
+            # 句元素两种形状：{"sentence": {...}} 或平铺 {"speaker_id", "text"}
+            if isinstance(item, dict) and isinstance(item.get("sentence"), dict):
+                s = item["sentence"]
+            if not isinstance(s, dict):
+                continue
+            seg = str(s.get("text") or "")
+            if seg and not has_full_text:
                 text += seg
-                sentences.append({"speaker_id": sentence.get("speaker_id"), "text": seg})
-        speakers = sorted({s["speaker_id"] for s in sentences if s["speaker_id"]})
+            sentences.append({"speaker_id": s.get("speaker_id"), "text": seg})
+        # 注意：说话人 0 是合法值，不能用 if s["speaker_id"]（0 为 falsy 会被丢掉）
+        speakers = sorted({s["speaker_id"] for s in sentences if s["speaker_id"] is not None})
         return {"text": text, "sentences": sentences, "speakers": speakers}
 
 
