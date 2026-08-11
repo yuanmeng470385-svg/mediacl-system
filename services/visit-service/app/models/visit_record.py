@@ -36,6 +36,7 @@ class VisitRecord(Base, TimestampMixin):
     compliance_flags = Column(JSONB)                  # 合规检查结果（违规记录）
     next_visit_plan = Column(JSONB)                   # 下次拜访计划
     attachments = Column(JSONB)                       # 附件
+    key_nodes = Column(JSONB)                         # LLM 实时推荐：关键节点标记数组
 
     def to_dict(self):
         status = "completed" if self.ai_summary else "in_progress"
@@ -58,6 +59,7 @@ class VisitRecord(Base, TimestampMixin):
             "compliance_flags": self.compliance_flags,
             "next_visit_plan": self.next_visit_plan,
             "attachments": self.attachments,
+            "key_nodes": self.key_nodes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
