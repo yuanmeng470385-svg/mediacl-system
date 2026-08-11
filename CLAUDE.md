@@ -275,7 +275,8 @@ React Native 0.75 + TypeScript + react-navigation，原生工程已齐（2026-08
 cd mobile/android && ./gradlew assembleDebug          # 出 app-debug.apk
 "D:/AndroidSDK/emulator/emulator.exe" -avd Pixel_7 &  # 起模拟器
 cd mobile && npx react-native start                   # Metro（Node v25 实测可用）
-adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+# git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
+cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
 # 测试：cd mobile && npx jest（48 用例：契约/WS/ASR/日期，锁 URL/method/body/响应形状）
 ```
@@ -364,3 +365,4 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
 - **web/ 唯一 npm 依赖 three**：3D 办公室引入（老板拍板打破零依赖约定），新增前端依赖需同样先问；`t10-office3d/e2e_v4.py` 的 `project()` 与布局/相机强耦合，改了 `OfficeScene3D.tsx` 相机或 `layout.ts` 布局常量必须同步改 E2E 投影，否则 sit 断言必挂。
+- **Metro 打包失败 = App 白屏/无法加载**：任何相对路径 import 解析失败（如 `SettingsScreen.tsx` 的 `require('../../package.json')` 少一层 `../`，2026-08-11 623a6cb 修复）会让整个 bundle 挂掉，`metro.log` 里 `Unable to resolve module ... from <file>` 即定位点；改完代码 App 不会自动重拉 bundle，需 `adb shell am force-stop com.medagent.mobile` 后重启 App。
