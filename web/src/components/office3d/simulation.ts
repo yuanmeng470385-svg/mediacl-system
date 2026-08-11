@@ -25,7 +25,7 @@ export interface Agent {
   walkPhase: number;
 }
 
-const PATROL_X_RANGE = 5.6; // 巡逻 x 范围（桌列范围 ± 余量）
+const PATROL_X_RANGE = 8.2; // 巡逻 x 范围（桌列范围 ± 余量）
 
 /** 小人模拟：数据由 upsert 驱动，update 每帧推进运动/姿态 */
 export class Simulation {
@@ -58,9 +58,10 @@ export class Simulation {
     a.desk = desks[index % desks.length]; // 工位组重建后自动重绑
     a.desk.setState(item.state);
     if (item.state === 'offline') {
+      // 被停止 → 走回自己工位（站立灰化）；已在工位则 update 清 target 静止
       a.dimTarget = 1;
       a.poseTarget = 0;
-      a.target = null;
+      a.target = new THREE.Vector3(sitPosOf(index).x, 0, sitPosOf(index).z);
     } else {
       a.dimTarget = 0;
       if (item.state === 'working') {
@@ -122,6 +123,17 @@ export class Simulation {
         a.typing = true;
         a.walkPhase += dt * 5;
       } else if (a.item.state === 'idle') {
+        a.typing = false;
+      } else if (a.item.state === 'offline') {
+        // 被停止：走回工位，到达后静止（灰化由 dim 处理）
+        if (a.target && a.pos.distanceTo(a.target) < 0.05) {
+          a.target = null;
+          a.moving = false;
+        } else if (a.target) {
+          this.moveToward(a, a.target, AISLE_PATROL_SPEED, dt);
+        } else {
+          a.moving = false;
+        }
         a.typing = false;
       } else {
         a.moving = false;

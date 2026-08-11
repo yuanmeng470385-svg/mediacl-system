@@ -78,8 +78,8 @@ export default function OfficeScene3D({
 
     const scene = buildScene();
     const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 0.1, 100);
-    // 4×5 布局（±5.2 跨）近机位放大主体（~46° 俯视；名牌边缘在垂直 fov 内已验算）
-    camera.position.set(0, 11, 10.5);
+    // 4×5 布局（间距 1.5×，±7.8 跨）拉远覆盖（边缘桌角 20° < fov 半角 22.5° 验算）
+    camera.position.set(0, 13, 12);
     const camTarget = new THREE.Vector3(0, 0, 0.5);
     camera.lookAt(camTarget);
 

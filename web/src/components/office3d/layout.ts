@@ -3,8 +3,8 @@ export const PER_ROW = 5;
 export const DESK_W = 2.08;
 export const DESK_D = 1.17;
 export const DESK_H = 0.96;
-export const COL_X = 2.6;        // 桌列间距（净空 0.52）
-export const ROW_Z = 2.4;        // 行间距（排间过道净空 1.23）
+export const COL_X = 3.9;        // 桌列间距（用户：1.5× 防拥挤）
+export const ROW_Z = 3.6;        // 行间距（排间过道净空 2.43）
 export const ROWS_MAX = 4;       // 最多 4 排（4×5 = 20 专员）
 export const AISLE_PATROL_SPEED = 0.8;
 export const DESK_APPROACH_SPEED = 1.4;
