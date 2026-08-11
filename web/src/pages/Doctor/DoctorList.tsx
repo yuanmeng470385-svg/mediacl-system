@@ -77,8 +77,10 @@ export default function DoctorList() {
             message.success('新增成功');
             actionRef.current?.reload();
             return true;
-          } catch {
-            return false; // 400-499 已由 client.ts 拦截器弹后端 message，保留表单
+          } catch (e) {
+            // 400-499 已由 client.ts 拦截器弹后端 message；网络层错误（拦截器不弹）至少留痕
+            console.error('新增医生失败', e);
+            return false; // 保留表单
           }
         }}>
         <ProFormText name="name" label="姓名" rules={[{ required: true }]} placeholder="医生姓名（必填）" />
