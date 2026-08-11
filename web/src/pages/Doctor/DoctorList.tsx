@@ -60,7 +60,7 @@ export default function DoctorList() {
         modalProps={{ destroyOnHidden: true }}
         onFinish={async (values) => {
           try {
-            // 字段对齐后端白名单 HCP_WRITABLE_FIELDS；空值不提交（后端白名单校验）
+            // 字段对齐后端白名单 HCP_WRITABLE_FIELDS；空字段以空串提交（白名单仅校验字段名）
             const payload: Partial<Doctor> = {
               name: values.name,
               hospital: values.hospital,

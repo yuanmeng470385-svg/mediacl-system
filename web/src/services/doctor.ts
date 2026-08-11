@@ -106,7 +106,7 @@ export interface HcpProfile {
         prescription_preference?: string;
         communication_advice?: string | { best_time?: string; preferred_channels?: string[]; topics_to_avoid?: string[] };
         next_step_suggestion?: string;
-        risk_alert?: string | Array<{ level?: string; description?: string }>;
+        risk_alert?: string | Array<{ level?: string; description?: string } | string>;
       }
     | { summary: string; base_info?: Record<string, string> }
     | null;
@@ -128,21 +128,31 @@ export interface DoctorProfile {
   risk_alerts: { level: string; description: string }[];
 }
 
-/** risk_alert：字符串（"无"/"无风险"→空数组）或对象数组；逻辑移植自 mobile/src/api/hcp.ts mapRiskAlert */
+/** risk_alert：字符串/字符串数组（"无"/"无风险"→空数组）或对象数组；逻辑移植自 mobile/src/api/hcp.ts mapRiskAlert */
 function mapRiskAlert(risk: unknown): DoctorProfile['risk_alerts'] {
   if (typeof risk === 'string') {
     const t = risk.trim();
     if (!t || t === '无' || t === '无风险') return [];
-    return [{ level: 'warning', description: t }];
+    return [{ level: 'high', description: t }];
   }
   if (Array.isArray(risk)) {
     return risk
-      .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object')
-      .map((v) => ({
-        level: typeof v.level === 'string' && v.level ? v.level : 'warning',
-        description: typeof v.description === 'string' ? v.description : String(v),
-      }))
-      .filter((x) => x.description && x.description.trim());
+      .map((v) => {
+        if (typeof v === 'string') {
+          const t = v.trim();
+          return t ? { level: 'high', description: t } : null;
+        }
+        if (v && typeof v === 'object') {
+          const o = v as Record<string, unknown>;
+          return {
+            level: typeof o.level === 'string' && o.level ? o.level : 'warning',
+            description: typeof o.description === 'string' ? o.description : String(o),
+          };
+        }
+        return null;
+      })
+      .filter((x): x is { level: string; description: string } =>
+        !!x && x.description.trim().length > 0);
   }
   return [];
 }
@@ -229,7 +239,7 @@ export const doctorAPI = {
     })),
 
   profile: (id: string) =>
-    client.get<ApiResponse<{ data: HcpProfile }>>(`/hcps/${id}/profile`),
+    client.get<ApiResponse<HcpProfile>>(`/hcps/${id}/profile`),
 
   interactions: (id: string) =>
     client.get<ApiResponse<unknown>>(`/hcps/${id}/interactions`).then((res) => ({

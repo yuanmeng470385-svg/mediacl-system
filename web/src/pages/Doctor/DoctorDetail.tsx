@@ -62,7 +62,7 @@ export default function DoctorDetail() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
-      <Card title="AI 画像" loading={profileLoading}>
+      <Card title="AI 画像" style={{ marginBottom: 16 }} loading={profileLoading}>
         {profileFailed ? (
           <Empty description="画像生成失败，请稍后重试" />
         ) : profile && !profile.ai_available ? (
