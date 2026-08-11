@@ -324,7 +324,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 ## Real-time ASR（实时转写）
 
-> 配齐 NLS/百炼 key 后的真机联调步骤、待确认点与排障手册见 `docs/real-device-runbook.md`（真机需把 mobile 三个 host 常量从 10.0.2.2 改为宿主机局域网 IP）。第 3 节后端冒烟基线已于 2026-08-06 实测回写（一键复跑：`python scripts/smoke_runbook.py`）。
+> 配齐 NLS/百炼 key 后的真机联调步骤、待确认点与排障手册见 `docs/real-device-runbook.md`（真机需改 `mobile/src/config.ts` 的 `DEV_HOST` 为宿主机局域网 IP，见 runbook 2.4）。第 3 节后端冒烟基线已于 2026-08-06 实测回写（一键复跑：`python scripts/smoke_runbook.py`）。
 
 实时转写链路已改用**阿里云实时语音识别**（听悟是离线批处理+3s 轮询，达不到方案的 <2s）：
 
