@@ -66,7 +66,11 @@ class DocumentManager:
         if prev:
             try:
                 self.repo.archive(self.db, prev)
-                logger.info("旧版文档 %s 已归档（新版本 %s）", prev.id, doc.id)
+                # 合规硬伤回归：归档旧版必须同步清检索索引（DashVector/ES），
+                # 否则新版本已上架、旧版仍能被向量/ES 检索命中（M23 只覆盖了
+                # 驳回路径）。清理失败记日志但不回滚（旧版已归档，仅索引残留）。
+                self._cleanup_indexes(prev.id, prev)
+                logger.info("旧版文档 %s 已归档并清理检索索引（新版本 %s）", prev.id, doc.id)
             except Exception as exc:
                 logger.error(
                     "归档旧版文档 %s 失败（新文档 %s 已入库，旧版仍为 ready，需人工处理）: %s",
@@ -306,7 +310,8 @@ class DocumentManager:
         if product_id:
             parts.append(f"product_id = {int(product_id)}")
         if doc_type:
-            # M27: doc_type 值转义（去掉单引号），避免注入使 DashVector 表达式出错
-            safe = str(doc_type).replace("'", "")
-            parts.append(f"doc_type = '{safe}'")
+            # M27: doc_type 值转义（去掉引号），避免注入使 DashVector 表达式出错。
+            # 注意：DashVector filter 字符串字面量用双引号（单引号查询恒不命中）。
+            safe = str(doc_type).replace('"', "").replace("'", "")
+            parts.append(f'doc_type = "{safe}"')
         return " AND ".join(parts) if parts else None
