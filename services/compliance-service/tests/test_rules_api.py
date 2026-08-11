@@ -52,6 +52,25 @@ class _FakeRule:
         }
 
 
+class _FakeUser:
+    """require_roles 库查（S6 修复）：主键查 User 返回的 active admin 用户（本文件 token 恒为 admin）"""
+
+    def __init__(self):
+        self.id = 1
+        self.status = "active"
+        self.role = "admin"
+
+
+class _UserQuery:
+    """users 表查询 stub：first() 返回 active admin 用户"""
+
+    def filter(self, *a, **kw):
+        return self
+
+    def first(self):
+        return _FakeUser()
+
+
 class _FakeDb:
     """假 session：add/commit/query 全在内存，不连真库"""
 
@@ -61,6 +80,10 @@ class _FakeDb:
         self.committed = False
 
     def query(self, *a, **kw):
+        # require_roles 库查（S6 修复）：User 走独立 stub；规则表查询仍走自身链式
+        model = a[0] if a else None
+        if model is not None and getattr(model, "__name__", "") == "User":
+            return _UserQuery()
         return self
 
     def filter(self, *a, **kw):
@@ -277,6 +300,33 @@ def test_update_rule_not_found_404(client):
     """编辑不存在的规则 → 404"""
     resp = client.put("/api/v1/compliance/rules/999", json={"severity": "low"})
     assert resp.status_code == 404
+
+
+# ==================== /check 快速模式（流式逐帧门禁） ====================
+
+def test_check_fast_flag_passthrough(client, monkeypatch):
+    """/check 透传 fast 标志：fast=True → checker 收 fast=True；不传 → False"""
+    monkeypatch.setenv("INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("shared.common.internal_auth._INTERNAL_KEY", None)
+    calls = []
+
+    class _FakeChecker:
+        def check(self, content, context=None, fast=False):
+            calls.append((content, fast))
+            return {"blocked": False, "violations": [], "risk_level": "none", "checked_rules": []}
+
+    import app.api.rules as rules_api
+    monkeypatch.setattr(rules_api, "checker", _FakeChecker())
+    headers = {"X-Internal-Key": "test-internal-key"}
+
+    resp = client.post("/api/v1/compliance/check", headers=headers,
+                       json={"content": "测试", "context": {"type": "ai_output"}, "fast": True})
+    assert resp.status_code == 200
+    assert resp.json()["code"] == 0
+    assert calls[0][1] is True
+
+    client.post("/api/v1/compliance/check", headers=headers, json={"content": "测试"})
+    assert calls[1][1] is False  # 默认全量检查
 
 
 # ==================== 列表（仅需登录，无角色限制） ====================

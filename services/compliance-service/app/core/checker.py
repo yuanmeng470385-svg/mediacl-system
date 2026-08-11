@@ -134,13 +134,16 @@ class ComplianceChecker:
 
     # ==================== 审核主流程 ====================
 
-    def check(self, content: str, context: Optional[Dict] = None) -> Dict:
+    def check(self, content: str, context: Optional[Dict] = None, fast: bool = False) -> Dict:
         """
         审核内容合规性
 
         Args:
             content: 待审核的文本内容
             context: 上下文信息 {user_id, type, specialist_id, visit_id}
+            fast: 快速模式（流式逐帧门禁用）—— 只跑关键词/正则两层文本匹配，
+                跳过 LLM 语义审核（第 3 关）。零成本、毫秒级，适合每帧调用；
+                语义层由流结束后对完整文本的常规检查（fast=False）兜底。
 
         Returns:
             {
@@ -181,21 +184,25 @@ class ComplianceChecker:
 
         # 如果已有 reject 级别的违规，直接返回（省一次 LLM 调用）
         if any(v["action"] == "reject" for v in violations):
-            from app.api.metrics import COMPLIANCE_BLOCKS
-            for v in violations:
-                COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
+            # fast（逐帧门禁）不记拦截指标：帧级命中不落库也不计数，
+            # 阻断时调用方会以真实文本做全量复核（fast=False），由那次统一记录
+            if not fast:
+                from app.api.metrics import COMPLIANCE_BLOCKS
+                for v in violations:
+                    COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
             return self._result(True, violations)
 
         # ----- 第 3 关：LLM 语义审核 -----
         semantic_rules = [r for r in self.rules if r["type"] == "semantic"]
-        if semantic_rules:
+        if semantic_rules and not fast:
             semantic_violations = self._semantic_check(content, semantic_rules, context)
             violations.extend(semantic_violations)
 
         blocked = any(v["action"] == "reject" for v in violations)
-        from app.api.metrics import COMPLIANCE_BLOCKS
-        for v in violations:
-            COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
+        if not fast:
+            from app.api.metrics import COMPLIANCE_BLOCKS
+            for v in violations:
+                COMPLIANCE_BLOCKS.labels(action=v["action"], severity=v["severity"]).inc()
         return self._result(blocked, violations)
 
     # ==================== 第 1 关 + 第 2 关：文本匹配 ====================

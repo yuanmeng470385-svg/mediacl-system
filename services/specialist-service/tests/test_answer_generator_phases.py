@@ -13,12 +13,12 @@ def _spec(specialist_id=1):
     )
 
 
-async def _check_pass(content, context):
+async def _check_pass(content, context, fast=False):
     await asyncio.sleep(0)
     return {"blocked": False, "violations": []}
 
 
-async def _check_blocked(content, context):
+async def _check_blocked(content, context, fast=False):
     await asyncio.sleep(0)
     return {"blocked": True, "violations": [{"rule_code": "R001"}]}
 
@@ -29,7 +29,7 @@ async def _audit(**kw):
 
 def _recording_check(seen, blocked_on_review=False):
     """记录每次合规检查调用时刻的 phase；blocked_on_review 时审核阶段返回 blocked"""
-    async def recording_check(content, context):
+    async def recording_check(content, context, fast=False):
         await asyncio.sleep(0)
         seen.append(registry.get(1).phase if registry.get(1) else None)
         if blocked_on_review and context.get("type") != "user_input":
@@ -114,7 +114,7 @@ def test_generate_stream_phases_and_idle_after(monkeypatch):
 
     frames = asyncio.run(run())
     assert frames[-1]["type"] == "done"
-    assert seen == ["compliance_precheck", "compliance_review"]
+    assert seen == ["compliance_precheck", "generating", "compliance_review"]
     assert b.phase_at_call == "generating"  # 流式 generating 阶段已写入
     assert registry.get(1) is None  # 流消费完后 finally 置 idle
 

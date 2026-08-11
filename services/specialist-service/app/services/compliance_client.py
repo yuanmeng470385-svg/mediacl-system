@@ -14,13 +14,14 @@ logger = logging.getLogger(__name__)
 GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 
 
-async def check_compliance(content: str, context: dict = None) -> dict:
+async def check_compliance(content: str, context: dict = None, fast: bool = False) -> dict:
     """
     调用合规检查服务
 
     Args:
         content: 待审核的文本
         context: {"user_id": 1, "type": "user_input" | "ai_output"}
+        fast: 快速模式（流式逐帧门禁）—— 只跑关键词/正则，跳语义层，不写拦截记录
 
     Returns:
         {"blocked": False, "violations": [], "risk_level": "none"}
@@ -31,7 +32,7 @@ async def check_compliance(content: str, context: dict = None) -> dict:
             resp = await client.post(
                 f"{GATEWAY_URL}/api/v1/compliance/check",
                 headers=internal_headers(),
-                json={"content": content, "context": context}
+                json={"content": content, "context": context, "fast": fast}
             )
             resp.raise_for_status()
             return resp.json()["data"]

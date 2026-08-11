@@ -199,3 +199,41 @@ class TestSemanticCheck:
         result = self.checker.check(self.safe_content, {"type": "chat"})
         assert result["blocked"] is False
         assert result["violations"] == []
+
+
+class TestFastMode:
+    """fast 模式（流式逐帧门禁）：只跑关键词/正则，跳过 LLM 语义层"""
+
+    def setup_method(self):
+        self.checker = ComplianceChecker()
+
+    def test_fast_skips_semantic_layer(self, monkeypatch):
+        """fast=True 不触发 LLM 语义审核；对照组 fast=False 会触发"""
+        calls = []
+
+        def _fake_semantic(self, content, rules, context):
+            calls.append(content)
+            return [{"rule_code": "R999", "rule_name": "语义拦截", "severity": "high",
+                     "action": "reject", "matched_text": ""}]
+
+        monkeypatch.setattr(ComplianceChecker, "_semantic_check", _fake_semantic)
+        self.checker.check("正常文本", {"type": "chat"}, fast=True)
+        assert calls == []
+        # 对照组：非 fast 走完整流水线
+        self.checker.check("正常文本", {"type": "chat"})
+        assert len(calls) == 1
+
+    def test_fast_still_blocks_keyword_regex(self):
+        """fast 不降级文本匹配：关键词/正则规则照常拦截"""
+        result = self.checker.check("保证治好", {"type": "chat"}, fast=True)
+        assert result["blocked"] is True
+        assert any(v["rule_code"] == "R001" for v in result["violations"])
+        result2 = self.checker.check("这个药有返点吗", {"type": "chat"}, fast=True)
+        assert result2["blocked"] is True
+        assert any(v["rule_code"] == "R002" for v in result2["violations"])
+
+    def test_fast_safe_content_passes(self):
+        """正常内容 fast 模式同样放行"""
+        result = self.checker.check("我们的产品在III期临床试验中显示出良好的安全性和有效性",
+                                    {"type": "chat"}, fast=True)
+        assert result["blocked"] is False

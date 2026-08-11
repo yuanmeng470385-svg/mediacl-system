@@ -192,6 +192,9 @@ class AnswerGenerator:
         """流式版 generate()：逐帧 yield delta，末尾 yield done。
 
         done 帧字段与 generate() 返回 dict 完全一致（多一个 "type"）。
+        流式合规门禁：Step 2 每帧对累积文本做关键词/正则快速检查（fast），
+        命中 reject 立即阻断 —— 不再等流结束才事后检查（旧实现违规文本已逐帧
+        发给客户端）。阻断时产出 compliance 帧（客户端可据此提示）+ 掩码 done。
         """
         request_id = str(uuid.uuid4())
         try:
@@ -218,7 +221,7 @@ class AnswerGenerator:
                 }
                 return
 
-            # ---- Step 2: 百炼流式 ----
+            # ---- Step 2: 百炼流式（逐帧合规门禁） ----
             logger.info(f"[{request_id}] 调用百炼 App: {specialist.bailian_app_id}")
             registry.set_working(specialist.id, PHASE_GENERATING, question)
             ai_prompt = question
@@ -234,6 +237,26 @@ class AnswerGenerator:
                     session_id=session_id,
                 ):
                     if frame["type"] == "delta":
+                        # 流式合规门禁（S-*）：对累积文本做关键词/正则快速检查
+                        # （fast=True 跳语义层，毫秒级），命中 reject 立即阻断，
+                        # 当前 delta 不转发 —— 违规内容不再到达客户端。
+                        accumulated = answer + frame["text"]
+                        frame_check = await check_compliance(
+                            content=accumulated,
+                            context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
+                            fast=True,
+                        )
+                        if frame_check.get("blocked"):
+                            answer = accumulated
+                            ai_response = answer
+                            logger.info(f"[{request_id}] 流式门禁命中，阻断输出（违规帧不转发）")
+                            async for blocked in self._blocked_frames(
+                                answer, user_id, specialist, session_id,
+                                request_id, start_time, ai_model, ai_prompt, citations,
+                            ):
+                                yield blocked
+                            return
+                        answer = accumulated
                         yield {"type": "delta", "text": frame["text"]}
                     elif frame["type"] == "done":
                         answer = frame.get("text", "")
@@ -248,6 +271,21 @@ class AnswerGenerator:
                 citations = []
                 ai_response = answer
                 ai_model = "qwen-max"
+                # 降级是整段一次性输出，同样先过门禁（否则 Step 3 事后检查前
+                # 客户端已看到全文，与旧实现同样的合规旁路）
+                frame_check = await check_compliance(
+                    content=answer,
+                    context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
+                    fast=True,
+                )
+                if frame_check.get("blocked"):
+                    logger.info(f"[{request_id}] 降级输出命中合规门禁，阻断输出")
+                    async for blocked in self._blocked_frames(
+                        answer, user_id, specialist, session_id,
+                        request_id, start_time, ai_model, ai_prompt, citations,
+                    ):
+                        yield blocked
+                    return
                 yield {"type": "delta", "text": answer}
 
             # ---- Step 3: 合规审核 AI 答案 ----
@@ -304,6 +342,55 @@ class AnswerGenerator:
             }
         finally:
             registry.set_idle(specialist.id)
+
+    async def _blocked_frames(
+        self,
+        text: str,
+        user_id: int,
+        specialist: Specialist,
+        session_id: Optional[str],
+        request_id: str,
+        start_time: float,
+        ai_model: str,
+        ai_prompt: str,
+        citations: list,
+    ):
+        """流式门禁命中后的阻断帧序列。
+
+        对已生成文本做一次全量复核（fast=False，含语义层 + 拦截记录入库 +
+        拦截指标），写 chat_blocked 审计，然后产出：
+          1. {"type": "compliance", "blocked": True, "violations": [...]} —— 门禁信号
+          2. {"type": "done", ..., "blocked": True} —— 掩码 done：客户端以此收尾
+             （RN 端 done.blocked 会清掉已渲染的增量文本并展示合规提示）
+        """
+        full_check = await check_compliance(
+            content=text,
+            context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+        from app.api.metrics import CHAT_LATENCY
+        CHAT_LATENCY.observe(latency_ms / 1000.0)
+        await write_audit_log(
+            user_id=user_id, action="chat_blocked", ai_involved=True,
+            ai_model=ai_model, ai_prompt=ai_prompt, ai_response=text,
+            compliance_result=full_check, request_id=request_id,
+        )
+        yield {
+            "type": "compliance",
+            "blocked": True,
+            "violations": full_check.get("violations", []),
+        }
+        yield {
+            "type": "done",
+            "answer": "该问题建议直接咨询医学顾问。",
+            "citations": citations,
+            "evidence_level": None,
+            "session_id": session_id,
+            "request_id": request_id,
+            "latency_ms": latency_ms,
+            "blocked": True,
+            "violations": full_check.get("violations", []),
+        }
 
     # ==================== 降级方案 ====================
 

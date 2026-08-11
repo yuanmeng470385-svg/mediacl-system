@@ -109,7 +109,8 @@ async def check_content(
     Request:
         {
             "content": "待检查的文本",
-            "context": {"user_id": 1, "type": "user_input", "specialist_id": 1}
+            "context": {"user_id": 1, "type": "user_input", "specialist_id": 1},
+            "fast": false   # 快速模式（流式逐帧门禁）：只跑关键词/正则，不写拦截记录
         }
 
     Response:
@@ -124,15 +125,18 @@ async def check_content(
     """
     content = request.get("content", "")
     context = request.get("context", {})
+    fast = bool(request.get("fast", False))
 
     if not content:
         raise ParamError("content 不能为空")
 
-    result = checker.check(content, context)
+    result = checker.check(content, context, fast=fast)
 
-    # 拦截记录入库（compliance_blocks）—— 之前无写入方，拦截记录页恒为空、拦截率无数据
+    # 快速模式（逐帧）：不写拦截记录 —— 内容是流式过程中的中间片段，记录会失真，
+    # 且每帧一次会刷爆表。命中拦截的完整复核（fast=False，含语义层）由调用方在
+    # 阻断时对真实文本再做一次，由那次写入记录。
     violations = result.get("violations") or []
-    if violations:
+    if violations and not fast:
         for v in violations:
             try:
                 db.add(ComplianceBlock(
