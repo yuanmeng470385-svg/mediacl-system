@@ -462,15 +462,20 @@ class TestUserManagementSecurity:
         assert r.json()["code"] == 1000
 
     def test_被停用用户持旧token调users端点被拒(self, seeded_managers):
-        """停用即时生效：被停用用户拿未过期 token 调 users 端点 → 403 code 3000"""
+        """停用即时生效：被停用用户拿未过期 token 调 users 端点 → 401 code 2003
+
+        H2（2026-08-11）起 get_current_user 实时查库，停用账号在角色校验前即被
+        拒绝（未认证 401），语义比原 403「无权限」更准确；库中已无该 active 用户"""
         h = self._auth("mgr01")
         db = TestSession()
         db.query(User).filter(User.username == "mgr01").update({"status": "disabled"})
         db.commit()
         db.close()
         r = client.get("/api/v1/users", headers=h)
-        assert r.status_code == 403
-        assert r.json()["code"] == 3000
+        assert r.status_code == 401
+        # get_current_user 抛 HTTPException（FastAPI 默认渲染 {detail: {...}}，
+        # 平铺 {code, message, data} 只覆盖 AppError 系）
+        assert r.json()["detail"]["code"] == 2003
 
     def test_被降级用户持旧token调users端点被拒(self, seeded_managers):
         """降级即时生效：库中 role 与 token 声明不一致 → 403，以库为准"""

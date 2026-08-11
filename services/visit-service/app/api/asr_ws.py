@@ -27,6 +27,7 @@ from websockets.exceptions import ConcurrencyError, ConnectionClosed
 
 from shared.common.auth import verify_token
 from shared.common.db_session import SessionLocal
+from shared.models.user import User
 
 from app.db.repositories.visit_repo import VisitRepo
 from app.services.compliance_client import check_compliance
@@ -77,11 +78,18 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         await websocket.close(code=4401)  # 未认证
         return
     user_id = int(payload["sub"])
-    role = payload.get("role", "")
 
     # ---- 归属校验（S4）：仅本人或 admin ----
     db = SessionLocal()
     try:
+        # H2（2026-08-11）：账号状态与角色以库为准——token 是登录快照，停用/降级后
+        # 旧 token 必须立即失效（WS 不走 get_current_user 依赖），admin 判定不再
+        # 信 token 里的 role 快照（被降级 admin 的旧 token 不能跨用户读转写）
+        user = db.query(User).filter(User.id == user_id, User.status == "active").first()
+        if not user:
+            await websocket.close(code=4401)  # 账号不存在或已停用
+            return
+        role = user.role
         record = VisitRepo.get(db, visit_id)
         if not record:
             await websocket.close(code=4404)  # 拜访不存在

@@ -70,6 +70,9 @@ class QueryStub:
         return self
 
     def first(self):
+        if self._model_name == "User":
+            # H2（2026-08-11）：chat_ws 鉴权实时查库——返回 active 用户
+            return SimpleNamespace(id=3, username="u3", role="rep", status="active")
         if self._model_name == "Specialist":
             return self._db.specialist
         if self._is_ownership:

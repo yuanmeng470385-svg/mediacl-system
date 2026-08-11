@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from shared.common.auth import verify_token
 from shared.common.db_session import get_db
+from shared.models.user import User
 from app.core.answer_generator import AnswerGenerator
 from app.api.conversations import assert_session_owner
 
@@ -62,6 +63,12 @@ async def chat_ws(
         await websocket.close(code=4401)
         return
     user_id = int(payload["sub"])
+    # H2（2026-08-11）：账号状态以库为准——只验签名会让停用账号旧 token 继续走
+    # 流式对话（WS 不走 get_current_user 依赖），与 REST 侧 get_current_user 查库对齐
+    user = db.query(User).filter(User.id == user_id, User.status == "active").first()
+    if not user:
+        await websocket.close(code=4401)  # 账号不存在或已停用
+        return
 
     specialist = _get_specialist(db, specialist_id)
     if not specialist:

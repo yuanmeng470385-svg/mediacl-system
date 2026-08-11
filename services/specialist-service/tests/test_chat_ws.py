@@ -2,11 +2,13 @@
 import json
 import os
 import pytest
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
 from shared.common.auth import create_token
+from shared.common.db_session import get_db
 from app.main import app
 from app.api.chat_ws import get_generator_factory, set_generator_factory
 from app.models.specialist import Specialist
@@ -17,6 +19,38 @@ def reset_factory():
     """每个用例后清掉注入的生成器工厂"""
     yield
     set_generator_factory(None)
+
+
+class _UserDb:
+    """get_db 替身：chat_ws 的 H2 实时查库（CI 无真实 PG，必须隔离）。
+
+    status 由 holder 控制，可切换 active/disabled 模拟停用账号旧 token 场景。
+    filter 模拟 `User.status == "active"` 语义：非 active 时 first() 返回 None
+    （真实 DB 过滤后无行可返），否则返回 active 用户。
+    """
+
+    def __init__(self, status):
+        self._status = status
+
+    def query(self, model):
+        return self
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        if self._status != "active":
+            return None
+        return SimpleNamespace(id=1, username="tester", role="rep", status=self._status)
+
+
+@pytest.fixture(autouse=True)
+def fake_user_db():
+    """H2（2026-08-11）：chat_ws 鉴权查库用 User stub（不连真实数据库）"""
+    holder = {"status": "active"}
+    app.dependency_overrides[get_db] = lambda: _UserDb(holder["status"])
+    yield holder
+    app.dependency_overrides.pop(get_db, None)
 
 
 class FakeGenerator:
@@ -43,6 +77,17 @@ def test_ws_无token关4401():
     关闭码可达客户端；旧实现未 accept 时 close 被吞成握手 403，网关兜底 4500。"""
     with TestClient(app) as client:
         with client.websocket_connect("/ws/specialists/1/chat") as ws:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+            assert exc.value.code == 4401
+
+
+def test_ws_停用账号旧token关4401(fake_user_db):
+    """H2：账号被停用后，旧 token（7 天有效期内）不再能发起对话（实时查库）"""
+    fake_user_db["status"] = "disabled"
+    token = create_token(user_id=1, username="tester", role="rep")
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/ws/specialists/1/chat?token={token}") as ws:
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_json()
             assert exc.value.code == 4401

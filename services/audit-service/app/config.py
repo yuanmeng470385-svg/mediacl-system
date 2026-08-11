@@ -14,7 +14,7 @@ class Settings:
     DATABASE_URL = os.getenv("AUDIT_DATABASE_URL") or os.getenv(
         "DATABASE_URL", "postgresql://medagent:medagent123@localhost:5432/medagent"
     )
-    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+    JWT_SECRET = os.getenv("JWT_SECRET", "")
 
     # 审计日志保留天数（默认 3 年）——由 cleanup 后台任务消费（2026-08-11 起生效，
     # 此前是死配置：只定义从未清理）

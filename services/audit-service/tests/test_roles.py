@@ -20,16 +20,17 @@ from shared.common.db_session import get_db
 
 
 class _FakeUser:
-    """require_roles 库查（S6 修复）：主键查 User 返回的 active 用户"""
+    """require_roles 库查（S6 修复）：主键查 User 返回的用户（status 可配）"""
 
-    def __init__(self, role):
+    def __init__(self, role, status="active"):
         self.id = 1
-        self.status = "active"
+        self.username = "tester"
+        self.status = status
         self.role = role
 
 
 class _UserQueryStub:
-    """users 表查询 stub：first() 返回 role 取 mock_db.user_role 的 active 用户"""
+    """users 表查询 stub：first() 返回 role/status 取 mock_db.user_role/user_status 的用户"""
 
     def __init__(self, mock_db):
         self._db = mock_db
@@ -38,14 +39,16 @@ class _UserQueryStub:
         return self
 
     def first(self):
-        return _FakeUser(self._db.user_role)
+        return _FakeUser(self._db.user_role, self._db.user_status)
 
 
 def _make_mock_db():
     """模拟数据库 session：日志查询返回空结果；User 主键查询返回 active 用户
-    （role 取 mock_db.user_role，默认 admin —— 各测试按 token 角色显式设置）"""
+    （role 取 mock_db.user_role，默认 admin —— 各测试按 token 角色显式设置；
+    status 取 mock_db.user_status，默认 active，停用用例显式改 disabled）"""
     mock_db = MagicMock()
     mock_db.user_role = "admin"
+    mock_db.user_status = "active"
     q = mock_db.query.return_value
     q.count.return_value = 0
     q.scalar.return_value = 0
@@ -91,6 +94,16 @@ def _token(role: str) -> str:
 
 class TestAuditLogsRoleRestriction:
     """查询/详情/stats/导出端点角色限制：admin/manager/compliance 可看，rep 403"""
+
+    def test_disabled_user_old_token_rejected(self, client):
+        """H2：账号停用后，旧 token（有效期内）调受限端点 → 401（实时查库）。
+        audit-service 未注册 shared HTTPException handler，401 为 FastAPI 默认
+        {detail: {code, message}} 结构，故按 detail.code 断言"""
+        c, mock_db = client
+        mock_db.user_status = "disabled"
+        resp = c.get("/api/v1/audit/logs", headers=_auth(_token("admin")))
+        assert resp.status_code == 401
+        assert resp.json()["detail"]["code"] == 2003
 
     def test_rep_forbidden_on_logs(self, client):
         """rep 角色调 GET /logs → 403（code 3000）"""

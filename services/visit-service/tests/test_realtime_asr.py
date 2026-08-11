@@ -154,20 +154,24 @@ class _FakeAsrSession:
         self.is_active = True
 
     def query(self, model):
-        return _FakeAsrQuery(self._user_id)
+        return _FakeAsrQuery(self._user_id, model)
 
     def close(self):
         pass
 
 
 class _FakeAsrQuery:
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, model=None):
         self._user_id = user_id
+        self._model = model
 
     def filter(self, *args, **kwargs):
         return self
 
     def first(self):
+        if self._model is not None and self._model.__name__ == "User":
+            # H2（2026-08-11）：asr_ws 鉴权实时查库——返回 active 用户
+            return SimpleNamespace(id=self._user_id, username="rep1", role="rep", status="active")
         return SimpleNamespace(user_id=self._user_id, product_id=1, hcp_id=1)
 
 

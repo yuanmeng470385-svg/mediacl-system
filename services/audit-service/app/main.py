@@ -60,6 +60,12 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
+# H1（2026-08-11）：JWT_SECRET fail-fast（同 gateway/auth 守卫）——漏配或弱值
+# 拒绝启动，防止 shared 验签回退到公开默认密钥后任何人可伪造任意角色 token 直连
+from shared.common.auth import validate_jwt_secret
+
+validate_jwt_secret(settings.JWT_SECRET)
+
 app = FastAPI(
     title="MedAgent - 审计服务",
     description="不可篡改审计日志、高级搜索、监管报告导出",

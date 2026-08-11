@@ -19,6 +19,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# H1（2026-08-11）：JWT_SECRET fail-fast（同 gateway/auth 守卫）——漏配或弱值
+# 拒绝启动，防止 shared 验签回退到公开默认密钥后任何人可伪造任意角色 token 直连
+from shared.common.auth import validate_jwt_secret
+
+validate_jwt_secret(settings.JWT_SECRET)
+
 app = FastAPI(
     title="MedAgent - 数字学术专员服务",
     description="管理 AI 数字专员，处理学术问答对话",

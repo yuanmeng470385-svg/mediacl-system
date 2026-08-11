@@ -15,7 +15,7 @@ class Settings:
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     # JWT
-    JWT_SECRET = os.getenv("JWT_SECRET", "dev-secret-change-me")
+    JWT_SECRET = os.getenv("JWT_SECRET", "")
 
     # 阿里云 & AI
     ALIYUN_ACCESS_KEY_ID = os.getenv("ALIYUN_ACCESS_KEY_ID", "")
