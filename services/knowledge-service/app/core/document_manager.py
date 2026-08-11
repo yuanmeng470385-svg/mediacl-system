@@ -129,17 +129,17 @@ class DocumentManager:
         except BailianKnowledgeError as exc:
             # 百炼导入失败：恢复为可重试状态（不卡死在 processing）
             logger.exception("Bailian import failed for document %s", doc_id)
-            self.repo.update_status(doc_id, prev_status, reviewer_id)
+            self._restore_status(doc_id, prev_status, reviewer_id)
             raise BusinessError(str(exc), code=6000) from exc
         except Exception as exc:
             # M23: OSS 下载失败 / httpx 错误等任意中途异常 → 状态恢复为可重试态，记录错误
             logger.exception("approve document %s failed, status restored to %s", doc_id, prev_status)
-            self.repo.update_status(doc_id, prev_status, reviewer_id)
+            self._restore_status(doc_id, prev_status, reviewer_id)
             raise BusinessError(f"审核处理失败（状态已恢复，可重试）: {exc}", code=5000) from exc
 
         # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
         self._index_es(doc_id, doc.title or "", doc.content or "", doc)
-        return self.repo.update_status(doc_id, "ready", reviewer_id)
+        return self._finish_approve(doc_id, reviewer_id)
 
     def approve_without_bailian(self, doc_id: int, reviewer_id: int):
         """离线上架：仅本地正文入库 + 向量化，跳过百炼导入（种子/演示/无百炼凭证场景）"""
@@ -151,6 +151,11 @@ class DocumentManager:
             raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
         if not doc.file_url:
             raise BusinessError("文档无 file_url", code=4001)
+        prev_status = doc.status
+        # H4：与 approve_document 同一把锁——原子抢占 processing，终态/恢复均带
+        # 状态条件，否则并发驳回可被此路径（无百炼导入，耗时短但仍是竞态窗口）翻回
+        if not self.repo.try_mark_processing(doc_id, reviewer_id):
+            raise BusinessError("文档正在审核中或状态已变化，请刷新后重试", code=4001)
         import tempfile
         suffix = os.path.splitext(doc.file_url)[1]
         fd, local_path = tempfile.mkstemp(suffix=suffix)
@@ -158,6 +163,9 @@ class DocumentManager:
         try:
             self.oss.download_to_local(doc.file_url, local_path)
             text = extract_text(local_path)
+        except Exception as exc:
+            self._restore_status(doc_id, prev_status, reviewer_id)
+            raise BusinessError(f"审核处理失败（状态已恢复，可重试）: {exc}", code=5000) from exc
         finally:
             if os.path.exists(local_path):
                 os.unlink(local_path)
@@ -179,7 +187,33 @@ class DocumentManager:
                     logger.error("DashVector 写入失败（不影响上架，检索将降级）: %s", exc)
         # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
         self._index_es(doc_id, doc.title or "", doc.content or "", doc)
-        return self.repo.update_status(doc_id, "ready", reviewer_id)
+        return self._finish_approve(doc_id, reviewer_id)
+
+    def _finish_approve(self, doc_id: int, reviewer_id: int):
+        """终态写入（H4，2026-08-11）：仅 processing 可进入 ready。
+
+        抢占 processing 后百炼导入可能长达 1h，期间被驳回/归档的文档不得被翻回
+        ready（否则被驳回文档重新上架可检索）。条件更新失败说明状态已被他人改变
+        ——不覆盖，如实报错让审核人员知晓。
+        """
+        if not self.repo.try_mark_final(doc_id, "ready", reviewer_id):
+            raise BusinessError(
+                "文档状态在审核期间被改变（可能已被驳回或归档），未上架。请刷新确认",
+                code=4001,
+            )
+        return self.repo.get(doc_id)
+
+    def _restore_status(self, doc_id: int, prev_status: str, reviewer_id: int) -> None:
+        """失败恢复（H4，2026-08-11）：仅仍持有 processing 锁时回滚。
+
+        审核中途失败恢复 prev_status 时若已被并发驳回/归档，不能把 rejected/
+        archived 翻回 draft（否则被驳回文档绕过审核流程静默回到待审状态）。
+        """
+        if not self.repo.try_restore_status(doc_id, prev_status, reviewer_id):
+            logger.warning(
+                "文档 %s 状态在审核期间被改变（非 processing），未恢复为 %s（保持现状）",
+                doc_id, prev_status,
+            )
 
     def reject_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)

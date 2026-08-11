@@ -124,6 +124,43 @@ class KnowledgeRepository:
         self.db.commit()
         return result.rowcount == 1
 
+    def try_mark_final(self, doc_id: int, final_status: str, reviewer_id: int) -> bool:
+        """原子终态写入（H4，2026-08-11）：仅 processing 可进入终态。
+
+        抢占 processing 后百炼导入可能长达 1h，期间审核 B 可驳回（reject 允许
+        processing 状态）——终态若无条件写会把被驳回/归档的文档翻回 ready 重新
+        上架。带状态条件更新：状态已被他人改变（rejected/archived）时返回 False，
+        调用方不得覆盖。返回是否写入成功。
+        """
+        from sqlalchemy import text
+        result = self.db.execute(
+            text(
+                "UPDATE knowledge_documents SET status=:st, reviewer_id=:rid, "
+                "review_date=:now WHERE id=:id AND status='processing'"
+            ),
+            {"st": final_status, "rid": reviewer_id, "now": datetime.utcnow(), "id": doc_id},
+        )
+        self.db.commit()
+        return result.rowcount == 1
+
+    def try_restore_status(self, doc_id: int, prev_status: str, reviewer_id: int) -> bool:
+        """原子状态恢复（H4，2026-08-11）：仅 processing 可回滚到可重试状态。
+
+        与 try_mark_final 同思路：审核中途失败恢复 prev_status 时若已被并发驳回/
+        归档，不能把 rejected/archived 翻回 draft（否则被驳回文档绕过审核流程）。
+        返回是否恢复成功（False = 状态已被他人改变，保持现状）。
+        """
+        from sqlalchemy import text
+        result = self.db.execute(
+            text(
+                "UPDATE knowledge_documents SET status=:st, reviewer_id=:rid, "
+                "review_date=:now WHERE id=:id AND status='processing'"
+            ),
+            {"st": prev_status, "rid": reviewer_id, "now": datetime.utcnow(), "id": doc_id},
+        )
+        self.db.commit()
+        return result.rowcount == 1
+
     def local_search(self, query, product_id=None, doc_type=None, top_k=10):
         """本地关键词检索（PostgreSQL 全文检索：标题+正文 tsvector，ts_rank 排序）"""
         from sqlalchemy import func

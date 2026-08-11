@@ -107,6 +107,24 @@ class _StatusRepo:
             self.doc.status = status
         return self.doc
 
+    def try_mark_final(self, doc_id, status, reviewer_id=None):
+        """H4（2026-08-11）：终态条件更新（WHERE status='processing'）——
+        仅仍处于 processing 时可进入 ready，否则返回 False（状态已被并发改变）"""
+        if self.doc is None or self.doc.status != "processing":
+            return False
+        self.status_log.append(status)
+        self.doc.status = status
+        return True
+
+    def try_restore_status(self, doc_id, status, reviewer_id=None):
+        """H4（2026-08-11）：失败恢复条件更新（WHERE status='processing'）——
+        仅仍持有 processing 锁时回滚，否则返回 False（保持现状）"""
+        if self.doc is None or self.doc.status != "processing":
+            return False
+        self.status_log.append(status)
+        self.doc.status = status
+        return True
+
     def find_latest_by_title(self, db, title, product_id=None):
         return self._prev
 
@@ -473,3 +491,59 @@ def test_approve_concurrent_race_both_read_draft():
 
     assert ei.value.code == 4001
     assert doc.status == "processing"  # 不被第二请求改动
+
+
+# ---------- 2026-08-11: H4 终态/恢复条件更新（防驳回/归档被翻回） ----------
+
+class _ConcurrentRejectBailian:
+    """模拟审核期间另一管理员驳回：import 阶段把文档状态改为 rejected。
+
+    真实场景：approve 抢占 processing 后百炼导入可长达 1h，期间 reject_document
+    用 update_status 无条件写 rejected；H4 的终态条件更新必须拒绝把该状态翻回 ready。
+    """
+
+    def __init__(self, doc):
+        self._doc = doc
+
+    def import_document(self, local_path, original_file_url=None, tags=None):
+        self._doc.status = "rejected"  # 并发驳回已提交（先于终态写入）
+        return {"file_id": "f1", "job_id": "j1"}
+
+
+def test_approve_final_blocked_by_concurrent_reject():
+    """H4：百炼导入成功后、写终态前文档被并发驳回 → 不得翻回 ready"""
+    doc = _Doc()
+    repo = _StatusRepo(doc)
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.bailian = _ConcurrentRejectBailian(doc)
+    dm.dashvector = _FakeDV()
+
+    with pytest.raises(BusinessError) as ei:
+        dm.approve_document(5, reviewer_id=1)
+
+    assert ei.value.code == 4001
+    assert "未上架" in ei.value.message
+    assert doc.status == "rejected"  # 被驳回状态保持，不翻回 ready
+    assert repo.status_log == ["processing"]  # 终态写入未生效（无 ready 追加）
+
+
+def test_restore_blocked_by_concurrent_reject(caplog):
+    """H4：导入失败恢复路径被并发驳回抢占 → 不得把 rejected 翻回 draft"""
+    doc = _Doc()
+    repo = _StatusRepo(doc)
+    repo.try_mark_processing(5, reviewer_id=1)  # 进入 processing
+    repo.doc.status = "rejected"  # 并发驳回已提交（先于恢复）
+
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.bailian = _FakeBailian()
+    dm.dashvector = _FakeDV()
+
+    # 直接测恢复语义：processing 已被并发改成 rejected，条件更新 0 行
+    dm._restore_status(5, "draft", reviewer_id=1)
+    assert doc.status == "rejected"  # 保持现状，不翻回 draft
+    assert repo.status_log == ["processing"]  # 无 draft 追加
+    assert any("未恢复为" in r.message for r in caplog.records)
