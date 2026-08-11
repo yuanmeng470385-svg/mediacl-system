@@ -11,15 +11,19 @@ from http import HTTPStatus
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_DIM = 1536  # text-embedding-v3
+# text-embedding-v3 最大输出 1024 维（dimensions 参数只支持向下收缩，不能扩到
+# 1536）。此前误设为 1536 → collection 以 1536 维创建 → 每次 upsert 维度不匹配
+# 静默失败 → 向量检索从未真正生效（合规硬伤：检索一直降级走百炼/本地）。
+EMBEDDING_DIM = 1024  # text-embedding-v3
 
 
 def _embed(text: str) -> List[float]:
-    """向量化（text-embedding-v3，1536 维）"""
+    """向量化（text-embedding-v3，1024 维；dimensions 显式指定防默认行为漂移）"""
     dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
     resp = dashscope.TextEmbedding.call(
         model=os.getenv("DASHSCOPE_EMBEDDING_MODEL", "text-embedding-v3"),
         input=text[:2048],
+        dimensions=EMBEDDING_DIM,
     )
     if resp.status_code == HTTPStatus.OK:
         return resp.output["embeddings"][0]["embedding"]
@@ -43,8 +47,13 @@ class DashVectorClient:
         import dashvector as dv  # 运行期导入 + 属性查找，便于测试 monkeypatch dashvector.Client
         client = dv.Client(api_key=self.api_key, endpoint=self.endpoint)
         try:
-            client.create(self.collection_name, dimension=EMBEDDING_DIM)
-            logger.info("DashVector collection 已创建: %s", self.collection_name)
+            resp = client.create(self.collection_name, dimension=EMBEDDING_DIM)
+            # create 对已存在的 collection 返回 code=-2025 错误响应但不抛异常，
+            # 不能据此误报"已创建"
+            if getattr(resp, "code", 0) == 0:
+                logger.info("DashVector collection 已创建: %s", self.collection_name)
+            else:
+                logger.debug("collection 已存在或创建失败（走 get）: %s", getattr(resp, "message", ""))
         except Exception as exc:
             logger.debug("collection 已存在或创建失败（走 get）: %s", exc)
         self._collection = client.get(self.collection_name)
@@ -69,14 +78,40 @@ class DashVectorClient:
                     **(fields or {}),
                 },
             ))
-        col.upsert(docs)
+        resp = col.upsert(docs)
+        # 响应式 API：失败返回错误码但不抛异常。必须检查，否则"上架成功但
+        # 向量缺失"会静默发生（1536/1024 维度不匹配事件即如此）。
+        code = getattr(resp, "code", None)
+        if code not in (0, None):
+            raise RuntimeError(
+                f"DashVector upsert 失败: code={code} {getattr(resp, 'message', '')}"
+            )
         return len(docs)
 
     def delete_doc(self, doc_id: int) -> bool:
-        """按 doc_id 删除该文档的全部 chunk（驳回/下架时清理检索索引，M23）"""
+        """按 doc_id 删除该文档的全部 chunk（驳回/下架时清理检索索引，M23）
+
+        注意：dashvector SDK 1.0.23 的 Collection.delete 只接受 ids / delete_all，
+        不接受 filter 表达式（旧写法 col.delete(filter=...) 会抛 TypeError，导致
+        归档/驳回时向量索引实际未清理 —— 合规硬伤）。这里先按 doc_id filter
+        查回该文档全部 chunk id，再按 ids 删除。向量用零向量即可（filter 精确
+        匹配 doc_id，向量值不影响召回）。
+        """
         col = self._get_collection()
-        # doc_id 元数据为字符串（upsert_chunks 写 str(doc_id)），filter 用字符串字面量
-        resp = col.delete(filter=f"doc_id = '{int(doc_id)}'")
+        doc_id_str = str(int(doc_id))
+        resp = col.query(
+            vector=[0.0] * EMBEDDING_DIM,
+            # DashVector filter 字符串字面量必须用双引号（单引号查不到）
+            filter=f'doc_id = "{doc_id_str}"',
+            topk=1000,
+            output_fields=["doc_id"],
+        )
+        ids = [item.id for item in (resp.output or [])]
+        if not ids:
+            logger.info("document %s 在 DashVector 无残留 chunk", doc_id)
+            return True
+        col.delete(ids=ids)
+        logger.info("document %s 已从 DashVector 删除 %d chunks", doc_id, len(ids))
         return True
 
     def query(self, vector: List[float], filter_expr: Optional[str] = None, top_k: int = 10) -> List[Dict]:

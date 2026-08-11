@@ -346,10 +346,11 @@ def test_reject_archived_raises():
 
 def test_filter_expr_escapes_single_quote():
     expr = DocumentManager._filter_expr(1, "guide'line")
-    assert expr == "product_id = 1 AND doc_type = 'guideline'"  # 单引号被移除
+    # DashVector filter 字符串字面量必须用双引号（单引号恒不命中），引号值被移除
+    assert expr == 'product_id = 1 AND doc_type = "guideline"'
     assert DocumentManager._filter_expr(None, None) is None
     assert DocumentManager._filter_expr(0, "") is None
-    assert DocumentManager._filter_expr(None, "guide'line") == "doc_type = 'guideline'"
+    assert DocumentManager._filter_expr(None, "guide'line") == 'doc_type = "guideline"'
 
 
 def test_search_bailian_filter_drop_warns(caplog):
