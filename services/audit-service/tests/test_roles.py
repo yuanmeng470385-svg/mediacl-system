@@ -19,9 +19,33 @@ from shared.common.auth import create_token
 from shared.common.db_session import get_db
 
 
+class _FakeUser:
+    """require_roles 库查（S6 修复）：主键查 User 返回的 active 用户"""
+
+    def __init__(self, role):
+        self.id = 1
+        self.status = "active"
+        self.role = role
+
+
+class _UserQueryStub:
+    """users 表查询 stub：first() 返回 role 取 mock_db.user_role 的 active 用户"""
+
+    def __init__(self, mock_db):
+        self._db = mock_db
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        return _FakeUser(self._db.user_role)
+
+
 def _make_mock_db():
-    """模拟数据库 session：query 链返回空结果，足够支撑查询/详情/stats/导出"""
+    """模拟数据库 session：日志查询返回空结果；User 主键查询返回 active 用户
+    （role 取 mock_db.user_role，默认 admin —— 各测试按 token 角色显式设置）"""
     mock_db = MagicMock()
+    mock_db.user_role = "admin"
     q = mock_db.query.return_value
     q.count.return_value = 0
     q.scalar.return_value = 0
@@ -32,6 +56,15 @@ def _make_mock_db():
     q.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
     # 导出：query().order_by().limit().all()
     q.order_by.return_value.limit.return_value.all.return_value = []
+
+    def _query(*models):
+        # require_roles 每次受限请求主键查一次库（S6 修复）：User 走用户 stub，其余走日志 stub
+        # （stats 等端点可能 query(Log, func.count(...)) 多参查询，只按首个模型路由）
+        if models and getattr(models[0], "__name__", "") == "User":
+            return _UserQueryStub(mock_db)
+        return q
+
+    mock_db.query.side_effect = _query
     return mock_db
 
 
@@ -61,35 +94,40 @@ class TestAuditLogsRoleRestriction:
 
     def test_rep_forbidden_on_logs(self, client):
         """rep 角色调 GET /logs → 403（code 3000）"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "rep"
         resp = c.get("/api/v1/audit/logs", headers=_auth(_token("rep")))
         assert resp.status_code == 403
-        assert resp.json()["detail"]["code"] == 3000
+        assert resp.json()["code"] == 3000
 
     def test_rep_forbidden_on_log_detail(self, client):
         """rep 角色调 GET /logs/{id} → 403"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "rep"
         resp = c.get("/api/v1/audit/logs/1", headers=_auth(_token("rep")))
         assert resp.status_code == 403
-        assert resp.json()["detail"]["code"] == 3000
+        assert resp.json()["code"] == 3000
 
     def test_rep_forbidden_on_stats(self, client):
         """rep 角色调 GET /stats → 403"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "rep"
         resp = c.get("/api/v1/audit/stats", headers=_auth(_token("rep")))
         assert resp.status_code == 403
-        assert resp.json()["detail"]["code"] == 3000
+        assert resp.json()["code"] == 3000
 
     def test_rep_forbidden_on_export(self, client):
         """rep 角色调 POST /logs/export → 403（导出含全量数据，更不能对 rep 开放）"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "rep"
         resp = c.post("/api/v1/audit/export", headers=_auth(_token("rep")), json={})
         assert resp.status_code == 403
-        assert resp.json()["detail"]["code"] == 3000
+        assert resp.json()["code"] == 3000
 
     def test_admin_allowed_on_logs(self, client):
         """admin 角色查日志 → 200"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "admin"
         resp = c.get("/api/v1/audit/logs", headers=_auth(_token("admin")))
         assert resp.status_code == 200
         body = resp.json()
@@ -98,14 +136,16 @@ class TestAuditLogsRoleRestriction:
 
     def test_manager_allowed_on_stats(self, client):
         """manager 角色调 GET /stats → 200"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "manager"
         resp = c.get("/api/v1/audit/stats", headers=_auth(_token("manager")))
         assert resp.status_code == 200
         assert resp.json()["code"] == 0
 
     def test_compliance_allowed_on_detail(self, client):
         """compliance 角色看单条日志 → 角色已放行（日志不存在走业务 ParamError 400，而非 403）"""
-        c, _ = client
+        c, mock_db = client
+        mock_db.user_role = "compliance"
         resp = c.get("/api/v1/audit/logs/999", headers=_auth(_token("compliance")))
         assert resp.status_code == 400
         assert resp.json()["code"] == 1000

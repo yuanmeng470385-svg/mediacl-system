@@ -15,6 +15,11 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+
+from shared.common.db_session import get_db
+from shared.common.response import PermissionError
+from shared.models.user import User
 
 security = HTTPBearer()
 
@@ -80,14 +85,22 @@ def require_roles(*roles: str):
             current_user: dict = Depends(require_roles("admin", "manager")),
         ):
     未登录 → 401（get_current_user 兜底）；角色不符 → 403（code 3000）。
+    403 抛 PermissionError（AppError）而非裸 HTTPException：各服务已注册共享
+    exception_handler，统一渲染 {code, message, data}（前端按 resp.data.code 解析）。
     角色表（init_db.sql）：admin / manager / rep / compliance / medical / finance。
     """
-    async def _checker(current_user: dict = Depends(get_current_user)) -> dict:
-        if current_user.get("role") not in roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"code": 3000, "message": f"无权限：需要角色 {'/'.join(roles)}", "data": None},
-            )
+    async def _checker(
+        db: Session = Depends(get_db),
+        current_user: dict = Depends(get_current_user),
+    ) -> dict:
+        # 角色与账号状态以库为准（合规硬伤修复）：token 里的 role 是登录时刻的
+        # 快照，旧实现只信 token → 停用/降级后旧 token 最长 7 天（JWT_EXPIRES_IN）
+        # 仍能访问受限端点。每次受限请求查一次主键，状态不符或角色被降级立即拒绝。
+        user = db.query(User).filter(User.id == current_user["id"]).first()
+        if not user or user.status != "active":
+            raise PermissionError("账号不存在或已停用")
+        if user.role not in roles:
+            raise PermissionError(f"无权限：需要角色 {'/'.join(roles)}")
         return current_user
 
     return _checker

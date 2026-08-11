@@ -93,6 +93,61 @@ class _StubManager:
         return _StubDoc(doc_id=doc_id, status="rejected")
 
 
+class _FakeUser:
+    """require_roles 库查（S6 修复）：主键查 User 返回的 active 用户（role 与 token 一致）"""
+
+    def __init__(self, role):
+        self.id = 1
+        self.status = "active"
+        self.role = role
+
+
+class _UserQuery:
+    def __init__(self, role):
+        self._role = role
+
+    def filter(self, *a, **kw):
+        return self
+
+    def first(self):
+        return _FakeUser(self._role)
+
+
+class _EmptyQuery:
+    """非 User 表查询：空结果（这些测试经 _StubManager 走 fake repo，不触库）"""
+
+    def filter(self, *a, **kw):
+        return self
+
+    def order_by(self, *a, **kw):
+        return self
+
+    def offset(self, *a, **kw):
+        return self
+
+    def limit(self, *a, **kw):
+        return self
+
+    def first(self):
+        return None
+
+    def all(self):
+        return []
+
+    def count(self):
+        return 0
+
+
+class _FakeDb:
+    def __init__(self, role="admin"):
+        self.role = role
+
+    def query(self, model):
+        if getattr(model, "__name__", "") == "User":
+            return _UserQuery(self.role)
+        return _EmptyQuery()
+
+
 def _make_client(monkeypatch, role="admin", manager=None):
     from app.main import app
     from shared.common.auth import get_current_user
@@ -100,7 +155,7 @@ def _make_client(monkeypatch, role="admin", manager=None):
     import app.api.knowledge as k
 
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "username": "u", "role": role}
-    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_db] = lambda: _FakeDb(role)
     k._manager = lambda db: manager or _StubManager()
 
     async def _noop_audit(*args, **kwargs):

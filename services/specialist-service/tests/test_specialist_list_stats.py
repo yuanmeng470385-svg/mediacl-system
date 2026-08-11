@@ -84,6 +84,28 @@ class ScalarStub(ChainStub):
         return self.values.pop(0) if self.values else 0
 
 
+class UserStub:
+    """users 表主键查询：require_roles 库查（S6 修复）返回 active 用户（role 取 db.user_role）"""
+
+    def __init__(self, db):
+        self._db = db
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        user = FakeUser()
+        user.role = self._db.user_role
+        return user
+
+
+class FakeUser:
+    def __init__(self):
+        self.id = 1
+        self.status = "active"
+        self.role = "admin"
+
+
 class FakeDb:
     """按模型分发 stubs，stub 在请求后仍可被测试检查（filter 调用记录）"""
 
@@ -92,6 +114,7 @@ class FakeDb:
         self.conv = ScalarStub()
         self.feedback = ScalarStub()
         self.added = []
+        self.user_role = "admin"  # _client 按 role 参数覆写
 
     def query(self, model):
         # func.count(Conversation.id) 不是模型类——从函数参数的列上取表名
@@ -106,6 +129,8 @@ class FakeDb:
             return self.conv
         if name == "conversation_feedback":
             return self.feedback
+        if name == "users":
+            return UserStub(self)
         raise AssertionError(f"unexpected table: {name}")
 
     def add(self, obj):
@@ -119,6 +144,7 @@ class FakeDb:
 
 
 def _client(db: FakeDb, role: str = "admin"):
+    db.user_role = role  # require_roles 库查（S6 修复）：库内角色与 token 角色一致
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: {"id": 1, "role": role}
     return TestClient(app)
