@@ -49,6 +49,7 @@ export default function VisitInProgressScreen() {
   const [liveSpeaker, setLiveSpeaker] = useState<string | undefined>(undefined);
   const asrSessionRef = useRef<ReturnType<typeof connectAsrStreaming> | null>(null);
   const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
+  const pressInFlightRef = useRef(false); // 双按守卫：一次按下只允许一条 press 链（防双会话泄漏）
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -124,9 +125,14 @@ export default function VisitInProgressScreen() {
   const handleVoice = useCallback(async () => {
     if (transcribing) return;
     if (!recording) {
+      // 双按守卫：前一次按下仍在建链途中（startRecording/getToken 未完成）→ 忽略本次，
+      // 否则两条 press 链都会通过 recordingRef 检查 → 双会话，ref 只留最后一个 → 前会话泄漏
+      if (pressInFlightRef.current) return;
+      pressInFlightRef.current = true;
       try {
         await startRecording();
       } catch (e: any) {
+        pressInFlightRef.current = false; // 录音启动失败：本次 press 终结
         Alert.alert('提示', '无法开始录音：' + (e.message || '麦克风不可用'));
         return;
       }
@@ -139,6 +145,7 @@ export default function VisitInProgressScreen() {
         // WS OPEN 前发的 stop 帧会被 asr.ts 静默丢弃、服务端收不到 stop 就一直挂接收循环
         // （asr_ws.py 无空闲超时）→ onCompleted 永不触发 → transcribing 卡死、WS 孤儿到卸载
         if (!recordingRef.current) {
+          pressInFlightRef.current = false; // 弃建：本次 press 终结
           setTranscribing(false); // 复位 release 分支挂起的转写态（无会话 → 不会有 completed 帧）
           return;
         }
@@ -177,9 +184,11 @@ export default function VisitInProgressScreen() {
           },
         });
         asrSessionRef.current = session;
+        pressInFlightRef.current = false; // 会话已建立：本次 press 终结
       } catch (e: any) {
         // 会话建立失败（token 通道异常等）：回滚录音态，避免"停止录音"按钮但无会话可 stop 的悬空态；
         // 若 release 已先行（快按快放），此处同样复位转写态（无会话 → 不会有 completed 帧）
+        pressInFlightRef.current = false; // 本次 press 终结
         setTranscribing(false);
         setRecording(false);
         recordingRef.current = false;
@@ -192,6 +201,7 @@ export default function VisitInProgressScreen() {
     // 服务端据此 finalize 并回 completed 帧 → onCompleted → addTranscript
     setRecording(false);
     recordingRef.current = false;
+    pressInFlightRef.current = false; // 同步清理：release 后允许新的 press 链（transcribing 已挡新按）
     setTranscribing(true);
     try { await stopRecording(); } catch {}
     if (asrSessionRef.current) {
