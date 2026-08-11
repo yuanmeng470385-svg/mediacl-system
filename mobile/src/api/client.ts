@@ -4,14 +4,10 @@
  * 所有后端请求通过网关 (gateway:8000) 访问
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { API_HOST } from '../config';
 
-// 开发环境用本地网关，生产环境用正式地址
-const API_BASE_URL = Platform.select({
-  android: 'http://10.0.2.2:8000',   // Android 模拟器访问宿主机
-  ios: 'http://localhost:8000',
-  default: 'http://localhost:8000',
-});
+// 开发环境用本地网关，生产环境用正式地址；host 集中定义在 src/config.ts（真机联调改一处）
+const API_BASE_URL = `http://${API_HOST}:8000`;
 
 interface RequestOptions {
   method: string;

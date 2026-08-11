@@ -5,13 +5,7 @@
  *   - 客户端→服务端：Binary = PCM 音频分片（16k/16bit/单声道）；Text = {"type":"stop"}
  *   - 服务端→客户端：ready / sentence(index,text,final) / compliance(blocked,violations) / error / completed
  */
-import { Platform } from 'react-native';
-
-const ASR_HOST = Platform.select({
-  android: '10.0.2.2:8002',
-  ios: 'localhost:8002',
-  default: 'localhost:8002',
-});
+import { ASR_HOST } from '../config';
 
 export interface AsrCallbacks {
   onReady: () => void;
@@ -30,7 +24,7 @@ export interface AsrSession {
 }
 
 export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): AsrSession {
-  const ws = new WebSocket(`ws://${ASR_HOST}/ws/visits/${visitId}/asr?token=${encodeURIComponent(token)}`);
+  const ws = new WebSocket(`ws://${ASR_HOST}:8002/ws/visits/${visitId}/asr?token=${encodeURIComponent(token)}`);
   let finalText = '';
   // 最后一次 sentence 帧的说话人标签（visit-service 新字段，缺省 rep）
   let lastSpeaker: string | undefined;

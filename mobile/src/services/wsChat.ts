@@ -2,13 +2,7 @@
  * 对话 WS 流式客户端（走网关 8000）
  * 协议见 specs 3.1/3.3：发 question 帧，收 start/delta/done/error 帧
  */
-import { Platform } from 'react-native';
-
-const GATEWAY_HOST = Platform.select({
-  android: '10.0.2.2:8000',
-  ios: 'localhost:8000',
-  default: 'localhost:8000',
-});
+import { GATEWAY_HOST } from '../config';
 
 export interface ChatWsDone {
   text: string;
@@ -39,7 +33,7 @@ export function openChatWs(
   cbs: ChatWsCallbacks
 ): ChatWsSession {
   const ws = new WebSocket(
-    `ws://${GATEWAY_HOST}/api/v1/specialists/${specialistId}/chat/ws?token=${encodeURIComponent(token)}`
+    `ws://${GATEWAY_HOST}:8000/api/v1/specialists/${specialistId}/chat/ws?token=${encodeURIComponent(token)}`
   );
 
   // open 前 sendQuestion 缓冲的 question 帧（真实 RN WebSocket 构造后先 CONNECTING）
