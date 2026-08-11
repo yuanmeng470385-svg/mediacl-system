@@ -17,6 +17,7 @@ from app.db.repositories.visit_interaction_repo import list_interactions
 from app.services.excel_parser import parse_hcp_excel
 from app.services.profile_generator import ProfileGenerator
 from app.services.audit_client import write_audit_log
+from app.core.hcp_cache import cache as hcp_cache
 
 router = APIRouter(prefix="/api/v1/hcps", tags=["hcps"])
 logger = logging.getLogger(__name__)
@@ -27,6 +28,11 @@ def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
     if not hcp:
         raise HTTPException(status_code=404, detail="医生档案不存在")
     return hcp
+
+
+def _invalidate_hcp_cache(hcp_id: int) -> None:
+    """写路径失效：档案与画像缓存一起清（画像依赖档案字段）"""
+    hcp_cache.invalidate(f"hcp:{hcp_id}", f"profile:{hcp_id}")
 
 
 def _validate_hcp_fields(request: dict) -> dict:
@@ -73,8 +79,13 @@ async def get_hcp(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """医生详情"""
-    return success(_get_hcp_or_404(db, hcp_id).to_dict())
+    """医生详情（Redis 缓存：hcp:{id}，TTL 300s；写路径即时失效，见 _invalidate_hcp_cache）"""
+    cached = hcp_cache.get(f"hcp:{hcp_id}")
+    if cached is not None:
+        return success(cached)
+    data = _get_hcp_or_404(db, hcp_id).to_dict()
+    hcp_cache.set(f"hcp:{hcp_id}", data)
+    return success(data)
 
 
 # ==================== 画像 & 互动历史 ====================
@@ -85,11 +96,20 @@ async def get_hcp_profile(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """医生画像（聚合互动历史 + AI 生成，LLM 不可用时降级为基础数据）"""
+    """医生画像（聚合互动历史 + AI 生成，LLM 不可用时降级为基础数据）。
+
+    Redis 缓存 profile:{id}（含 LLM 结果，TTL 300s）——画像低频变化，分钟级
+    新鲜度；写路径即时失效。命中缓存时无新 AI 调用，不再重复写 generate 审计。
+    """
+    cached = hcp_cache.get(f"profile:{hcp_id}")
+    if cached is not None:
+        return success(cached)
+
     hcp = _get_hcp_or_404(db, hcp_id)
     generator = ProfileGenerator()
     result = generator.generate(db, hcp)
     result["hcp"] = hcp.to_dict()
+    hcp_cache.set(f"profile:{hcp_id}", result)
 
     # AI 行为留痕（仅实际使用了 AI 时）
     if not result.get("degraded"):
@@ -155,6 +175,7 @@ async def update_hcp(
     if "name" in data and not (data.get("name") or "").strip():
         raise ParamError("name 不能为空")
     hcp = HcpRepo.update(db, hcp, data)
+    _invalidate_hcp_cache(hcp_id)  # 档案变更：缓存即时失效
     return success(hcp.to_dict())
 
 
@@ -209,6 +230,7 @@ async def add_hcp_tags(
         raise ParamError("tags 不能为空")
     hcp = _get_hcp_or_404(db, hcp_id)
     hcp = HcpRepo.add_tags(db, hcp, tags)
+    _invalidate_hcp_cache(hcp_id)
     return success(hcp.to_dict())
 
 
@@ -225,6 +247,7 @@ async def remove_hcp_tags(
         raise ParamError("tags 不能为空")
     hcp = _get_hcp_or_404(db, hcp_id)
     hcp = HcpRepo.remove_tags(db, hcp, tags)
+    _invalidate_hcp_cache(hcp_id)
     return success(hcp.to_dict())
 
 
@@ -252,6 +275,7 @@ async def update_hcp_profile_from_visit(
         "tags": request.get("tags"),
     }
     hcp = HcpRepo.merge_profile(db, hcp, updates)
+    _invalidate_hcp_cache(hcp_id)  # 画像更新（拜访结束）：档案+画像缓存即时失效
     await write_audit_log(
         user_id=None, action="hcp_profile_update_from_visit",
         resource_type="hcp", resource_id=str(hcp_id),
