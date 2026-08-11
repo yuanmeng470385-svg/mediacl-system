@@ -116,6 +116,9 @@ export function connectAsrStreaming(
   let timer: ReturnType<typeof setInterval> | null = null;
   let opened = false; // WS 已 open（onReady 已触发）；open 前禁止任何发送
   let stopped = false;
+  let pushing = false; // 轮询重入门禁：上一轮未完成时跳过本轮（防并发双推同区间）
+  // flush 串行链：所有 flushTo 入链执行，stop 收尾与轮询推流互斥（防双发同分片/offset 双重推进）
+  let flushTail: Promise<void> = Promise.resolve();
   // stop 早于 open（快按快放 / 亚握手双击）：此时 flush 的分片与 stop 帧都会被 connectAsr 的
   // OPEN 门禁静默丢弃、offset 还会被白白推进 → 挂起到 open 后由 onReady 分支真正收尾
   let stopPending = false;
@@ -134,37 +137,50 @@ export function connectAsrStreaming(
     },
   });
 
-  /** 推 [offset, until) 的 PCM 分片，不带 stopped 门禁（stop() 收尾 flush 专用） */
-  async function flushTo(until: number) {
-    while (offset < until) {
-      const chunk = await readPcmSource(wavPath, offset, Math.min(chunkSize, until - offset));
-      if (chunk.length === 0) break;
-      session.sendAudioChunk(chunk);
-      offset += chunk.length;
-    }
+  /** 推 [offset, until) 的 PCM 分片，不带 stopped 门禁（stop() 收尾 flush 专用）；返回是否有进展 */
+  async function flushTo(until: number): Promise<boolean> {
+    let progressed = false;
+    const run = flushTail.then(async () => {
+      while (offset < until) {
+        const chunk = await readPcmSource(wavPath, offset, Math.min(chunkSize, until - offset));
+        if (chunk.length === 0) break;
+        session.sendAudioChunk(chunk);
+        offset += chunk.length;
+        progressed = true;
+      }
+    });
+    flushTail = run.catch(() => {}); // 链保持存活；错误由调用方（pollRound/finalizeStop）兜底
+    await run;
+    return progressed;
   }
 
   async function pushSince(until: number) {
     while (offset < until && !stopped) {
-      await flushTo(Math.min(offset + chunkSize, until));
+      // 0 字节短读（录制文件 torn-read）→ 本轮不再重试，下一轮 poll 再试（防 busy 自旋）
+      const progressed = await flushTo(Math.min(offset + chunkSize, until));
+      if (!progressed) break;
     }
   }
 
-  async function start() {
+  /** 单轮轮询：包 pushing 重入门禁——上一轮未完成（慢读/大文件）时跳过本轮，不叠推 */
+  async function pollRound() {
+    if (pushing) return; // 上一轮未完成：跳过本轮，不叠推
+    pushing = true;
     try {
       const total = await pcmSourceLength(wavPath);
       await pushSince(total);
     } catch {
-      // 初始读失败忽略，下一轮重试
+      // 读失败忽略，下一轮重试
+    } finally {
+      pushing = false;
     }
+  }
+
+  async function start() {
+    await pollRound();
     if (stopped) return;
-    timer = setInterval(async () => {
-      try {
-        const total = await pcmSourceLength(wavPath);
-        await pushSince(total);
-      } catch {
-        // 读失败忽略，下一轮重试
-      }
+    timer = setInterval(() => {
+      void pollRound();
     }, pollMs);
   }
 

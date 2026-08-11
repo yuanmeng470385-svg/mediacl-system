@@ -54,9 +54,10 @@ function flushTimers() {
 /**
  * 让 mock 异步链跑完：每次 mock 调用（stat/read）的 await 占一跳，
  * start/轮询链约 3-4 跳、stop 收尾链（stat → then → read → send → 完成 → catch → finally）约 7 跳；
+ * flush 串行链使每轮 flushTo 再延 1-2 跳（flushTail.then 包裹）→ 初始轮约 9 跳；
  * 多跑几跳保证时序稳定（不改变断言含义）。
  */
-async function settle(turns = 8) {
+async function settle(turns = 12) {
   for (let i = 0; i < turns; i++) await Promise.resolve();
 }
 
@@ -212,5 +213,66 @@ describe('connectAsrStreaming', () => {
     } finally {
       Platform.OS = origOS;
     }
+  });
+
+  test('轮询重入门禁：上一轮未完成时跳过本轮，不叠推', async () => {
+    const { ws, session } = openSession();
+    await settle(); // 初始轮：10 字节推完
+    // 录音增长 + 慢读：round 1 读到新增量时挂起（offset=10, until=20 → 必须真读才卡得住）
+    (RNFS.stat as jest.Mock).mockResolvedValue({ size: 44 + 20 });
+    let resolveRead: (v: string) => void = () => {};
+    (RNFS.read as jest.Mock).mockReturnValueOnce(
+      new Promise<string>((r) => { resolveRead = r; }),
+    );
+    flushTimers(); // round 1：pushing=true → stat(20) → read 挂起
+    await settle();
+    const readsAfterRound1 = (RNFS.read as jest.Mock).mock.calls.length; // 2（初始 + round1）
+    flushTimers(); // round 2：应被重入门禁挡下，不再 stat/read
+    await settle();
+    expect((RNFS.read as jest.Mock).mock.calls.length).toBe(readsAfterRound1); // round 2 未新增 read
+    expect((RNFS.stat as jest.Mock).mock.calls.length).toBe(2); // round 2 未新增 stat
+    resolveRead(toBase64(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20]))); // 放行 round 1
+    await settle();
+    session.stop();
+    await settle();
+    const chunks = ws.sent.filter((s) => s instanceof ArrayBuffer);
+    expect(chunks.length).toBe(2); // 初始 + round1 增量，round 2 未叠推
+    expect(ws.sent[ws.sent.length - 1]).toBe(JSON.stringify({ type: 'stop' }));
+  });
+
+  test('空块自旋守卫：read 返回 0 字节时本轮终止，不无限重试', async () => {
+    const { ws, session } = openSession();
+    (RNFS.read as jest.Mock).mockResolvedValue(''); // 恒空读（0 字节）
+    // 多跑几跳（每轮重试约 2 跳）：无守卫时 pushSince 会在同一 0 字节窗口内无限重试 read；
+    // 有守卫时本轮只读一次，settle 内 read 调用不随跳数增长
+    await settle(40);
+    session.stop(); // stop 后 finalize 同样应能收尾（0 字节 flush 直接跳过 → 发 stop 帧）
+    await settle();
+    const frames = ws.sent;
+    expect(frames[frames.length - 1]).toBe(JSON.stringify({ type: 'stop' }));
+    // 判别点：read 调用次数有界（初始轮 1 次 + finalize 1 次）
+    expect((RNFS.read as jest.Mock).mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  test('flush 串行化：stop 与初始推流并发时不双发同分片', async () => {
+    // 让初始轮的 flush 已入读（read 在途）→ 期间 stop() → finalize 的 flush 与初始 flush 并发：
+    // 无串行链时两个 flushTo 同时从 offset=0 读 → 双发同分片；串行化后后者排在链尾、offset 已推进 → 不重发
+    let resolveRead: (v: string) => void = () => {};
+    const pendingRead = new Promise<string>((r) => { resolveRead = r; });
+    const cbs = { onReady: jest.fn(), onSentence: jest.fn(), onCompliance: jest.fn(), onError: jest.fn(), onCompleted: jest.fn() };
+    const session = connectAsrStreaming(1, 't', '/tmp/rec.wav', cbs);
+    (RNFS.read as jest.Mock).mockReturnValueOnce(pendingRead); // 首读（初始轮）挂起
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    ws.onopen && ws.onopen(); // onReady → start → 初始轮：stat(44+10) → flushTo 的 read 挂起
+    await settle(4); // 初始 flush 的 read 在途
+    session.stop(); // stop 落在初始 flush 在途期间：finalizeStop 立即 stat（取 44+10）并并发 flush
+    expect((RNFS.stat as jest.Mock).mock.calls.length).toBeGreaterThanOrEqual(2);
+    resolveRead(toBase64(pcmBuffer)); // 放行初始轮 read
+    await settle();
+    const frames = ws.sent.filter((s) => s instanceof ArrayBuffer);
+    // 串行化后：10 字节恰好发一次（无双发、无 offset 双重推进 → 无空窗）
+    expect(frames.length).toBe(1);
+    expect(Array.from(new Uint8Array(frames[0]))).toEqual(Array.from(pcmBuffer));
+    expect(ws.sent[ws.sent.length - 1]).toBe(JSON.stringify({ type: 'stop' }));
   });
 });
