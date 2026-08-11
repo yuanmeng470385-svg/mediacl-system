@@ -155,9 +155,21 @@ async def login(
     password = str(payload.get("password") or "")
 
     if phone and code:
-        user = _login_by_code(db, store, phone, code)
+        method = "sms_code"
+        try:
+            user = _login_by_code(db, store, phone, code)
+        except AuthError:
+            # 合规硬伤回归：验证码错误/用尽必须留痕（此前登录失败零审计）
+            await _write_login_failed_audit(request, db, method, phone=phone)
+            raise
     elif username and password:
-        user = _login_by_password(db, username, password)
+        method = "password"
+        try:
+            user = _login_by_password(db, username, password)
+        except AuthError:
+            # 合规硬伤回归：密码错误/用户不存在必须留痕
+            await _write_login_failed_audit(request, db, method, username=username)
+            raise
     else:
         raise ParamError("请提供 phone+code 或 username+password")
 
@@ -176,6 +188,42 @@ async def login(
     logger.info(f"登录成功 user_id={user.id} role={user.role}")
 
     return success({"token": token, "user": user.to_dict()})
+
+
+async def _write_login_failed_audit(
+    request: Request,
+    db: Session,
+    method: str,
+    phone: str = "",
+    username: str = "",
+) -> None:
+    """登录失败留痕（合规取证）。
+
+    记录方法与账号标识（不含密码/验证码本身）；用户名/手机号能定位到用户时
+    尽量带 user_id，方便审计按用户检索。write_audit_log 内部容错，失败不影响
+    登录失败响应本身。
+    """
+    user_id = None
+    try:
+        if username:
+            u = UserRepo.get_by_username(db, username)
+            if u and UserRepo.is_active(u):
+                user_id = u.id
+        elif phone:
+            u = UserRepo.get_by_phone(db, phone)
+            if u and UserRepo.is_active(u):
+                user_id = u.id
+    except Exception:
+        pass
+    await write_audit_log(
+        action="auth_login_failed",
+        user_id=user_id,
+        resource_type="user",
+        after_value={"method": method, "username": username or None, "phone": phone or None},
+        client_ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        request_id=request.headers.get("x-request-id"),
+    )
 
 
 def _login_by_code(db: Session, store: CodeStore, phone: str, code: str):

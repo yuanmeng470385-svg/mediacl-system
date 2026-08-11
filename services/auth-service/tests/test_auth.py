@@ -284,6 +284,26 @@ class TestLoginByPassword:
         r = client.post("/api/v1/auth/login", json={"username": "rep01", "password": "wrong"})
         assert r.status_code == 401
 
+    def test_错误密码登录写失败审计(self, monkeypatch):
+        """合规硬伤回归：登录失败必须留痕，且审计内容绝不包含密码本身"""
+        import app.api.auth as auth_api
+
+        calls = []
+
+        async def fake_write(**kw):
+            calls.append(kw)
+
+        monkeypatch.setattr(auth_api, "write_audit_log", fake_write)
+        r = client.post("/api/v1/auth/login", json={"username": "rep01", "password": "wrong"})
+        assert r.status_code == 401
+        failed = [c for c in calls if c.get("action") == "auth_login_failed"]
+        assert len(failed) == 1, calls
+        after = failed[0]["after_value"]
+        assert after["method"] == "password"
+        assert after["username"] == "rep01"
+        assert "password" not in after
+        assert "wrong" not in str(after)
+
     def test_未设置密码的账号不能密码登录(self):
         """password_hash 为 NULL 时不能被空密码/任意密码绕过"""
         for pwd in ["", "anything", PASSWORD]:
