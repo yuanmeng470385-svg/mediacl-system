@@ -98,6 +98,102 @@ export function mapInteractions(raw: unknown): DoctorInteraction[] {
   return [];
 }
 
+/** AI 画像原始响应（后端 GET /hcps/{id}/profile，hcps.py:116-119） */
+export interface HcpProfile {
+  ai_profile:
+    | {
+        academic_profile?: string;
+        prescription_preference?: string;
+        communication_advice?: string | { best_time?: string; preferred_channels?: string[]; topics_to_avoid?: string[] };
+        next_step_suggestion?: string;
+        risk_alert?: string | Array<{ level?: string; description?: string }>;
+      }
+    | { summary: string; base_info?: Record<string, string> }
+    | null;
+  interactions?: unknown;
+  degraded?: boolean;
+  reason?: string;
+  hcp?: unknown;
+}
+
+/** 页面消费形状（映射自 HcpProfile，含降级兼容） */
+export interface DoctorProfile {
+  ai_available: boolean;
+  ai_unavailable_reason: string;
+  academic_profile: string;
+  prescription_preference: string;
+  communication_advice: string;
+  next_step_suggestion: string;
+  /** 空数组 = 无风险提示 */
+  risk_alerts: { level: string; description: string }[];
+}
+
+/** risk_alert：字符串（"无"/"无风险"→空数组）或对象数组；逻辑移植自 mobile/src/api/hcp.ts mapRiskAlert */
+function mapRiskAlert(risk: unknown): DoctorProfile['risk_alerts'] {
+  if (typeof risk === 'string') {
+    const t = risk.trim();
+    if (!t || t === '无' || t === '无风险') return [];
+    return [{ level: 'warning', description: t }];
+  }
+  if (Array.isArray(risk)) {
+    return risk
+      .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object')
+      .map((v) => ({
+        level: typeof v.level === 'string' && v.level ? v.level : 'warning',
+        description: typeof v.description === 'string' ? v.description : String(v),
+      }))
+      .filter((x) => x.description && x.description.trim());
+  }
+  return [];
+}
+
+/** communication_advice：字符串原样；对象抽 best_time/preferred_channels/topics_to_avoid（移植 mobile mapCommunication） */
+function mapCommunicationAdvice(v: unknown): string {
+  if (typeof v === 'string') return v.trim();
+  if (v && typeof v === 'object') {
+    const o = v as { best_time?: unknown; preferred_channels?: unknown; topics_to_avoid?: unknown };
+    const parts: string[] = [];
+    if (typeof o.best_time === 'string' && o.best_time.trim()) parts.push(`最佳时间：${o.best_time}`);
+    if (Array.isArray(o.preferred_channels) && o.preferred_channels.length) parts.push(`偏好渠道：${o.preferred_channels.join('、')}`);
+    if (Array.isArray(o.topics_to_avoid) && o.topics_to_avoid.length) parts.push(`注意规避：${o.topics_to_avoid.join('、')}`);
+    return parts.join('\n');
+  }
+  return '';
+}
+
+/** 画像映射（含降级：degraded 或 ai_profile 为 null / 含 base_info·summary 时置 ai_available=false） */
+export function mapProfile(raw: unknown): DoctorProfile {
+  const r = (raw ?? {}) as HcpProfile;
+  const ap = r.ai_profile;
+  const degraded = !!r.degraded || !ap || typeof ap !== 'object' || 'base_info' in ap || 'summary' in ap;
+  const reason =
+    typeof r.reason === 'string' && r.reason
+      ? r.reason
+      : ap && typeof ap === 'object' && 'summary' in ap && typeof ap.summary === 'string'
+        ? ap.summary
+        : 'AI 画像暂不可用';
+  if (degraded) {
+    return {
+      ai_available: false,
+      ai_unavailable_reason: reason || 'AI 画像暂不可用',
+      academic_profile: '',
+      prescription_preference: '',
+      communication_advice: '',
+      next_step_suggestion: '',
+      risk_alerts: [],
+    };
+  }
+  return {
+    ai_available: true,
+    ai_unavailable_reason: '',
+    academic_profile: typeof ap.academic_profile === 'string' ? ap.academic_profile : '',
+    prescription_preference: typeof ap.prescription_preference === 'string' ? ap.prescription_preference : '',
+    communication_advice: mapCommunicationAdvice(ap.communication_advice),
+    next_step_suggestion: typeof ap.next_step_suggestion === 'string' ? ap.next_step_suggestion : '',
+    risk_alerts: mapRiskAlert(ap.risk_alert),
+  };
+}
+
 function mapDoctorDetail(raw: any): DoctorDetail {
   if (!raw || typeof raw !== 'object') return {} as DoctorDetail;
   return {
@@ -131,7 +227,7 @@ export const doctorAPI = {
     })),
 
   profile: (id: string) =>
-    client.get<ApiResponse<any>>(`/hcps/${id}/profile`),
+    client.get<ApiResponse<{ data: HcpProfile }>>(`/hcps/${id}/profile`),
 
   interactions: (id: string) =>
     client.get<ApiResponse<unknown>>(`/hcps/${id}/interactions`).then((res) => ({

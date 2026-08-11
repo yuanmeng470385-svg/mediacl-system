@@ -196,6 +196,11 @@ export interface Doctor {
   tags: string[];
   visit_count: number;
   satisfaction: number;
+  specialty?: string;
+  email?: string;
+  region?: string;
+  status?: string;
+  influence_level?: 'high' | 'medium' | 'low' | string;
 }
 
 // ========== 用户 ==========
