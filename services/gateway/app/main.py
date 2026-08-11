@@ -88,6 +88,7 @@ ROUTE_MAP = {
     "/api/v1/compliance": settings.COMPLIANCE_SERVICE_URL,
     "/api/v1/audit": settings.AUDIT_SERVICE_URL,
     "/api/v1/hcps": settings.HCP_SERVICE_URL,
+    "/api/v1/nls": settings.VISIT_SERVICE_URL,
     "/api/v1/auth": settings.AUTH_SERVICE_URL,
     "/api/v1/users": settings.AUTH_SERVICE_URL,  # 用户管理（Web 后台）
 }

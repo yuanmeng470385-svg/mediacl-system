@@ -54,6 +54,9 @@ app.include_router(asr_ws_router)
 from app.api.tasks import router as tasks_router
 app.include_router(tasks_router)
 
+from app.api.nls import router as nls_router
+app.include_router(nls_router)
+
 
 @app.get("/health")
 async def health():

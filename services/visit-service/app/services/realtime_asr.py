@@ -102,6 +102,12 @@ async def get_nls_token(force: bool = False) -> str:
     return token
 
 
+def nls_token_expire_at() -> Optional[float]:
+    """当前进程缓存的 NLS token 过期时刻（epoch 秒）；尚未换过 token 返回 None"""
+    cached = _token_cache.get("nls")
+    return cached["expire_at"] if cached else None
+
+
 # ==================== 流式转写客户端 ====================
 
 class RealtimeAsrClient:
