@@ -26,7 +26,11 @@ async def get_tts_token(
     app_key = os.getenv("NLS_APPKEY", "").strip()
     if not app_key:
         raise BusinessError("NLS 语音合成未配置（缺 NLS_APPKEY）")
-    token = await get_nls_token()
+    try:
+        token = await get_nls_token()
+    except Exception as e:
+        logger.warning("NLS token 换取失败: %s", e)
+        raise BusinessError("NLS token 换取失败，请检查 AK/SK 配置")
     return success({
         "token": token,
         "appkey": app_key,

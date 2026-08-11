@@ -496,20 +496,27 @@ class VisitManager:
         if len(stripped) < self._LLM_REC_MIN_LENGTH:
             return None
 
-        record = VisitRepo.get(db, visit_id)
+        # 行锁读：并发 process_transcript 对同一 visit 的 key_nodes 追加不互相覆盖
+        # （读改写窗口内另一请求 commit 的批次不会丢失；锁随下方 LLM 调用窗口持有）
+        record = VisitRepo.get(db, visit_id, for_update=True)
         if not record:
+            return None
+        if record.key_nodes is not None and not isinstance(record.key_nodes, list):
+            # 非列表 JSONB（脏数据）→ 不参与节流判断也不追加（降级铁律：不抛异常）
             return None
         nodes = list(record.key_nodes or [])
         now = datetime.now()
-        if nodes and nodes[-1].get("created_at"):
+        if nodes and isinstance(nodes[-1], dict) and nodes[-1].get("created_at"):
             try:
                 last = datetime.fromisoformat(str(nodes[-1]["created_at"]))
                 if (now - last).total_seconds() < self._LLM_REC_COOLDOWN_SECONDS:
                     return None
-            except ValueError:
+            except (ValueError, TypeError):
+                # created_at 无法解析（含 tz-aware/naive 相减的 TypeError）→ 放行
                 pass
 
-        recent_quotes = [str(n.get("quote", "")) for n in nodes[-3:] if n.get("quote")]
+        recent_quotes = [str(n.get("quote", "")) for n in nodes[-3:]
+                         if isinstance(n, dict) and n.get("quote")]
         prompt = [
             {"role": "system", "content": (
                 "你是医药代表拜访的实时陪访助手。根据刚发生的对话片段，标记关键节点并给应对话术。"

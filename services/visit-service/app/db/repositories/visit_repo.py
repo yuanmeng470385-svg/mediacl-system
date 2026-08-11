@@ -20,8 +20,12 @@ class VisitRepo:
     """拜访记录仓库"""
 
     @staticmethod
-    def get(db: Session, visit_id: int) -> Optional[VisitRecord]:
-        return db.query(VisitRecord).filter(VisitRecord.id == visit_id).first()
+    def get(db: Session, visit_id: int, for_update: bool = False) -> Optional[VisitRecord]:
+        """按 id 取拜访记录；for_update=True 时对行加锁（防并发读改写丢失更新）"""
+        query = db.query(VisitRecord).filter(VisitRecord.id == visit_id)
+        if for_update:
+            query = query.with_for_update()
+        return query.first()
 
     @staticmethod
     def list(

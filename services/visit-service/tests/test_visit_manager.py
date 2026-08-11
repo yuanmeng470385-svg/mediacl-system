@@ -64,6 +64,9 @@ class _FakeQuery:
     def order_by(self, *_):
         return self
 
+    def with_for_update(self):
+        return self  # 行锁是真实 DB 语义，fake 下等价普通查询
+
     def offset(self, n):
         return self
 
