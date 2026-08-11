@@ -90,19 +90,29 @@ async def toggle_favorite(
         db.delete(existing)
         db.commit()
         return success({"is_favorite": False})
-    # 快照问题与答案（conversation 里 user 行是问题、assistant 行是答案，取同 session 两条）
+    # 快照同轮问答（多轮修复）：收藏的是 assistant 答案行时，answer=该行内容、
+    # question=同 session 内该答案之前最后一条 user 行（按 id 序，且过滤
+    # id <= conv.id，防止快照到后续轮次）；收藏到 user 行时镜像处理。
     msgs = db.query(Conversation).filter(
-        Conversation.session_id == conv.session_id
-    ).order_by(Conversation.created_at).all() if conv.session_id else [conv]
-    question = next((m.content for m in msgs if m.role == "user"), conv.content)
-    answer = next((m.content for m in msgs if m.role == "assistant"), "")
+        Conversation.session_id == conv.session_id,
+        Conversation.id <= conv.id,
+    ).order_by(Conversation.id).all() if conv.session_id else [conv]
+    if conv.role == "assistant":
+        answer = conv.content
+        citations = conv.citations
+        question = next((m.content for m in reversed(msgs) if m.role == "user"), conv.content)
+    else:
+        question = conv.content
+        answer_conv = next((m for m in reversed(msgs) if m.role == "assistant"), None)
+        answer = answer_conv.content if answer_conv else ""
+        citations = answer_conv.citations if answer_conv else None
     fav = ConversationFavorite(
         conversation_id=conv.id,
         user_id=current_user["id"],
         specialist_id=conv.specialist_id,
         question=question,
         answer=answer,
-        citations=conv.citations,
+        citations=citations,
     )
     db.add(fav)
     db.commit()

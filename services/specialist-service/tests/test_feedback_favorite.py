@@ -23,14 +23,15 @@ def test_compute_satisfaction_all_negative():
 class FakeConv:
     """最小对话替身：满足 toggle_favorite 读取的字段"""
 
-    def __init__(self):
-        self.id = 16
-        self.user_id = 3
-        self.specialist_id = 1
-        self.session_id = "sess-1"
-        self.content = "问题"
-        self.citations = None
-        self.role = "user"
+    def __init__(self, id=16, user_id=3, specialist_id=1, session_id="sess-1",
+                 role="user", content="问题", citations=None):
+        self.id = id
+        self.user_id = user_id
+        self.specialist_id = specialist_id
+        self.session_id = session_id
+        self.role = role
+        self.content = content
+        self.citations = citations
 
 
 class QueryStub:
@@ -52,16 +53,50 @@ class QueryStub:
         return [FakeConv()]
 
 
+class MsgStub:
+    """会话消息查询替身：解析 Conversation.id == X / id <= X 条件后过滤。
+
+    需支持 _get_conv_or_404（主键等值）与 toggle_favorite 快照（id <= 锚点）。
+    """
+
+    def __init__(self, msgs):
+        self._msgs = list(msgs)
+
+    def filter(self, *a, **k):
+        for cond in a:
+            col = getattr(getattr(cond, "left", None), "key", None)
+            # SQLAlchemy 2.x 的右值是 BindParameter（:id_1），取 .value 才是字面量
+            right = getattr(getattr(cond, "right", None), "value", None)
+            if right is None:
+                right = getattr(cond, "right", None)
+            op_name = getattr(cond.operator, "__name__", "")
+            if col == "id" and op_name == "eq":
+                self._msgs = [m for m in self._msgs if m.id == right]
+            elif col == "id" and op_name == "le":
+                self._msgs = [m for m in self._msgs if m.id <= right]
+        return self
+
+    def order_by(self, *a, **k):
+        return self
+
+    def first(self):
+        return self._msgs[0] if self._msgs else None
+
+    def all(self):
+        return self._msgs
+
+
 class FakeDb:
     """已收藏（added 非空）后 query(ConversationFavorite) 返回 existing"""
 
-    def __init__(self):
+    def __init__(self, msgs=None):
         self.added = []
         self.deleted = []
+        self.msgs = msgs  # None → 单条 FakeConv（与旧行为一致）
 
     def query(self, model):
         if model.__name__ == "Conversation":
-            return QueryStub(first_result=FakeConv())
+            return MsgStub(self.msgs if self.msgs is not None else [FakeConv()])
         return QueryStub(first_result=SimpleNamespace() if self.added else None)
 
     def add(self, obj):
@@ -102,3 +137,59 @@ def test_toggle_favorite_twice_unfavorites():
     assert r1.json()["data"]["is_favorite"] is True
     assert r2.json()["data"]["is_favorite"] is False
     assert len(db.deleted) == 1
+
+
+# ==================== 多轮快照回归（收藏取同轮，不再错配第一轮） ====================
+
+def _conv(id_, role, content, citations=None):
+    return FakeConv(id=id_, role=role, content=content, citations=citations)
+
+
+def test_toggle_favorite_multi_turn_snapshot_same_round():
+    """收藏第 2 轮 assistant 答案 → 快照第 2 轮的问题+答案（旧实现错配成第 1 轮）"""
+    msgs = [
+        _conv(1, "user", "第一轮问题"),
+        _conv(2, "assistant", "第一轮回答", citations=[{"id": "c1"}]),
+        _conv(3, "user", "第二轮问题"),
+        _conv(4, "assistant", "第二轮回答", citations=[{"id": "c2"}]),
+    ]
+    db = FakeDb(msgs=msgs)
+    resp = _client(db).post("/api/v1/conversations/4/favorite")
+    assert resp.status_code == 200
+    fav = db.added[0]
+    assert fav.question == "第二轮问题"
+    assert fav.answer == "第二轮回答"
+    assert fav.citations == [{"id": "c2"}]
+
+
+def test_toggle_favorite_multi_turn_snapshot_no_future_rows():
+    """收藏 user 行 → question=该行，answer=该行之前最后一条 assistant
+    （id <= 锚点 过滤：快照不得取到后续轮次）"""
+    msgs = [
+        _conv(1, "user", "第一轮问题"),
+        _conv(2, "assistant", "第一轮回答"),
+        _conv(3, "user", "第二轮问题"),
+        _conv(4, "assistant", "第二轮回答"),
+    ]
+    db = FakeDb(msgs=msgs)
+    resp = _client(db).post("/api/v1/conversations/3/favorite")
+    assert resp.status_code == 200
+    fav = db.added[0]
+    assert fav.question == "第二轮问题"
+    assert fav.answer == "第一轮回答"  # 锚点之前最后一条 assistant，而非下一轮的回答
+
+
+def test_toggle_favorite_multi_turn_snapshot_first_round():
+    """收藏第 1 轮 answer → question=第一轮问题（边界：之前无 user 行时兜底自身）"""
+    msgs = [
+        _conv(1, "user", "第一轮问题"),
+        _conv(2, "assistant", "第一轮回答"),
+        _conv(3, "user", "第二轮问题"),
+        _conv(4, "assistant", "第二轮回答"),
+    ]
+    db = FakeDb(msgs=msgs)
+    resp = _client(db).post("/api/v1/conversations/2/favorite")
+    assert resp.status_code == 200
+    fav = db.added[0]
+    assert fav.question == "第一轮问题"
+    assert fav.answer == "第一轮回答"
