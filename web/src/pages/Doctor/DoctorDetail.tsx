@@ -1,20 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageContainer } from '@ant-design/pro-components';
-import { Card, Descriptions, Tag, Timeline, Space, Spin, App, Empty } from 'antd';
+import { Alert, App, Card, Descriptions, Empty, Space, Spin, Tag, Timeline, Typography } from 'antd';
 import { PhoneOutlined } from '@ant-design/icons';
 import {
   doctorAPI,
   formatProfileField,
   formatVisitTime,
+  mapProfile,
 } from '../../services/doctor';
-import type { DoctorDetail as DoctorDetailData, DoctorInteraction } from '../../services/doctor';
+import type { DoctorDetail as DoctorDetailData, DoctorInteraction, DoctorProfile } from '../../services/doctor';
 
 export default function DoctorDetail() {
   const { id } = useParams<{ id: string }>();
   const [doctor, setDoctor] = useState<DoctorDetailData | null>(null);
   const [interactions, setInteractions] = useState<DoctorInteraction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [profile, setProfile] = useState<DoctorProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileFailed, setProfileFailed] = useState(false);
   const { message } = App.useApp();
 
   useEffect(() => {
@@ -26,6 +30,17 @@ export default function DoctorDetail() {
       })
       .catch(() => message.error('加载失败'))
       .finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    setProfileLoading(true);
+    doctorAPI.profile(id)
+      .then((res) => { if (!cancelled) setProfile(mapProfile(res.data?.data)); })
+      .catch(() => { if (!cancelled) setProfileFailed(true); })
+      .finally(() => { if (!cancelled) setProfileLoading(false); });
+    return () => { cancelled = true; };
   }, [id]);
 
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '40vh auto' }} />;
@@ -46,6 +61,29 @@ export default function DoctorDetail() {
             <Space wrap>{doctor.tags?.length ? doctor.tags.map((t: string) => <Tag key={t}>{t}</Tag>) : '--'}</Space>
           </Descriptions.Item>
         </Descriptions>
+      </Card>
+      <Card title="AI 画像" loading={profileLoading}>
+        {profileFailed ? (
+          <Empty description="画像生成失败，请稍后重试" />
+        ) : profile && !profile.ai_available ? (
+          <Alert type="info" showIcon message="AI 画像暂不可用" description={profile.ai_unavailable_reason} />
+        ) : profile ? (
+          <Descriptions column={1} size="small" labelStyle={{ width: 120 }}>
+            <Descriptions.Item label="学术画像">{profile.academic_profile || '—'}</Descriptions.Item>
+            <Descriptions.Item label="处方偏好">{profile.prescription_preference || '—'}</Descriptions.Item>
+            <Descriptions.Item label="沟通建议">
+              <Typography.Paragraph style={{ whiteSpace: 'pre-line', marginBottom: 0 }}>
+                {profile.communication_advice || '—'}
+              </Typography.Paragraph>
+            </Descriptions.Item>
+            <Descriptions.Item label="下一步建议">{profile.next_step_suggestion || '—'}</Descriptions.Item>
+            <Descriptions.Item label="合规风险">
+              {profile.risk_alerts.length
+                ? <Space wrap>{profile.risk_alerts.map((r, i) => <Tag key={i} color={r.level === 'high' ? 'red' : r.level === 'medium' ? 'orange' : 'warning'}>{r.description}</Tag>)}</Space>
+                : <span style={{ color: '#52c41a' }}>无风险提示</span>}
+            </Descriptions.Item>
+          </Descriptions>
+        ) : null}
       </Card>
       <Card title="学术背景" style={{ marginBottom: 16 }}>
         <p>{academic || '暂无学术背景信息'}</p>

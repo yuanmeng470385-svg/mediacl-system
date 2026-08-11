@@ -166,11 +166,13 @@ export function mapProfile(raw: unknown): DoctorProfile {
   const r = (raw ?? {}) as HcpProfile;
   const ap = r.ai_profile;
   const degraded = !!r.degraded || !ap || typeof ap !== 'object' || 'base_info' in ap || 'summary' in ap;
+  // 降级文案优先级：summary（后端用户可读文案）> reason（str(e) 原始异常文本）> 兜底字面量
+  // （与 mobile/src/api/hcp.ts 一致：优先展示可读的 summary，避免把原始异常文本怼到页面）
   const reason =
-    typeof r.reason === 'string' && r.reason
-      ? r.reason
-      : ap && typeof ap === 'object' && 'summary' in ap && typeof ap.summary === 'string'
-        ? ap.summary
+    ap && typeof ap === 'object' && 'summary' in ap && typeof ap.summary === 'string'
+      ? ap.summary
+      : typeof r.reason === 'string' && r.reason
+        ? r.reason
         : 'AI 画像暂不可用';
   if (degraded) {
     return {
