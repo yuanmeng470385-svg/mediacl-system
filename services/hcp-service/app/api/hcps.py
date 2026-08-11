@@ -32,7 +32,8 @@ def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
 
 def _invalidate_hcp_cache(hcp_id: int) -> None:
     """写路径失效：档案与画像缓存一起清（画像依赖档案字段）"""
-    hcp_cache.invalidate(f"hcp:{hcp_id}", f"profile:{hcp_id}")
+    hcp_cache.invalidate(f"hcp:{hcp_id}")
+    hcp_cache.invalidate_profile(hcp_id)
 
 
 def _validate_hcp_fields(request: dict) -> dict:
@@ -98,18 +99,24 @@ async def get_hcp_profile(
 ):
     """医生画像（聚合互动历史 + AI 生成，LLM 不可用时降级为基础数据）。
 
-    Redis 缓存 profile:{id}（含 LLM 结果，TTL 300s）——画像低频变化，分钟级
-    新鲜度；写路径即时失效。命中缓存时无新 AI 调用，不再重复写 generate 审计。
+    H3（2026-08-11）：互动历史按查看者过滤——admin/manager 聚合全部代表的互动，
+    rep 只聚合本人（画像含 ai_summary/异议/兴趣等敏感内容，此前任意登录用户可
+    拉取全部代表与该医生的互动细节）。缓存按查看者分键（profile:{id}:all /
+    profile:{id}:u{uid}），避免不同视角内容串用户。
     """
-    cached = hcp_cache.get(f"profile:{hcp_id}")
+    view_all = current_user.get("role") in ("admin", "manager")
+    viewer_key = "all" if view_all else f"u{current_user['id']}"
+    cache_key = f"profile:{hcp_id}:{viewer_key}"
+
+    cached = hcp_cache.get(cache_key)
     if cached is not None:
         return success(cached)
 
     hcp = _get_hcp_or_404(db, hcp_id)
     generator = ProfileGenerator()
-    result = generator.generate(db, hcp)
+    result = generator.generate(db, hcp, user_id=None if view_all else current_user["id"])
     result["hcp"] = hcp.to_dict()
-    hcp_cache.set(f"profile:{hcp_id}", result)
+    hcp_cache.set(cache_key, result)
 
     # AI 行为留痕（仅实际使用了 AI 时）
     if not result.get("degraded"):

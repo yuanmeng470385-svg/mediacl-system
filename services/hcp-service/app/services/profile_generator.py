@@ -4,7 +4,7 @@
 """
 import json
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from app.services.qwen_client import QwenClient
 from app.models.hcp import Hcp
@@ -36,14 +36,20 @@ class ProfileGenerator:
     def __init__(self, qwen: QwenClient = None):
         self.qwen = qwen or QwenClient()
 
-    def generate(self, db: Session, hcp: Hcp, interaction_limit: int = 5) -> Dict:
+    def generate(self, db: Session, hcp: Hcp, interaction_limit: int = 5,
+                 user_id: Optional[int] = None) -> Dict:
         """生成画像
+
+        Args:
+            user_id: 查看者用户 id（H3，2026-08-11）——非空时互动历史只聚合该代表
+                本人的记录（防跨用户泄漏，与 /interactions 的 rep 过滤语义一致）；
+                None 表示聚合全部（仅 admin/manager 调用方使用）。
 
         Returns:
             {"ai_profile": {...}, "interactions": [...], "degraded": false}
             或 {"ai_profile": {"summary": "..."}, "interactions": [...], "degraded": true, "reason": "..."}
         """
-        interactions = list_interactions(db, hcp.id, limit=interaction_limit)
+        interactions = list_interactions(db, hcp.id, limit=interaction_limit, user_id=user_id)
         base_profile = hcp.to_dict()
 
         try:

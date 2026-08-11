@@ -70,6 +70,20 @@ class HcpCache:
         except Exception as exc:
             self._unavailable(exc)
 
+    def invalidate_profile(self, hcp_id: int) -> None:
+        """写路径失效画像：删除该医生的全部查看者变体（H3 分键后前缀扫删）。
+
+        画像键现为 profile:{id}:all（admin/manager 全量）与 profile:{id}:u{uid}
+        （rep 本人视角），不再只删一个键；同时兼容删除历史单键 profile:{id}。
+        """
+        try:
+            client = self._client()
+            prefix = f"hcpcache:profile:{hcp_id}"
+            for key in client.scan_iter(f"{prefix}*", count=100):
+                client.delete(key)
+        except Exception as exc:
+            self._unavailable(exc)
+
 
 # 模块级单例（懒连接，服务内共享）
 cache = HcpCache()
