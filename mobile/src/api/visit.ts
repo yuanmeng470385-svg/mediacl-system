@@ -181,6 +181,9 @@ export function mapComplianceViolations(violations: unknown): ComplianceAlert[] 
 }
 
 /** process_transcript 响应 → 屏幕消费形状（后端 objections 是 {objections:[...]} 对象，compliance 是嵌套对象） */
+// 异议 id 全局计数：type_index 只在单次响应内唯一，多次转写响应撞 key
+// （React duplicate key 警告，元素可能重复/丢失）
+let objectionSeq = 0;
 export function mapTranscriptResult(raw: any): TranscriptResult {
   const rawObjections = raw?.objections;
   const objectionList = Array.isArray(rawObjections)
@@ -200,11 +203,11 @@ export function mapTranscriptResult(raw: any): TranscriptResult {
   });
 
   const objections: ObjectionAlert[] = objectionList
-    .map((o: any, i: number) => {
+    .map((o: any) => {
       const type = typeof o === 'object' && o ? String(o.type ?? 'other') : 'other';
       const text = typeof o === 'object' && o ? String(o.text ?? '') : String(o ?? '');
       return {
-        id: `${type}_${i}`,
+        id: `${type}_${objectionSeq++}`,
         type,
         text,
         description: text,

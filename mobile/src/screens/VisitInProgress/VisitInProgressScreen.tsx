@@ -5,7 +5,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, PermissionsAndroid, Platform,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -129,6 +129,31 @@ export default function VisitInProgressScreen() {
       // 否则两条 press 链都会通过 recordingRef 检查 → 双会话，ref 只留最后一个 → 前会话泄漏
       if (pressInFlightRef.current) return;
       pressInFlightRef.current = true;
+      // Android 6+ 运行时权限：不申请则 AudioRecord 初始化失败（真机 vivo 实测
+      // "Request requires android.permission.RECORD_AUDIO" → 无音频 → NLS 超时 TaskFailed）
+      if (Platform.OS === 'android') {
+        try {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            {
+              title: '麦克风权限',
+              message: '实时转写需要访问麦克风录音',
+              buttonNeutral: '稍后再说',
+              buttonNegative: '拒绝',
+              buttonPositive: '允许',
+            },
+          );
+          if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+            pressInFlightRef.current = false; // 权限拒绝：本次 press 终结（guard 不泄漏）
+            Alert.alert('提示', '需要麦克风权限才能实时转写');
+            return;
+          }
+        } catch (e: any) {
+          pressInFlightRef.current = false;
+          Alert.alert('提示', '无法获取麦克风权限：' + (e.message || '未知错误'));
+          return;
+        }
+      }
       try {
         await startRecording();
       } catch (e: any) {
