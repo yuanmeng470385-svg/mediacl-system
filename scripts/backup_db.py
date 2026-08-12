@@ -32,6 +32,10 @@ DEFAULT_CONFIG = {
     "BACKUP_RETENTION_OSS_DAYS": "30",
     "BACKUP_OSS_PREFIX": "backups/",
     "BACKUP_PG_CONTAINER": "medagent-postgres",
+    "OSS_ACCESS_KEY_ID": "",
+    "OSS_ACCESS_KEY_SECRET": "",
+    "OSS_BUCKET": "",
+    "OSS_ENDPOINT": "",
 }
 
 
@@ -45,7 +49,9 @@ def load_config() -> dict:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            cfg.setdefault(key.strip(), value.strip())
+            key, value = key.strip(), value.strip()
+            if key not in cfg or not cfg[key]:
+                cfg[key] = value
     for key in list(cfg):
         env_val = os.getenv(key)
         if env_val:
@@ -74,6 +80,75 @@ def _docker_exec(cfg: dict, args: list, input_bytes: bytes | None = None) -> sub
     """docker exec 进 postgres 容器执行命令（带 PGPASSWORD）。"""
     cmd = ["docker", "exec", "-e", f"PGPASSWORD={pg_password(cfg)}", cfg["BACKUP_PG_CONTAINER"], *args]
     return subprocess.run(cmd, input=input_bytes, capture_output=True)
+
+
+def _oss_bucket(cfg: dict):
+    """构造 oss2.Bucket（复用 .env 的 OSS_* 凭证）。凭证缺失/oss2 未装抛 RuntimeError。"""
+    try:
+        import oss2
+    except ImportError:
+        raise RuntimeError("oss2 未安装，请执行: pip install oss2")
+    ak = cfg.get("OSS_ACCESS_KEY_ID", "")
+    sk = cfg.get("OSS_ACCESS_KEY_SECRET", "")
+    bucket_name = cfg.get("OSS_BUCKET", "")
+    endpoint = cfg.get("OSS_ENDPOINT", "")
+    if not (ak and sk and bucket_name and endpoint):
+        raise RuntimeError(
+            "未配置 OSS_ACCESS_KEY_ID/OSS_ACCESS_KEY_SECRET/OSS_BUCKET/OSS_ENDPOINT（见 .env.example）"
+        )
+    return oss2.Bucket(oss2.Auth(ak, sk), endpoint, bucket_name)
+
+
+def upload_oss(cfg: dict, dump_path: Path) -> None:
+    """上传 dump 到 OSS_BUCKET 的 BACKUP_OSS_PREFIX，ACL 显式私有。"""
+    bucket = _oss_bucket(cfg)
+    key = f"{cfg['BACKUP_OSS_PREFIX']}{dump_path.name}"
+    bucket.put_object_from_file(key, str(dump_path), headers={"x-oss-object-acl": "private"})
+    log(f"OSS 上传完成: {bucket.bucket_name}/{key}", cfg)
+
+
+def cleanup_local(cfg: dict) -> int:
+    """删除 BACKUP_DIR 中超过 BACKUP_RETENTION_LOCAL_DAYS 天的备份，返回删除数。"""
+    days = int(cfg["BACKUP_RETENTION_LOCAL_DAYS"])
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+    pattern = re.compile(r"^medagent-(\d{8})-\d{4}\.dump$")
+    removed = 0
+    for p in Path(cfg["BACKUP_DIR"]).glob("medagent-*.dump"):
+        m = pattern.match(p.name)
+        if not m:
+            continue
+        file_date = datetime.datetime.strptime(m.group(1), "%Y%m%d")
+        if file_date < cutoff:
+            p.unlink(missing_ok=True)
+            removed += 1
+    if removed:
+        log(f"本地清理: 删除 {removed} 个过期备份（>{days} 天）", cfg)
+    return removed
+
+
+def cleanup_oss(cfg: dict) -> int:
+    """删除 OSS 中超过 BACKUP_RETENTION_OSS_DAYS 天的对象，返回删除数。"""
+    try:
+        import oss2
+    except ImportError:
+        raise RuntimeError("oss2 未安装，请执行: pip install oss2")
+    days = int(cfg["BACKUP_RETENTION_OSS_DAYS"])
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
+    prefix = cfg["BACKUP_OSS_PREFIX"]
+    bucket = _oss_bucket(cfg)
+    pattern = re.compile(rf"^{re.escape(prefix)}medagent-(\d{{8}})-\d{{4}}\.dump$")
+    removed = 0
+    for obj in oss2.ObjectIterator(bucket, prefix=prefix):
+        m = pattern.match(obj.key)
+        if not m:
+            continue
+        obj_date = datetime.datetime.strptime(m.group(1), "%Y%m%d")
+        if obj_date < cutoff:
+            bucket.delete_object(obj.key)
+            removed += 1
+    if removed:
+        log(f"OSS 清理: 删除 {removed} 个过期对象（>{days} 天）", cfg)
+    return removed
 
 
 def run_pg_dump(cfg: dict) -> Path:
@@ -113,11 +188,17 @@ def main() -> int:
     try:
         dump_path = run_pg_dump(cfg)
         validate_dump(dump_path, cfg)
+        if not args.local_only:
+            upload_oss(cfg, dump_path)   # 上传失败 → 异常中断，本地文件保留（7 天兜底）
+        cleanup_local(cfg)
+        if not args.local_only:
+            cleanup_oss(cfg)
     except Exception as exc:
         log(f"备份失败: {exc}", cfg)
         (ROOT / "logs" / "backup-failed").touch()
         return 1
-    log(f"备份完成: {dump_path.name}（--local-only={'是' if args.local_only else '否'}）", cfg)
+    (ROOT / "logs" / "backup-failed").unlink(missing_ok=True)
+    log("备份全流程完成", cfg)
     return 0
 
 
