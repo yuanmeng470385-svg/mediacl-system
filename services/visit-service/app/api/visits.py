@@ -153,19 +153,21 @@ async def process_transcript(
 @router.post("/{visit_id}/end")
 async def end_visit(
     visit_id: int,
-    request: dict,
     raw_request: Request,
+    request: dict | None = None,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """结束拜访：AI 生成结构化记录（摘要/关键点/兴趣点/异议/情感/下次计划）
 
     Request: {"full_transcript": "可选，完整对话文本，不传则用已累积的转写"}
+    说明：body 整体可选——移动端 endVisit 不带 body（真机联调 422：必填 dict 被 FastAPI
+    校验层拒绝，full_transcript 本身就是可选契约，body 不应是必填）。
     """
     _assert_visit_owner(db, visit_id, current_user)
     result = await _visit_manager.end_visit(
         db, visit_id, current_user["id"],
-        full_transcript=request.get("full_transcript"),
+        full_transcript=(request or {}).get("full_transcript"),
         auth_token=_auth_token(raw_request),
     )
     return success(result)
