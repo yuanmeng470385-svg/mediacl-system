@@ -98,6 +98,10 @@ docker build -f services/auth-service/Dockerfile -t medagent/auth-service .
 #   deploy/arms-monitor.py           ARMS 监控上报（RPC 签名，HMAC 密钥 = AK Secret + "&"，--dry-run）
 #   deploy/arms-alerts.yaml          ARMS 告警规则源文件（只保留有真实指标源的规则）
 #   scripts/ci-pipeline.yaml         阿里云云效 Flow 流水线；scripts/docker-verify.sh Docker 验证脚本
+
+# 数据库备份/恢复（详见下方 "Backup & Restore" 小节）
+python scripts/backup_db.py --local-only          # 本机备份+校验（开发）；ECS cron 每日 02:00 全流程
+python scripts/restore_db.py --source local --yes # 恢复到临时库验证可恢复性
 ```
 
 **运行测试必须在服务目录下执行** — 所有测试用 `sys.path.insert(0, ...)` 回溯三层找到 shared 模块，路径依赖 cwd。
@@ -438,6 +442,14 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **M17 web localStorage JWT 无 CSP + 前端零角色访问控制**（`client.ts:10`/`AuthContext.tsx:37`；`App.tsx:43-64` 路由守卫只验登录态）
 - **M18 specialist /live-status question_snippet 跨用户**（`specialists.py:101` + `activity_registry.py:54`）
 - **Low 批**（归档）：mobile release debug 签名（build.gradle:53-60）/AsyncStorage 明文 JWT/无 FLAG_SECURE/401 无全局登出；web CORS `*`+credentials（gateway main.py:68-69）、/health 泄露 backends 内网拓扑（:147-165）；specialist draft/disabled 专员配置对所有登录用户可见、默认 DB 口令硬编码（db_session.py:13-16）、/metrics 无鉴权；knowledge 上传仅校验扩展名不校验魔数（XSS 载体）、/search-test 泄露内部异常、/stats 泄露云资源 ID 与未上架计数、检索参数健壮性（product_id 非法值静默丢过滤/无长度限制）、feedback doc_id 不校验、被驳回文档百炼索引未清理（降级路径仍可命中）；compliance 报告导出无上限（report.py:90）、正则 ReDoS 可入库（rules.py:90-95）、审计 client_ip 信 XFF 首段（logs.py:280-285）、拦截记录/审计 JSONB 明文留存敏感片段；visit audio_url 无 scheme/域名校验（tingwu_client.py:50-53 SSRF/费用滥用）、end_visit 状态锁非原子 + 任务幂等 TOCTOU、NLS 会话失败静默吞掉无 error 帧、任务状态变更无审计日志；auth 验证码取号/作废非原子（code_store.py:92-111 并发可用两次）、审计 client_ip 可被 XFF 伪造
+
+## Backup & Restore（2026-08-12 新增）
+
+- **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：
+  `0 2 * * * cd /opt/medagent && python scripts/backup_db.py >> logs/backup.log 2>&1`
+- **失败留痕**：`logs/backup.log` 追加 + `logs/backup-failed` 标记文件 + 非零退出码。可用 cron MAILTO 或阿里云 CloudMonitor 自定义监控检查标记文件感知失败；开发环境无 OSS 凭证时用 `--local-only`（本地备份+校验，不上传）
+- **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
+- **恢复后注意**：audit_logs 所有权/权限（002 审计不可篡改迁移）需在新库重新执行；Redis 不备份（缓存数据可重建）；二进制输出经 docker exec 直写文件（Windows CRLF 安全）
 
 ## Gotchas
 

@@ -65,3 +65,6 @@ eval_report.json
 # --- 前端构建产物 / 工具目录 ---
 *.tsbuildinfo
 .superpowers/
+
+# --- 数据库备份产物（.env 由 BACKUP_DIR 指定，默认 ./backups）---
+backups/
