@@ -76,12 +76,6 @@ def log(msg: str, cfg: dict) -> None:
         f.write(line + "\n")
 
 
-def _docker_exec(cfg: dict, args: list, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
-    """docker exec 进 postgres 容器执行命令（带 PGPASSWORD）。"""
-    cmd = ["docker", "exec", "-e", f"PGPASSWORD={pg_password(cfg)}", cfg["BACKUP_PG_CONTAINER"], *args]
-    return subprocess.run(cmd, input=input_bytes, capture_output=True)
-
-
 def _oss_bucket(cfg: dict):
     """构造 oss2.Bucket（复用 .env 的 OSS_* 凭证）。凭证缺失/oss2 未装抛 RuntimeError。"""
     try:
@@ -165,6 +159,7 @@ def run_pg_dump(cfg: dict) -> Path:
     if proc.returncode != 0:
         dump_path.unlink(missing_ok=True)
         raise RuntimeError(f"pg_dump 失败: {proc.stderr.decode('utf-8', 'replace')[:500]}")
+    os.chmod(dump_path, 0o600)
     return dump_path
 
 
@@ -190,9 +185,15 @@ def main() -> int:
         validate_dump(dump_path, cfg)
         if not args.local_only:
             upload_oss(cfg, dump_path)   # 上传失败 → 异常中断，本地文件保留（7 天兜底）
-        cleanup_local(cfg)
+        try:
+            cleanup_local(cfg)
+        except Exception as exc:
+            log(f"本地清理失败（继续）: {exc}", cfg)
         if not args.local_only:
-            cleanup_oss(cfg)
+            try:
+                cleanup_oss(cfg)
+            except Exception as exc:
+                log(f"OSS 清理失败（继续）: {exc}", cfg)
     except Exception as exc:
         log(f"备份失败: {exc}", cfg)
         (ROOT / "logs" / "backup-failed").touch()

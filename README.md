@@ -182,7 +182,7 @@ http://gateway:8000/api/v1/compliance/check
 
 ECS 上 crontab 配置（每天 02:00，需先 pip install oss2 并把 .env 的 OSS_* 配置填好）：
 
-    0 2 * * * cd /opt/medagent && python scripts/backup_db.py >> logs/backup.log 2>&1
+    0 2 * * * cd /opt/medagent && python scripts/backup_db.py
 
 备份文件：本地 ./backups（保留 7 天）+ OSS <OSS_BUCKET>/backups/（保留 30 天，ACL 私有）。
 失败会写 logs/backup-failed 标记文件并以非零码退出，可用 CloudMonitor/MAILTO 监控。

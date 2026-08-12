@@ -69,6 +69,8 @@ def pick_dump(cfg: dict, source: str, dump_arg: str | None) -> Path:
 def ensure_target_db(cfg: dict, target_db: str, yes: bool) -> None:
     """目标库已存在时要求确认（--yes 跳过）后 drop 重建，owner 为 medagent。"""
     proc = _psql(cfg, "postgres", f"SELECT 1 FROM pg_database WHERE datname='{target_db}'")
+    if proc.returncode != 0:
+        raise RuntimeError(f"检查目标库失败: {proc.stderr.decode('utf-8', 'replace')[:300]}")
     exists = proc.stdout.decode("utf-8", "replace").strip() == "1"
     if exists:
         if not yes:
@@ -125,6 +127,8 @@ def main() -> int:
     args = parser.parse_args()
     cfg = load_config()
     try:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", args.target_db):
+            raise RuntimeError(f"目标库名非法（仅允许字母/数字/下划线）: {args.target_db}")
         dump_path = pick_dump(cfg, args.source, args.dump)
         ensure_target_db(cfg, args.target_db, args.yes)
         restore_dump(cfg, dump_path, args.target_db)

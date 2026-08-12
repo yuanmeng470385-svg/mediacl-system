@@ -446,7 +446,8 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：
-  `0 2 * * * cd /opt/medagent && python scripts/backup_db.py >> logs/backup.log 2>&1`
+  `0 2 * * * cd /opt/medagent && python scripts/backup_db.py`
+- **ECS 首次配置 cron 前**：先以 medagent_root 执行 scripts/migrations/007_grant_audit_seq.sql（002 降级后 medagent 无 superuser，无法自行 GRANT，否则首次备份必挂）
 - **失败留痕**：`logs/backup.log` 追加 + `logs/backup-failed` 标记文件 + 非零退出码。可用 cron MAILTO 或阿里云 CloudMonitor 自定义监控检查标记文件感知失败；开发环境无 OSS 凭证时用 `--local-only`（本地备份+校验，不上传）
 - **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
 - **恢复后注意**：audit_logs 所有权/权限（002 审计不可篡改迁移）需在新库重新执行；Redis 不备份（缓存数据可重建）；二进制输出经 docker exec 直写文件（Windows CRLF 安全）
