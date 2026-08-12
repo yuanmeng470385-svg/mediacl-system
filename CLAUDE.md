@@ -56,11 +56,11 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-11 全量 385 passed）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-12 全量 397 passed）
 cd services/auth-service && python -m pytest tests/ -v        # 50 用例（含 test_jwt_failfast.py）
-cd services/specialist-service && python -m pytest tests/ -v  # 71
-cd services/hcp-service && python -m pytest tests/ -v         # 36
-cd services/visit-service && python -m pytest tests/ -v       # 61
+cd services/specialist-service && python -m pytest tests/ -v  # 74
+cd services/hcp-service && python -m pytest tests/ -v         # 38
+cd services/visit-service && python -m pytest tests/ -v       # 68
 cd services/compliance-service && python -m pytest tests/ -v  # 59
 cd services/knowledge-service && python -m pytest tests/ -v   # 51
 cd services/audit-service && python -m pytest tests/ -v       # 19
@@ -316,7 +316,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 17 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 13（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
 
 **已知问题（2026-08-06 第四批后）**：
-- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮为入口提示 Alert（语音转写需在拜访中页使用——无拜访上下文），拜访中页为全链路流式语音输入。模拟器无麦克风，录音链路只验证到单测 + 构建，真机待实测；M19 已修复——轮询增量流式推流（录音中每 2s 读增量推送，stop 推完剩余并发 stop 帧）。
+- 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮为入口提示 Alert（语音转写需在拜访中页使用——无拜访上下文），拜访中页为全链路流式语音输入。2026-08-12 真机联调已实测（Android 13+ 麦克风运行时权限 / message_id UUID / 流式三守卫等修复见 Known Gaps 已修批）；M19 已修复——轮询增量流式推流（录音中每 2s 读增量推送，stop 推完剩余并发 stop 帧）。
 - 说话人标签已渲染（ASR 帧 speaker 字段，rep/doctor，缺省 rep）；服务端 NLS 分离参数名（enable_speaker_identity/speaker_diarization）待真机确认。
 - 聊天 WS 流式已接（走网关 8000），未配真实百炼 key 时未做模拟器端到端冒烟。
 - HelpCenter 已接合规规则接口（红线清单真实数据，reject 类规则）；联系方式仍为静态占位。
@@ -368,7 +368,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~听悟 _parse_result 恒空~~（按真实 GetTaskInfo 结构解析 result.text/result.sentences，speaker_id=0 用 is not None；另驳回写审计、归档清索引、登录失败写审计一并补上）
 - ~~**向量化链路从未真正生效**~~（EMBEDDING_DIM=1536 是错误假设，text-embedding-v3 最大 1024 维 → collection 以 1536 建库，每次 upsert 维度不匹配**静默失败**（DashVector 响应式 API 不抛异常 + 代码不查返回码），文档全部"上架成功但向量缺失"；已修 EMBEDDING_DIM=1024 + upsert/create 响应码检查（失败 raise）+ **删除重建 collection**；delete_doc 双 bug——Collection.delete 不支持 filter + filter 字符串必须双引号，改先 query(filter) 再 delete(ids=)）
 - ~~网关 knowledge 路由超时 30s→120s~~（百炼导入 ~28s + 向量化，30s 网关先断 → "业务完成但客户端 504"）
-- 测试基线（2026-08-11 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 61 = **385 passed**；mobile jest 70；web build PASS
+- 测试基线（2026-08-11 快照）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 36 / knowledge 51 / specialist 71 / visit 61 = **385 passed**；mobile jest 70；web build PASS
 
 已修（2026-08-11 第二批：web 医生管理 + 移动端语音链路，用户逐项拍板后实施）：
 - ~~web 新增医生占位 / AI 画像未展示~~（ModalForm 真实接线 POST /hcps；DoctorDetail 画像卡片含降级兼容；画像映射移植 mobile hcp.ts）
@@ -379,13 +379,24 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~百炼 App 未发布 → 对话恒降级 qwen~~（用户确认已发布，降级解决）
 - mobile host 集中：src/config.ts（API/ASR/聊天 WS 三处，真机改一处）
 
+已修（2026-08-12 真机联调批，commit ff2db8d..6290e1f，已推 origin/master）：
+- ~~end_visit 经专员链路中转~~（百炼 App 输出是聊天式散文，发布与否都满足不了 end_visit 的 JSON 契约，旧流程白付专员 ~8.4s + 二次生成 ~3.1s → 直调 qwen-max JSON prompt 一次生成 ~3-9s；**时间墙 = qwen-max 生成延迟**，qwen-flash ~2.4s 可把 `visit_manager.py` 的 `model="qwen-max"` 换名一键切换）
+- ~~end_visit 空转写写出空总结/合规 400~~（qwen 返回合法 JSON 但 summary 为空（空转写偶发）→ 视为不可用写占位串可重试；无转写内容直接占位串不发 AI 调用；转写合规预检与 qwen 生成**并发**执行；画像更新 fire-and-forget 不阻塞主流程）
+- ~~end_visit 请求体必填~~（移动端不带 body 422 弹"请求失败" → 改可选，接口签名兼容）
+- ~~hcp /profile 同步 LLM 占死事件循环~~（画像生成 8s 期间同网关 /hcps/{id}、/interactions 全部排队 7.7s → asyncio.to_thread 线程池；test_profile_event_loop.py 回归）
+- ~~specialist 空内容帧白等~~（App 未发布时空内容帧 150ms/帧 × 60 帧上限白等 ~9.2s → 连续 8 帧空文本提前降级 qwen ~1.2s；test_bailian_empty_fallback.py）
+- ~~NLS message_id 非 UUID~~（真实联调发现 task_id-N 被网关 40000002 MESSAGE_INVALID 拒绝 → 32 位 hex UUID）
+- ~~Android 录音静默失败~~（Android 13+ 麦克风运行时权限请求）+ ~~异议列表 key 冲突~~（全局唯一 key）
+- ~~录音双按双会话泄漏~~（press 入口同步防重入）；~~TTS 合成无超时~~（30s 超时 + 播放初始化错误透传底层信息）；~~asr 流式推流三处竞态~~（轮询重入门禁 / 空块自旋终止 / flush 串行链）
+- 测试基线（2026-08-12 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 38 / knowledge 51 / specialist 74 / visit 68 = **397 passed**；mobile jest 70（6 套件）；web build PASS
+
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做；ES_URL 未进 .env.example）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页
 - ~~web 医生管理：DoctorList「新增医生」按钮仅占位提示（无真实新增）；AI 画像接口 GET /hcps/{id}/profile 已定义但页面未展示（2026-08-11 全文件审计确认）~~（2026-08-11 已修：ModalForm 真实接线 + DoctorDetail AI 画像卡片）
 - 移动端：~~语音输入仍是 stub~~（2026-08-11 已修：真实链路已接 + 流式推流）；~~关键节点标记/话术建议实时推荐（需求标"后续版本"）~~（2026-08-11 已做 LLM 版：visit-service 节流推荐 + mobile 推荐区）；~~听悟 TTS 未接~~（2026-08-11 已接：NLS REST 合成 + mobile 朗读按钮）
 - NLS_APPKEY 已在 .env 配置位就绪（用户填真实 AppKey 后生效；开发联调 NLS_MOCK=1，Mock 文本不落库）；说话人分离参数名（enable_speaker_identity/speaker_diarization）待真机确认
 - ~~百炼 App 未发布（对话恒降级 qwen）~~（用户确认已发布，对话降级已解决）
-- 真机端到端未跑（流式推流 / TTS / 说话人分离待真机确认；host 已集中 mobile/src/config.ts，见 runbook 2.4）
+- 真机端到端部分实测（2026-08-12：录音流式推流 / TTS / 麦克风权限 / message_id 已真机联调并修复，见 Known Gaps 已修批；说话人分离参数名待最终确认；host 已集中 mobile/src/config.ts，见 runbook 2.4）
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - ~~网关限流为单进程内存版（--workers 2 时每 worker 独立限额）~~（486d440 接 Redis 分布式滑动窗口，内存版仅降级兜底）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
