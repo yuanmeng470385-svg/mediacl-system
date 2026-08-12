@@ -102,6 +102,7 @@ docker build -f services/auth-service/Dockerfile -t medagent/auth-service .
 # 数据库备份/恢复（详见下方 "Backup & Restore" 小节）
 python scripts/backup_db.py --local-only          # 本机备份+校验（开发）；ECS cron 每日 02:00 全流程
 python scripts/restore_db.py --source local --yes # 恢复到临时库验证可恢复性
+python scripts/restore_db.py --source oss --yes   # 从 OSS 取最近备份恢复（生产恢复演练）
 ```
 
 **运行测试必须在服务目录下执行** — 所有测试用 `sys.path.insert(0, ...)` 回溯三层找到 shared 模块，路径依赖 cwd。
@@ -447,10 +448,12 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：
   `0 2 * * * cd /opt/medagent && python scripts/backup_db.py`
-- **ECS 首次配置 cron 前**：先以 medagent_root 执行 scripts/migrations/007_grant_audit_seq.sql（002 降级后 medagent 无 superuser，无法自行 GRANT，否则首次备份必挂）
+  （**不要加 `>> logs/backup.log 2>&1`**：脚本 log() 已自写 backup.log，加重定向每行日志双写）
+- **ECS 上线顺序**：① 以 medagent_root 执行 `scripts/migrations/007_grant_audit_seq.sql`（002 降级后 medagent 无 superuser 无法自行 GRANT，缺了首次备份必挂）→ ② .env 填 OSS_* 凭证 → ③ 配 cron → ④ 手动跑一次 `backup_db.py` 验证
 - **失败留痕**：`logs/backup.log` 追加 + `logs/backup-failed` 标记文件 + 非零退出码。可用 cron MAILTO 或阿里云 CloudMonitor 自定义监控检查标记文件感知失败；开发环境无 OSS 凭证时用 `--local-only`（本地备份+校验，不上传）
-- **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
+- **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**；`--target-db` 仅允许 `[A-Za-z0-9_]+`（防注入）。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
 - **恢复后注意**：audit_logs 所有权/权限（002 审计不可篡改迁移）需在新库重新执行；Redis 不备份（缓存数据可重建）；二进制输出经 docker exec 直写文件（Windows CRLF 安全）
+- **2026-08-12 已验证**（本机全链路真实）：备份→校验→OSS 上传/过期清理（含删除测试对象无残留）→ 恢复 local+oss 双源三表行数一致（users 2/conversations 178/audit_logs 1418）→ 失败留痕三路径（dump 损坏/取消/非法库名均非零退出）→ 007 幂等重跑
 
 ## Gotchas
 
