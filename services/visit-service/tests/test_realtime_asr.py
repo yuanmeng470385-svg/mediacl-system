@@ -59,6 +59,17 @@ class TestRealtimeAsrClient:
         assert _percent_encode(" ") == "%20"
         assert _percent_encode("中文") == "%E4%B8%AD%E6%96%87"
 
+    def test_next_message_id_is_32_hex_uuid(self):
+        """NLS 要求 message_id 为 32 位十六进制 UUID（每次唯一）：
+        真实联调发现 "task_id-N" 格式被网关拒绝（40000002 MESSAGE_INVALID）"""
+        import re
+        client = RealtimeAsrClient(app_key="test-appkey")
+        for _ in range(5):
+            mid = client._next_message_id()
+            assert re.fullmatch(r"[0-9a-f]{32}", mid), f"message_id 应为 32 位 hex，实际 {mid!r}"
+        # 每次请求唯一
+        assert len({client._next_message_id() for _ in range(100)}) == 100
+
 
 class TestAsrWebSocket:
     def test_ws_rejects_without_token(self):

@@ -124,11 +124,11 @@ class RealtimeAsrClient:
         self.app_key = app_key or os.getenv("NLS_APPKEY", "")
         self._ws = None
         self._task_id = uuid.uuid4().hex
-        self._message_id = 0
 
     def _next_message_id(self) -> str:
-        self._message_id += 1
-        return f"{self._task_id}-{self._message_id}"
+        # NLS 要求 message_id 为 32 位十六进制 UUID（每次请求唯一）——真实联调发现
+        # "task_id-N" 格式被网关拒绝（Gateway:MESSAGE_INVALID:Invalid message id）
+        return uuid.uuid4().hex
 
     def _build_start_payload(self) -> dict:
         """StartTranscription 请求参数（说话人分离受 NLS_SPEAKER_ENABLED 控制）"""
