@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 # end_visit 可再次调用重试（重试成功覆盖占位串），避免记录永久锁死
 AI_SUMMARY_PLACEHOLDER = "（AI 总结生成失败，拜访尚未结束，可重试结束拜访）"
 
+# 合规拦截话术（转写内容预检 / AI 总结审核任一拦截时使用）：记录 ai_summary = 拦截话术
+# 视为"已结束"（内容本身有问题，重试无意义，人工复核后另行处理）
+AI_SUMMARY_BLOCKED = "该拜访总结因合规问题被拦截，请联系医学顾问复核。"
+
 # 同库直读 hcps / digital_specialists（数据属于 hcp-service / specialist-service，此处只读）
 _HCP_SQL = text("""
     SELECT id, name, hospital, department, title, specialty, region, tags
@@ -621,6 +625,31 @@ class VisitManager:
             logger.info("visit %s 自动创建任务 %s 条: %s", visit_id, len(created), created)
         return created
 
+    async def _generate_summary_json(self, prompt: str) -> Optional[Dict]:
+        """直调千问生成结构化总结（JSON prompt + system 约束，to_thread 防阻塞事件循环）
+
+        end_visit 不再经专员链路中转（真机联调 2026-08-12 实测）：
+        百炼 App 输出是聊天式散文，无论发布与否都无法满足 end_visit 的 JSON 契约，
+        旧流程每次都白付专员耗时 + 二次生成；直调一次 ~3s 稳定产出结构化结果。
+        返回解析后的结构化 dict；失败 / JSON 里 summary 为空（空转写时 qwen
+        偶发返回 {"summary": "", ...}）→ 返回 None，外层写占位串可重试 end。
+        """
+        try:
+            messages = [
+                {"role": "system", "content": "只输出 JSON，不要任何额外文字或 markdown 代码块。"},
+                {"role": "user", "content": prompt},
+            ]
+            resp = await asyncio.to_thread(
+                self.qwen.chat, messages, model="qwen-max", temperature=0.1, max_tokens=2000,
+            )
+            structured = _parse_json_content(resp.get("content", ""))
+            if structured and not str(structured.get("summary") or "").strip():
+                structured = None
+            return structured
+        except Exception as exc:
+            logger.warning("end_visit qwen 生成失败: %s", exc)
+            return None
+
     async def end_visit(
         self,
         db: Session,
@@ -629,7 +658,10 @@ class VisitManager:
         full_transcript: Optional[str] = None,
         auth_token: Optional[str] = None,
     ) -> Dict:
-        """结束拜访：调 A 生成结构化记录 → 合规审核 → 审计日志"""
+        """结束拜访：直调千问生成结构化记录（JSON 契约）→ 合规审核 → 审计日志
+
+        auth_token 保留参数（旧专员链路透传 JWT，直调后不再使用，接口签名兼容）
+        """
         record = VisitRepo.get(db, visit_id)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
@@ -663,37 +695,64 @@ class VisitManager:
   }}
 }}"""
 
-        specialist_id = self._resolve_specialist(db, record.product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
-        structured = _parse_json_content(result.get("answer", ""))
+        # 直调千问生成结构化总结（不再经专员链路——百炼 App 输出是聊天式散文，
+        # 无论发布与否都无法满足 end_visit 的 JSON 契约，旧流程每次白付专员耗时 +
+        # 二次生成；真机联调 2026-08-12 实测直调一次 ~3s 稳定产出结构化结果）
+        structured = None
+        compliance = {"blocked": False, "violations": [], "risk_level": "none"}
+        ai_ran = False
+        precheck_task = None
+        if transcript == "（无转写内容）":
+            # 无转写内容 → 无实质对话可总结：直写占位串（不发 AI 调用，可重试 end）
+            logger.warning("转写为空，跳过 AI 总结写占位串: visit_id=%s", visit_id)
+        else:
+            # 合规预检（防御纵深，对齐原专员链路提问侧预检）：转写先过合规再喂 AI。
+            # 与 qwen 生成并发执行（互不依赖，串行会白等一次 LLM 往返）；预检拦截时
+            # 丢弃生成结果走拦截路径（罕见场景多花一次生成调用，可接受）。
+            # check_compliance 客户端对失败安全放行（不抛异常），并发无 500 风险
+            precheck_task = asyncio.create_task(check_compliance(
+                transcript, {"user_id": user_id, "type": "user_input", "visit_id": visit_id},
+            ))
+            ai_ran = True
+            structured = await self._generate_summary_json(prompt)
+            precheck = await precheck_task
+            if precheck.get("blocked"):
+                logger.warning(
+                    f"转写内容被合规拦截: visit_id={visit_id} violations={precheck.get('violations')}"
+                )
+                structured = None
+                compliance = precheck
 
         if structured:
-            ai_summary = str(structured.get("summary", result.get("answer", "")))
+            ai_summary = str(structured.get("summary", ""))
             key_points = structured.get("key_points", [])
             interests = structured.get("hcp_interests", [])
             objections = structured.get("hcp_objections", [])
             follow_up = structured.get("follow_up_suggestions", [])
             sentiment = structured.get("sentiment", "neutral")
             next_plan = structured.get("next_visit_plan", {})
+        elif compliance.get("blocked"):
+            # 转写内容预检拦截 → 拦截话术（AI 未运行）
+            ai_summary = AI_SUMMARY_BLOCKED
+            key_points = interests = objections = follow_up = []
+            sentiment, next_plan = "neutral", {}
         else:
-            # AI 失败 / 输出不可解析 → 写占位串（不等于"已结束"），允许再次 end 重试
-            logger.warning(
-                "AI 总结不可用，写入占位串可重试: visit_id=%s error=%s",
-                visit_id, result.get("error") or "AI 输出无法解析",
-            )
+            # AI 失败 / 无转写 / 输出不可解析 → 写占位串（不等于"已结束"），允许再次 end 重试
+            logger.warning("AI 总结不可用，写入占位串可重试: visit_id=%s", visit_id)
             ai_summary = AI_SUMMARY_PLACEHOLDER
             key_points = interests = objections = follow_up = []
             sentiment, next_plan = "neutral", {}
 
-        # AI 输出合规审核（D）
-        compliance = await check_compliance(
-            ai_summary, {"user_id": user_id, "type": "ai_output", "visit_id": visit_id},
-        )
-        if compliance.get("blocked"):
-            logger.warning(f"拜访总结被合规拦截: visit_id={visit_id} violations={compliance.get('violations')}")
-            ai_summary = "该拜访总结因合规问题被拦截，请联系医学顾问复核。"
-            key_points = interests = objections = follow_up = []
-            sentiment, next_plan = "neutral", {}
+        # AI 输出合规审核（D）——预检已拦截则跳过（compliance 已带 blocked）
+        if not compliance.get("blocked"):
+            compliance = await check_compliance(
+                ai_summary, {"user_id": user_id, "type": "ai_output", "visit_id": visit_id},
+            )
+            if compliance.get("blocked"):
+                logger.warning(f"拜访总结被合规拦截: visit_id={visit_id} violations={compliance.get('violations')}")
+                ai_summary = AI_SUMMARY_BLOCKED
+                key_points = interests = objections = follow_up = []
+                sentiment, next_plan = "neutral", {}
 
         # 时长 = 开始到结束的分钟数
         duration = None
@@ -717,7 +776,7 @@ class VisitManager:
         await write_audit_log(
             user_id=user_id, action="visit_end",
             resource_type="visit", resource_id=str(visit_id),
-            ai_involved=True, ai_model="qwen-max",
+            ai_involved=ai_ran, ai_model="qwen-max" if ai_ran else None,
             ai_prompt=prompt[:2000], ai_response=ai_summary[:2000],
             compliance_result=compliance,
         )
@@ -728,9 +787,11 @@ class VisitManager:
         if structured:
             items = _parse_end_visit_tasks(follow_up, next_plan)
             self._create_tasks_idempotent(db, visit_id, user_id, items)
-        # 医生画像更新（必做项）：基于本次拜访的 AI 结构化结果
+        # 医生画像更新（必做项）：基于本次拜访的 AI 结构化结果。
+        # fire-and-forget：更新是 DB merge + 缓存失效（函数本意"失败不阻塞主流程"），
+        # 异步执行省去用户等待的 ~1s 网关往返；visit 记录已落库，画像后续可补
         if structured:
-            await _push_profile_update(record.hcp_id, structured, visit_id)
+            asyncio.create_task(_push_profile_update(record.hcp_id, structured, visit_id))
         logger.info(f"拜访结束: visit_id={visit_id} duration={duration}min sentiment={sentiment}")
         result = record.to_dict()
         result["visit_id"] = record.id  # 移动端契约：读取 visit_id

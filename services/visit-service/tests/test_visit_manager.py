@@ -182,6 +182,77 @@ async def _fake_specialist_previsit(specialist_id, question, user_id, session_id
 async def _fake_compliance_ok(content, context=None):
     return {"blocked": False, "violations": [], "risk_level": "none"}
 
+
+# end_visit 直调千问后（2026-08-12 真机联调），AI 总结来自 self.qwen 而非专员链路。
+# 测试环境有真实 DASHSCOPE_API_KEY，所有 end_visit 用例必须注入假 qwen 防真调。
+
+_SUMMARY_JSON = {
+    "summary": "本次拜访讨论了产品疗效和价格问题，医生持中性态度",
+    "key_points": ["价格讨论", "疗效认可"],
+    "hcp_interests": ["长期安全性", "医保政策"],
+    "hcp_objections": ["担心副作用"],
+    "follow_up_suggestions": ["发送III期文献", "预约下周电话随访"],
+    "sentiment": "neutral",
+    "next_visit_plan": {"recommended_time": "2026-08-10",
+                        "recommended_topics": ["安全性数据"],
+                        "materials_to_send": ["文献包"]}
+}
+
+
+class _FakeQwenOk:
+    """千问桩：JSON 契约 + system 约束，返回固定结构化总结"""
+
+    def chat(self, messages, **kwargs):
+        assert messages[0]["role"] == "system"
+        assert "输出 JSON" in messages[1]["content"]
+        return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+
+class _FakeQwenUser2:
+    """千问桩：user 2 的总结带唯一标记（数据隔离用例区分两条历史）"""
+
+    def chat(self, messages, **kwargs):
+        return {"content": json.dumps({
+            "summary": "用户2专属拜访总结",
+            "key_points": ["user2"],
+            "hcp_interests": [],
+            "hcp_objections": [],
+            "follow_up_suggestions": [],
+            "sentiment": "neutral",
+            "next_visit_plan": {},
+        })}
+
+
+class _FakeQwenFail:
+    """千问桩：调用抛异常（模拟 AI 不可用）"""
+
+    def chat(self, messages, **kwargs):
+        raise Exception("qwen 不可用")
+
+
+class _FakeQwenEmptySummary:
+    """千问桩：返回合法 JSON 但 summary 为空 —— 回归真机联调 visit 50 场景
+    （qwen-max 对空转写偶发输出 {"summary": "", ...}，旧代码会写出空总结并让
+    合规检查拿到空内容 400；修复后应视为不可用走占位串）"""
+
+    def chat(self, messages, **kwargs):
+        return {"content": json.dumps({
+            "summary": "",
+            "key_points": [],
+            "hcp_interests": [],
+            "hcp_objections": [],
+            "follow_up_suggestions": [],
+            "sentiment": "",
+            "next_visit_plan": {},
+        })}
+
+
+async def _fake_compliance_block_summary(content, context=None):
+    """只拦 AI 输出（ai_output），放行转写预检（user_input）"""
+    if context and context.get("type") == "ai_output":
+        return {"blocked": True, "violations": [{"rule": "R001", "reason": "test"}], "risk_level": "high"}
+    return {"blocked": False, "violations": [], "risk_level": "none"}
+
 async def _fake_specialist_followup(specialist_id, question, user_id, session_id=None, auth_token=None):
     """follow-up 专用：返回带 follow_up_items 的跟进建议"""
     return {"answer": json.dumps({
@@ -270,7 +341,7 @@ def test_end_visit_generates_record():
     """结束拜访 → AI 生成结构化记录并入库"""
     from app.core.visit_manager import VisitManager
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
     asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效和价格"))
@@ -283,12 +354,12 @@ def test_end_visit_generates_record():
 
 
 def test_end_visit_blocked_summary():
-    """合规拦截 AI 总结 → 使用模板话术替换"""
+    """合规拦截 AI 总结（转写预检放行，只拦 ai_output）→ 使用模板话术替换"""
     from app.core.visit_manager import VisitManager
-    vm_module.check_compliance = _fake_compliance_blocked
+    vm_module.check_compliance = _fake_compliance_block_summary
 
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
     asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="test"))
@@ -302,7 +373,7 @@ def test_follow_up():
     """跟进建议生成"""
     from app.core.visit_manager import VisitManager
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
     asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="test"))
@@ -418,36 +489,80 @@ def test_prepare_visit_ai_garbage_returns_empty_structure():
 def test_end_visit_ai_failure_writes_placeholder_then_retry():
     """AI 失败写占位串 → 不算已结束，可再次 end 重试，成功后覆盖占位串"""
     from app.core.visit_manager import VisitManager, AI_SUMMARY_PLACEHOLDER
+
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFail())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
     asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效和价格"))
 
-    vm_module.chat_with_specialist = _fake_specialist_fail
-    try:
-        result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-        assert result["ai_summary"] == AI_SUMMARY_PLACEHOLDER
-        # 占位串不算已结束 → 再次 end 不抛"已结束"，允许重试
-        result2 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-        assert result2["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+    result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+    # 占位串不算已结束 → 再次 end 不抛"已结束"，允许重试
+    result2 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result2["ai_summary"] == AI_SUMMARY_PLACEHOLDER
 
-        # AI 恢复后重试成功 → 占位串被真实总结覆盖
-        vm_module.chat_with_specialist = _fake_specialist_ok
-        result3 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-        assert result3["ai_summary"] != AI_SUMMARY_PLACEHOLDER
-        assert "本次拜访" in result3["ai_summary"]
+    # AI 恢复后重试成功 → 占位串被真实总结覆盖
+    mgr.qwen = _FakeQwenOk()
+    result3 = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result3["ai_summary"] != AI_SUMMARY_PLACEHOLDER
+    assert "本次拜访" in result3["ai_summary"]
+
+
+def test_end_visit_qwen_empty_summary_writes_placeholder():
+    """qwen 返回合法 JSON 但 summary 为空 → 视为不可用写占位串
+
+    回归真机联调 visit 50（2026-08-12）：qwen-max 对空转写偶发输出
+    {"summary": "", ...}，旧代码写出空总结记录，且合规检查拿空内容报 400。
+    """
+    from app.core.visit_manager import VisitManager, AI_SUMMARY_PLACEHOLDER
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenEmptySummary())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
+    result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+
+
+def test_end_visit_empty_transcript_skips_ai():
+    """无转写内容 → 不发 AI 调用直写占位串（假 qwen 抛异常，若被调用测试必炸）"""
+    from app.core.visit_manager import VisitManager, AI_SUMMARY_PLACEHOLDER
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFail())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    result = asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+    assert result["ai_summary"] == AI_SUMMARY_PLACEHOLDER
+
+
+def test_end_visit_transcript_precheck_blocked():
+    """转写内容合规预检拦截 → 拦截话术，标记 blocked，qwen 已并发生成但结果被丢弃（不建任务）"""
+    from app.core.visit_manager import VisitManager, AI_SUMMARY_BLOCKED
+    from app.db.repositories.task_repo import TaskRepo
+    db = FakeDb()
+    vm_module.check_compliance = _fake_compliance_blocked  # 全部类型都拦
+    try:
+        mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())  # 生成成功但应被丢弃
+        start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+        visit_id = start["id"]
+        asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="违禁内容"))
+        result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert result["ai_summary"] == AI_SUMMARY_BLOCKED
+        assert FakeDb._records[visit_id].compliance_flags["blocked"] is True
+        # qwen 已成功产出结构化结果，但预检拦截 → 丢弃，不建任务
+        assert TaskRepo.list_by_visit(db, visit_id) == []
     finally:
-        vm_module.chat_with_specialist = _fake_specialist_ok
+        vm_module.check_compliance = ORIG_COMP
 
 
 def test_end_visit_no_duplicate_after_success():
     """成功结束后再次 end → 抛业务错误（不可重复覆盖）"""
     from app.core.visit_manager import VisitManager
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="test"))
     asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
     try:
         asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
@@ -458,18 +573,6 @@ def test_end_visit_no_duplicate_after_success():
 
 # ---------- 修复 5：pre-visit 历史隔离（S4，跨用户数据泄露） ----------
 
-async def _fake_specialist_user2(specialist_id, question, user_id, session_id=None, auth_token=None):
-    """user 2 的 end_visit 总结：内容带唯一标记，用于区分两条历史记录"""
-    return {"answer": json.dumps({
-        "summary": "用户2专属拜访总结",
-        "key_points": ["user2"],
-        "hcp_interests": [],
-        "hcp_objections": [],
-        "follow_up_suggestions": [],
-        "sentiment": "neutral",
-        "next_visit_plan": {},
-    }), "blocked": False, "session_id": "test-session"}
-
 
 def test_prepare_visit_history_scoped_to_current_user():
     """S4 数据隔离：同一医生，不同用户 pre-visit 只看到自己的历史拜访
@@ -479,28 +582,27 @@ def test_prepare_visit_history_scoped_to_current_user():
     """
     from app.core.visit_manager import VisitManager
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
 
-    # user 1 完成一次拜访（总结 A）
+    # user 1 完成一次拜访（总结来自 qwen 桩）
     v1 = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, v1["id"], user_id=1, text_content="user1 的拜访"))
     asyncio.run(mgr.end_visit(db, v1["id"], user_id=1))
 
-    # user 2 对同一医生完成一次拜访（总结 B，带唯一标记）
-    vm_module.chat_with_specialist = _fake_specialist_user2
-    try:
-        v2 = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=2, product_id=1))
-        asyncio.run(mgr.end_visit(db, v2["id"], user_id=2))
-    finally:
-        vm_module.chat_with_specialist = _fake_specialist_ok
+    # user 2 对同一医生完成一次拜访（总结带唯一标记）
+    mgr2 = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenUser2())
+    v2 = asyncio.run(mgr2.start_visit(db, hcp_id=1, user_id=2, product_id=1))
+    asyncio.run(mgr2.process_transcript(db, v2["id"], user_id=2, text_content="user2 的拜访"))
+    asyncio.run(mgr2.end_visit(db, v2["id"], user_id=2))
 
     # user 1 的 pre-visit：只有自己的 1 条历史，不含 user 2 的总结
     r1 = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=1, product_id=1))
     assert len(r1["history"]) == 1, f"user1 应只看到自己 1 条历史，实际 {len(r1['history'])} 条"
-    assert r1["history"][0]["ai_summary"] == "本次拜访讨论了产品疗效和价格问题，医生持中性态度"
+    assert r1["history"][0]["ai_summary"] == _SUMMARY_JSON["summary"]
     assert "用户2专属" not in json.dumps(r1["history"], ensure_ascii=False)
 
     # user 2 的 pre-visit：只有自己的 1 条历史
-    r2 = asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=2, product_id=1))
+    r2 = asyncio.run(mgr2.prepare_visit(db, hcp_id=1, user_id=2, product_id=1))
     assert len(r2["history"]) == 1, f"user2 应只看到自己 1 条历史，实际 {len(r2['history'])} 条"
     assert r2["history"][0]["ai_summary"] == "用户2专属拜访总结"
 
@@ -512,9 +614,10 @@ def test_end_visit_auto_creates_tasks():
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
     asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
 
     tasks = TaskRepo.list_by_visit(db, visit_id)
@@ -540,33 +643,31 @@ def test_end_visit_ai_failure_creates_no_tasks_then_retry_creates():
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFail())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
 
-    vm_module.chat_with_specialist = _fake_specialist_fail
-    try:
-        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-        assert TaskRepo.list_by_visit(db, visit_id) == [], "AI 失败路径不应建任务"
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert TaskRepo.list_by_visit(db, visit_id) == [], "AI 失败路径不应建任务"
 
-        # AI 恢复重试成功 → 建任务
-        vm_module.chat_with_specialist = _fake_specialist_ok
-        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-        assert len(TaskRepo.list_by_visit(db, visit_id)) > 0
-    finally:
-        vm_module.chat_with_specialist = _fake_specialist_ok
+    # AI 恢复重试成功 → 建任务
+    mgr.qwen = _FakeQwenOk()
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert len(TaskRepo.list_by_visit(db, visit_id)) > 0
 
 
 def test_end_visit_compliance_blocked_creates_no_tasks():
-    """合规拦截 AI 总结 → follow_up/next_plan 清空，不建任务"""
+    """合规拦截 AI 总结（转写预检放行，只拦 ai_output）→ follow_up/next_plan 清空，不建任务"""
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
 
-    vm_module.check_compliance = _fake_compliance_blocked
+    vm_module.check_compliance = _fake_compliance_block_summary
     try:
         asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
         assert TaskRepo.list_by_visit(db, visit_id) == [], "合规拦截路径不应建任务"
@@ -579,9 +680,10 @@ def test_follow_up_does_not_duplicate_tasks_after_end_visit():
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
     asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
     before = len(TaskRepo.list_by_visit(db, visit_id))
     assert before > 0

@@ -1,4 +1,5 @@
 """医生/专家管理服务 API 路由"""
+import asyncio
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -114,7 +115,12 @@ async def get_hcp_profile(
 
     hcp = _get_hcp_or_404(db, hcp_id)
     generator = ProfileGenerator()
-    result = generator.generate(db, hcp, user_id=None if view_all else current_user["id"])
+    # LLM 调用是同步阻塞（OpenAI SDK）——丢线程池执行，防事件循环被占：
+    # 真机实测画像生成 ~8s 期间 hcp-service 其他请求（/hcps/{id}、/interactions）
+    # 全部排队 7.7s（同一时间网关同时发来三请求，只有 LLM 结束才一起返回）
+    result = await asyncio.to_thread(
+        lambda: generator.generate(db, hcp, user_id=None if view_all else current_user["id"])
+    )
     result["hcp"] = hcp.to_dict()
     hcp_cache.set(cache_key, result)
 

@@ -17,6 +17,10 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
+# App 未发布时百炼下发空文本帧约 150ms/帧：8 帧 ≈ 1.2s 无内容即判定无回复，
+# 提前降级（qwen）而不是等满 60 帧（~9s）。正常流式回复首字远快于此阈值。
+_MAX_EMPTY_FRAMES = 8
+
 
 class BailianClient:
     """阿里云百炼多模态交互客户端"""
@@ -159,12 +163,24 @@ class BailianClient:
             await ws.send(json.dumps(respond_msg, ensure_ascii=False))
 
             # ---- Step 4: 接收回答（逐帧 yield）----
+            # App 未发布/无回复时百炼持续下发空文本 RespondingContent 帧
+            # （实测约 150ms/帧）——旧实现等满 60 帧才超时降级，白白等待 ~9s；
+            # 连续空帧计数达到阈值即判定无回复，提前降级（真机联调 2026-08-12）
+            empty_frames = 0
             for _ in range(60):
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=self.timeout))
                 ev = msg.get("payload", {}).get("output", {}).get("event", "")
                 if ev == "RespondingContent":
                     output = msg["payload"]["output"]
                     text = output.get("text", "")
+                    if text.strip():
+                        empty_frames = 0
+                    else:
+                        empty_frames += 1
+                        if empty_frames >= _MAX_EMPTY_FRAMES:
+                            raise BailianException(
+                                f"百炼 App 连续 {empty_frames} 帧空内容（疑似未发布或未启用回复），提前降级"
+                            )
                     finished = output.get("finished", False)
                     answer_parts.append(text)  # 流式增量，每次是全量
                     # 引用溯源：解析 extra_info.docs（缺省/结构不符时防御式跳过）
