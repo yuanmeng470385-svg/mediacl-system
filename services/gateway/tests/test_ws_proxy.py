@@ -97,6 +97,48 @@ def test_ws_proxy_rejects_invalid_token():
             assert msg["code"] == 4401
 
 
+def _record_url_factory(seen, fake):
+    """记录上游 URL 的工厂（工厂调用先于首帧转发，收到帧时 seen 必已就绪）"""
+
+    def _factory(url):
+        seen["url"] = url
+        return fake
+
+    return _factory
+
+
+def test_ws_proxy_auth_frame_token_not_in_upstream_url():
+    """E1（2026-08-13）：首帧 auth 协议时 token 不拼进上游 URL query
+    —— JWT 不进 specialist uvicorn 访问日志；仅旧客户端 query 兜底才附带"""
+    from shared.common.auth import create_token
+    seen = {}
+    fake = FakeUpstream()
+    set_upstream_factory(_record_url_factory(seen, fake))
+    token = create_token(user_id=1, username="rep1", role="rep")
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/specialists/1/chat/ws") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
+            assert fake.received_event.wait(2.0), "代理未把首帧转发给上游"
+            assert "token=" not in seen["url"]
+            assert seen["url"].endswith("/ws/specialists/1/chat")
+
+
+def test_ws_proxy_query_token_kept_in_upstream_url():
+    """E1：旧客户端（query token 兜底）—— 上游 URL 保留 query token"""
+    from shared.common.auth import create_token
+    seen = {}
+    fake = FakeUpstream()
+    set_upstream_factory(_record_url_factory(seen, fake))
+    token = create_token(user_id=1, username="rep1", role="rep")
+
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/api/v1/specialists/1/chat/ws?token={token}") as ws:
+            ws.send_text(json.dumps({"type": "question", "text": "你好"}))
+            assert fake.received_event.wait(2.0)
+            assert f"?token={token}" in seen["url"]
+
+
 class FakeUpstreamClosing(FakeUpstream):
     """receive_text 立即抛 ConnectionClosed(close_code)，模拟上游主动带码关闭"""
 

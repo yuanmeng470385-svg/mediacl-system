@@ -14,6 +14,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
+from app.api import hcps as hcps_api  # noqa: E402
 from app.models.hcp import Hcp  # noqa: E402
 from shared.common.db_session import get_db  # noqa: E402
 from shared.common.auth import get_current_user  # noqa: E402
@@ -71,9 +72,16 @@ async def _fake_current_user():
     return {"id": 1, "username": "tester", "role": "admin"}
 
 
+async def _fake_audit_log(**kwargs):
+    """E7 后 create/update 会调 write_audit_log —— 测试内 stub 掉，
+    不发真实 HTTP 审计请求（保持本文件只验证白名单契约、且确定性无网络）"""
+    return None
+
+
 @pytest.fixture
-def client():
+def client(monkeypatch):
     db = FakeDb()
+    monkeypatch.setattr(hcps_api, "write_audit_log", _fake_audit_log)
 
     def _override_db():
         yield db

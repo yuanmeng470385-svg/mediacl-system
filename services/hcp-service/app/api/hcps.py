@@ -2,9 +2,9 @@
 import asyncio
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.orm import Session
-from shared.common.response import success, ParamError
+from shared.common.response import success, ParamError, BusinessError
 from shared.common.auth import get_current_user, require_roles
 from shared.common.internal_auth import require_internal_key
 
@@ -25,10 +25,27 @@ logger = logging.getLogger(__name__)
 
 
 def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
+    # E4（2026-08-13）：裸 HTTPException(detail="医生档案不存在") → BusinessError
+    # code 4001（业务错误区间）。经 Wave 1 共享处理器渲染为统一形状
+    # {code:4001, message, data}（HTTP 422），语义 code 比按 status 映射的
+    # 4000 更准确（函数名保留，避免改散全部调用点与测试注入）。
     hcp = HcpRepo.get(db, hcp_id)
     if not hcp:
-        raise HTTPException(status_code=404, detail="医生档案不存在")
+        raise BusinessError("医生档案不存在", code=4001)
     return hcp
+
+
+def _parse_hcp_id(hcp_id) -> int:
+    """路径参数 hcp_id 显式整数校验（E4，2026-08-13）。
+
+    路由声明 hcp_id: str，非法值（非数字串）在这里抛 ParamError（400，
+    code 1000 统一形状），替代 FastAPI 默认 422 —— 形状/语义与本服务其余
+    参数错误一致。
+    """
+    try:
+        return int(hcp_id)
+    except (TypeError, ValueError):
+        raise ParamError("hcp_id 必须为整数")
 
 
 def _invalidate_hcp_cache(hcp_id: int) -> None:
@@ -43,6 +60,10 @@ def _validate_hcp_fields(request: dict) -> dict:
     只接受 HCP_WRITABLE_FIELDS 字段；id/created_at/updated_at 等系统字段
     与未知 key 一律 400 —— 否则客户端可借此覆盖主键/时间戳/任意列。
     """
+    # E5（2026-08-13）：请求体非 dict（防御 FastAPI 校验之外的直调/签名漂移）
+    # → ParamError，而非 .keys() AttributeError 冒泡成 500
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须为 JSON 对象")
     extra = set(request.keys()) - HCP_WRITABLE_FIELDS
     if extra:
         raise ParamError(f"不允许的字段: {sorted(extra)}")
@@ -77,11 +98,12 @@ async def list_hcps(
 
 @router.get("/{hcp_id}")
 async def get_hcp(
-    hcp_id: int,
+    hcp_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """医生详情（Redis 缓存：hcp:{id}，TTL 300s；写路径即时失效，见 _invalidate_hcp_cache）"""
+    hcp_id = _parse_hcp_id(hcp_id)
     cached = hcp_cache.get(f"hcp:{hcp_id}")
     if cached is not None:
         return success(cached)
@@ -94,7 +116,7 @@ async def get_hcp(
 
 @router.get("/{hcp_id}/profile")
 async def get_hcp_profile(
-    hcp_id: int,
+    hcp_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -105,6 +127,7 @@ async def get_hcp_profile(
     拉取全部代表与该医生的互动细节）。缓存按查看者分键（profile:{id}:all /
     profile:{id}:u{uid}），避免不同视角内容串用户。
     """
+    hcp_id = _parse_hcp_id(hcp_id)
     view_all = current_user.get("role") in ("admin", "manager")
     viewer_key = "all" if view_all else f"u{current_user['id']}"
     cache_key = f"profile:{hcp_id}:{viewer_key}"
@@ -140,7 +163,7 @@ async def get_hcp_profile(
 
 @router.get("/{hcp_id}/interactions")
 async def get_hcp_interactions(
-    hcp_id: int,
+    hcp_id: str,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -149,6 +172,7 @@ async def get_hcp_interactions(
     S7 权限：admin/manager 可见全部代表的记录；其他角色（rep 等）只能看到
     自己的记录 —— 与 visit 侧 S4 规则一致，防跨用户泄漏他人拜访总结。
     """
+    hcp_id = _parse_hcp_id(hcp_id)
     _get_hcp_or_404(db, hcp_id)
     if current_user.get("role") in HCP_ADMIN_ROLES:
         user_id = None  # 管理角色：不过滤
@@ -172,23 +196,42 @@ async def create_hcp(
     if not name:
         raise ParamError("name 不能为空")
     hcp = HcpRepo.create(db, data)
+    # E7（2026-08-13）：写操作留痕（与 profile-update 同口径，失败不影响业务）
+    await write_audit_log(
+        user_id=current_user["id"],
+        action="hcp_create",
+        resource_type="hcp",
+        resource_id=str(hcp.id),
+        after_value=data,
+    )
     return success(hcp.to_dict(), "医生档案已创建")
 
 
 @router.put("/{hcp_id}")
 async def update_hcp(
-    hcp_id: int,
+    hcp_id: str,
     request: dict,
     current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
     """编辑医生档案（仅白名单字段）"""
+    hcp_id = _parse_hcp_id(hcp_id)
     data = _validate_hcp_fields(request)
     hcp = _get_hcp_or_404(db, hcp_id)
+    before = hcp.to_dict()
     if "name" in data and not (data.get("name") or "").strip():
         raise ParamError("name 不能为空")
     hcp = HcpRepo.update(db, hcp, data)
     _invalidate_hcp_cache(hcp_id)  # 档案变更：缓存即时失效
+    # E7（2026-08-13）：编辑留痕（before/after，仅记白名单字段实际变更）
+    await write_audit_log(
+        user_id=current_user["id"],
+        action="hcp_update",
+        resource_type="hcp",
+        resource_id=str(hcp_id),
+        before_value=before,
+        after_value=data,
+    )
     return success(hcp.to_dict())
 
 
@@ -217,6 +260,18 @@ async def batch_import_hcps(
         raise ParamError("未找到有效数据（第一行为表头，姓名必填）")
 
     imported, errors = HcpRepo.batch_create(db, rows)
+    # E7（2026-08-13）：批量导入留痕（after 记汇总数字；单行明细由审计服务
+    # 按 request_id 关联，避免响应体级大对象塞进审计 payload）
+    await write_audit_log(
+        user_id=current_user["id"],
+        action="hcp_batch_import",
+        resource_type="hcp",
+        after_value={
+            "total": len(rows),
+            "imported": imported,
+            "failed": len(errors),
+        },
+    )
     return success(
         {
             "total": len(rows),
@@ -232,7 +287,7 @@ async def batch_import_hcps(
 
 @router.post("/{hcp_id}/tags")
 async def add_hcp_tags(
-    hcp_id: int,
+    hcp_id: str,
     request: dict,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -243,29 +298,55 @@ async def add_hcp_tags(
     代表的日常工作（兴趣点落标签），放开为任意登录用户；标签是协作性元数据，
     非敏感档案字段（画像/互动详情仍受角色限制）。
     """
+    hcp_id = _parse_hcp_id(hcp_id)
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须为 JSON 对象")
     tags = request.get("tags", [])
     if not tags:
         raise ParamError("tags 不能为空")
     hcp = _get_hcp_or_404(db, hcp_id)
+    before_tags = list(hcp.tags or [])
     hcp = HcpRepo.add_tags(db, hcp, tags)
     _invalidate_hcp_cache(hcp_id)
+    # E7（2026-08-13）：标签增删留痕（before/after 标签列表）
+    await write_audit_log(
+        user_id=current_user["id"],
+        action="hcp_tags_add",
+        resource_type="hcp",
+        resource_id=str(hcp_id),
+        before_value={"tags": before_tags},
+        after_value={"tags": hcp.tags},
+    )
     return success(hcp.to_dict())
 
 
 @router.delete("/{hcp_id}/tags")
 async def remove_hcp_tags(
-    hcp_id: int,
+    hcp_id: str,
     request: dict,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """删除标签 {"tags": ["KOL"]}（与 add 同口径：任意登录用户，B5 放开）"""
+    hcp_id = _parse_hcp_id(hcp_id)
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须为 JSON 对象")
     tags = request.get("tags", [])
     if not tags:
         raise ParamError("tags 不能为空")
     hcp = _get_hcp_or_404(db, hcp_id)
+    before_tags = list(hcp.tags or [])
     hcp = HcpRepo.remove_tags(db, hcp, tags)
     _invalidate_hcp_cache(hcp_id)
+    # E7（2026-08-13）：标签增删留痕（before/after 标签列表）
+    await write_audit_log(
+        user_id=current_user["id"],
+        action="hcp_tags_remove",
+        resource_type="hcp",
+        resource_id=str(hcp_id),
+        before_value={"tags": before_tags},
+        after_value={"tags": hcp.tags},
+    )
     return success(hcp.to_dict())
 
 
@@ -280,12 +361,17 @@ async def update_hcp_profile_from_visit(
     """拜访后画像更新（内部接口，visit-service 调用）：
     {hcp_id, academic_background?, prescription_preference?, influence_level?, tags?, source, visit_id?}
     """
+    # E5（2026-08-13）：请求体非 dict → ParamError（防 .get() AttributeError 冒泡 500）
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须为 JSON 对象")
     hcp_id = request.get("hcp_id")
-    if not hcp_id:
-        raise ParamError("hcp_id 不能为空")
+    # E4（2026-08-13）：hcp_id 显式正整数校验（bool 是 int 子类，单独排除）
+    if isinstance(hcp_id, bool) or not isinstance(hcp_id, int) or hcp_id <= 0:
+        raise ParamError("hcp_id 必须为正整数")
     hcp = HcpRepo.get(db, hcp_id)
     if not hcp:
-        raise HTTPException(status_code=404, detail="医生档案不存在")
+        # E4：裸 HTTPException 404 → BusinessError code 4001（统一形状 + 业务语义码）
+        raise BusinessError("医生档案不存在", code=4001)
     updates = {
         "academic_background": request.get("academic_background"),
         "prescription_preference": request.get("prescription_preference"),

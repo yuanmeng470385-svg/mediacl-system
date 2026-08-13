@@ -94,6 +94,25 @@ class TestHcpCacheUnit:
         assert c.get("profile:1:u9") is None
         assert c.get("profile:2:all") is not None
 
+    def test_invalidate_profile_exact_id_prefix(self):
+        """E6（2026-08-13）：scan 模式 hcpcache:profile:{id}:* 精确匹配 ——
+        清 hcp 1 不得误删 hcp 10/11/100 的付费画像缓存；历史单键 profile:{id}
+        仍单独删除（H3 之前遗留键的兼容承诺）"""
+        c = self._cache()
+        c.set("profile:1:all", {"ai_profile": {}})
+        c.set("profile:1:u5", {"ai_profile": {}})
+        c.set("profile:1", {"ai_profile": {}})           # H3 之前的历史单键
+        c.set("profile:10:all", {"ai_profile": {}})      # 旧模式 profile:1* 会误伤
+        c.set("profile:11:u3", {"ai_profile": {}})
+        c.set("profile:100:all", {"ai_profile": {}})
+        c.invalidate_profile(1)
+        assert c.get("profile:1:all") is None
+        assert c.get("profile:1:u5") is None
+        assert c.get("profile:1") is None
+        assert c.get("profile:10:all") is not None
+        assert c.get("profile:11:u3") is not None
+        assert c.get("profile:100:all") is not None
+
     def test_redis_down_fail_open(self):
         c = HcpCache(redis_url="redis://localhost:1/0")
 

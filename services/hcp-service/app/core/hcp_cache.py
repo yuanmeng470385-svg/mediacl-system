@@ -75,12 +75,17 @@ class HcpCache:
 
         画像键现为 profile:{id}:all（admin/manager 全量）与 profile:{id}:u{uid}
         （rep 本人视角），不再只删一个键；同时兼容删除历史单键 profile:{id}。
+
+        E6（2026-08-13）：扫描模式必须带冒号 hcpcache:profile:{hcp_id}:* ——
+        无冒号的 profile:{hcp_id}* 会把更大编号医生误伤（如写 hcp 1 时
+        profile:1* 命中 profile:10:all / 11 / 100，付费画像缓存被误删）。
+        历史单键 profile:{id} 无后缀，单独精确删除，保持原兼容承诺。
         """
         try:
             client = self._client()
-            prefix = f"hcpcache:profile:{hcp_id}"
-            for key in client.scan_iter(f"{prefix}*", count=100):
+            for key in client.scan_iter(f"hcpcache:profile:{hcp_id}:*", count=100):
                 client.delete(key)
+            client.delete(f"hcpcache:profile:{hcp_id}")  # H3 之前的历史单键
         except Exception as exc:
             self._unavailable(exc)
 

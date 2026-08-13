@@ -256,6 +256,15 @@ async def system_config(request: Request):
 
     返回各关键配置项"是否已配置"（布尔），绝不返回密钥值本身；
     在线不可修改 —— 配置由 .env 环境变量管理，改后重启服务生效。
+
+    E2（2026-08-13）残余风险记录（明确披露，不静默假装已修）：admin 判定信
+    AuthMiddleware 验签后注入 scope["user"] 的 token 快照，未实时查库复验
+    role/status —— 账号被停用/降级后，旧 token 最长 JWT_EXPIRES_IN（默认 7 天）
+    内仍可访问本端点。风险面有限：只读、只返回"是否已配置"布尔（绝不返回密钥
+    值）、不可修改配置。gateway 无数据库依赖（config 无 DATABASE_URL 项，
+    requirements 未含 sqlalchemy/psycopg2），无法仿 shared.common.auth.
+    get_current_user 实时查库；若后续为 gateway 接入 DB，应在此实时查库
+    （role=admin 且 status=active 才放行），不得继续只信 token 快照。
     """
     user = request.scope.get("user") or {}
     if user.get("role") != "admin":
@@ -360,8 +369,22 @@ async def proxy(request: Request, path: str):
 
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
+                try:
+                    body = response.json()
+                except json.JSONDecodeError:
+                    # E3（2026-08-13）：上游声称 JSON 但 body 无法解析（截断/代理层
+                    # 返回 HTML 等）—— 统一 502 {code,message,data}，不再冒泡成
+                    # 500 纯文本。code 5005（网关侧：5001=连不上 503、5002=超时 504、
+                    # 5003=限流 429、5004=协议异常 502）。
+                    logger.error(
+                        f"上游响应 JSON 解析失败: {target_url} (status={response.status_code})"
+                    )
+                    return JSONResponse(
+                        status_code=502,
+                        content={"code": 5005, "message": "上游响应解析失败", "data": None},
+                    )
                 return JSONResponse(
-                    content=response.json(),
+                    content=body,
                     status_code=response.status_code,
                     headers=_forward_headers(response),
                 )
@@ -436,6 +459,7 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
     # 拦 HTTP）→ 此前网关对 WS 零鉴权，token 仅透传上游。先 accept 再验（accept 前
     # close 的 4401 到不了客户端），无效 token 关 4401 与上游语义一致。
     token = websocket.query_params.get("token", "")
+    token_from_query = bool(token)  # E1：query 兜底标记（仅旧客户端），决定上游 URL 是否带 token
     await websocket.accept()
     # 首帧鉴权：新协议首帧 {"type":"auth","token"}（token 不进 query/访问日志）；
     # 旧客户端（query token）首帧即 question 帧 → 回退 query，缓存该帧透传上游
@@ -448,6 +472,7 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
             first_msg = {}
         if first_msg.get("type") == "auth" and first_msg.get("token"):
             token = str(first_msg["token"])
+            token_from_query = False  # 首帧 auth 协议：token 不进上游 URL query
             first_frame = raw_first  # auth 帧也要透传上游（上游同样按首帧鉴权）
         else:
             first_frame = raw_first  # 旧客户端 question 帧
@@ -462,13 +487,16 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
         await websocket.close(code=4401)
         return
 
-    # 上游连接 specialist-service 的 WS 端点，query token 原样透传（旧客户端兜底；
-    # 新客户端 token 在 auth 帧，上游按首帧鉴权）
+    # 上游连接 specialist-service 的 WS 端点。E1（2026-08-13）：仅旧客户端
+    # （query 兜底，token_from_query=True）才在 URL 附带 query token —— 新协议
+    # token 走首帧 auth 帧，不再拼进上游 URL（JWT 不进 specialist uvicorn 访问日志）。
     ws_scheme = "wss" if settings.SPECIALIST_SERVICE_URL.startswith("https") else "ws"
     upstream_url = (
         f"{ws_scheme}://{settings.SPECIALIST_SERVICE_URL.split('://')[1]}"
-        f"/ws/specialists/{specialist_id}/chat?token={token}"
+        f"/ws/specialists/{specialist_id}/chat"
     )
+    if token_from_query:
+        upstream_url += f"?token={token}"
     factory = _upstream_factory or _default_upstream
     try:
         # 工厂可同步返回上游对象，也可返回协程（默认实现是 async 的）
