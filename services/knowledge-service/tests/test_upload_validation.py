@@ -234,6 +234,50 @@ def test_upload_txt_ok(monkeypatch):
     assert manager.upload_kwargs["doc_type"] == "guideline"
 
 
+# ---------- C3: 上传列长校验（title 500 / source 200 / version 20） ----------
+
+def test_upload_title_too_long_400(monkeypatch):
+    """C3：title 超过 500 字符 → 400（否则 DB varchar(500) DataError 500）"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post(
+        "/api/v1/knowledge/upload",
+        files={"file": ("a.txt", b"x", "text/plain")},
+        data={"title": "长" * 501, "doc_type": "guideline"},
+    )
+    assert resp.status_code == 400
+    assert "title" in resp.json()["message"]
+    assert manager.upload_kwargs is None
+
+
+def test_upload_source_too_long_400(monkeypatch):
+    """C3：source 超过 200 字符 → 400"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post(
+        "/api/v1/knowledge/upload",
+        files={"file": ("a.txt", b"x", "text/plain")},
+        data={"title": "t", "doc_type": "guideline", "source": "s" * 201},
+    )
+    assert resp.status_code == 400
+    assert "source" in resp.json()["message"]
+    assert manager.upload_kwargs is None
+
+
+def test_upload_version_too_long_400(monkeypatch):
+    """C3：version 超过 20 字符 → 400"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post(
+        "/api/v1/knowledge/upload",
+        files={"file": ("a.txt", b"x", "text/plain")},
+        data={"title": "t", "doc_type": "guideline", "version": "v" * 21},
+    )
+    assert resp.status_code == 400
+    assert "version" in resp.json()["message"]
+    assert manager.upload_kwargs is None
+
+
 def test_upload_rep_forbidden(monkeypatch):
     """上传仍限审核角色（admin/manager/medical）"""
     client = _make_client(monkeypatch, role="rep")
@@ -269,6 +313,37 @@ def test_review_approved_invalid_raises_param_error(monkeypatch):
     resp = client.post("/api/v1/knowledge/documents/3/review", json={"approved": "maybe"})
     assert resp.status_code == 400
     assert "布尔值" in resp.json()["message"]
+    assert manager.review_kwargs is None
+
+
+# ---------- C2: review 缺 approved/action 键 → 400（不再默认驳回） ----------
+
+def test_review_missing_keys_400(monkeypatch):
+    """C2：approved/action 键都缺 → 400，不再默认按驳回执行高风险动作
+    （驳回会清理检索索引、拒绝上架）"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post("/api/v1/knowledge/documents/3/review", json={})
+    assert resp.status_code == 400
+    assert "approved" in resp.json()["message"]
+    assert manager.review_kwargs is None
+
+
+def test_review_action_approve_compat(monkeypatch):
+    """C2：旧前端兼容契约 {"action": "approve"} 仍可用"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post("/api/v1/knowledge/documents/3/review", json={"action": "approve"})
+    assert resp.status_code == 200
+    assert manager.review_kwargs[0] == "approve"
+
+
+def test_review_action_invalid_400(monkeypatch):
+    """C2：action 拼写错误（"apporve"）→ 400，不再静默落入驳回分支"""
+    manager = _StubManager()
+    client = _make_client(monkeypatch, role="admin", manager=manager)
+    resp = client.post("/api/v1/knowledge/documents/3/review", json={"action": "apporve"})
+    assert resp.status_code == 400
     assert manager.review_kwargs is None
 
 

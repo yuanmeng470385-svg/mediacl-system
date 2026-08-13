@@ -123,6 +123,15 @@ class DashVectorClient:
             filter=filter_expr,
             output_fields=["doc_id", "title", "content", "chunk_index", "product_id", "doc_type"],
         )
+        # C4（2026-08-13 低危批）：响应式 API —— 查询失败返回错误码但不抛异常，
+        # resp.output 为空列表会被当作"无结果"正常返回，document_manager.search
+        # 的降级链（DashVector → 百炼 → 本地）永远不会触发。与 upsert 同款检查：
+        # code 非 0/None 即失败，必须 raise 让上层降级。
+        code = getattr(resp, "code", None)
+        if code not in (0, None):
+            raise RuntimeError(
+                f"DashVector query 失败: code={code} {getattr(resp, 'message', '')}"
+            )
         out = []
         for item in resp.output or []:
             fields = item.fields or {}

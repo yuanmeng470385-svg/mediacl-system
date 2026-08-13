@@ -32,6 +32,28 @@ VALID_RULE_TYPES = ("keyword", "regex", "semantic")
 VALID_ACTIONS = ("reject", "warn", "log")
 VALID_SEVERITIES = ("high", "medium", "low")
 
+# C6（2026-08-13 低危批）：/check content 长度上限 —— 超长文本会放大关键词/正则
+# 扫描成本（ReDoS 面）与 LLM 语义审核 token 成本，10000 字符足够覆盖任何真实
+# 对话/文档片段，超限按参数错误 400 拒绝。
+MAX_CHECK_CONTENT_LEN = 10000
+
+
+def _parse_bool_value(value, name: str = "fast") -> bool:
+    """C1（2026-08-13 低危批）：显式布尔解析 —— 字符串 "false"/"0" 必须解析为
+    False。旧写法 bool("false") == True（Python 经典坑），会让传字符串 "false"
+    的调用方意外跳过 LLM 语义层。参考 knowledge 侧同名工具（M24）。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("true", "1", "yes", "y", "on"):
+            return True
+        if v in ("false", "0", "no", "n", "off"):
+            return False
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise ParamError(f"{name} 必须是布尔值（true/false）")
+
 
 def _extract_patterns(data: dict):
     """提取匹配模式列表：content.patterns 优先，兼容顶层 patterns 直传"""
@@ -125,8 +147,19 @@ async def check_content(
     """
     content = request.get("content", "")
     context = request.get("context", {})
-    fast = bool(request.get("fast", False))
+    fast = _parse_bool_value(request.get("fast", False), name="fast")
 
+    # C1（2026-08-13 低危批）：content 非 str 会一路传到 checker 的
+    # `not content or not content.strip()`（list/dict 走 .strip() 直接
+    # AttributeError 500）；context 非 dict 会在违规落库时 context.get()
+    # 崩溃，且把非对象写进 JSONB 列语义错误 —— 入引擎前显式校验 400。
+    if not isinstance(content, str):
+        raise ParamError("content 必须是字符串")
+    if not isinstance(context, dict):
+        raise ParamError("context 必须是 JSON 对象")
+    # C6：长度上限（防超大文本放大 ReDoS 与 LLM 成本）
+    if len(content) > MAX_CHECK_CONTENT_LEN:
+        raise ParamError(f"content 长度不能超过 {MAX_CHECK_CONTENT_LEN} 字符")
     if not content:
         raise ParamError("content 不能为空")
 

@@ -243,3 +243,48 @@ class TestFastMode:
         result = self.checker.check("我们的产品在III期临床试验中显示出良好的安全性和有效性",
                                     {"type": "chat"}, fast=True)
         assert result["blocked"] is False
+
+
+class TestTestRuleInconclusive:
+    """C7（2026-08-13 低危批）：test_rule 语义层 R999 时 hits 加 inconclusive 标记，
+    管理员在规则试跑页能区分"内容合规"与"语义审核失败"（此前两者都显示为未命中）"""
+
+    @staticmethod
+    def _fake_qwen(raw_text: str):
+        """构造返回固定文本的假 OpenAI client（复用 TestSemanticCheck 的写法）"""
+        import types
+        choices = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=raw_text))]
+        )
+        return types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=lambda **kw: choices))
+        )
+
+    def setup_method(self):
+        self.checker = ComplianceChecker()
+        # 用正常内容绕开 keyword/regex 关，只测语义关
+        self.safe_content = "今天天气不错，适合开会讨论"
+
+    def test_test_rule_semantic_r999_inconclusive(self):
+        """语义层输出不可解析（R999 fail-closed）→ hit=False 且 inconclusive=True"""
+        self.checker.qwen_client = self._fake_qwen("not a json response")
+        semantic = [r for r in self.checker.rules if r["type"] == "semantic"]
+        assert semantic, "YAML 规则需包含 semantic 规则"
+        result = self.checker.test_rule(self.safe_content, semantic[0]["id"])
+        assert len(result["hits"]) == 1
+        hit = result["hits"][0]
+        assert hit["hit"] is False
+        assert hit["inconclusive"] is True
+
+    def test_test_rule_semantic_pass_not_inconclusive(self):
+        """语义层正常返回合规结论 → inconclusive=False，不误标"""
+        self.checker.qwen_client = self._fake_qwen('{"violations": []}')
+        semantic = [r for r in self.checker.rules if r["type"] == "semantic"]
+        assert semantic
+        result = self.checker.test_rule(self.safe_content, semantic[0]["id"])
+        assert result["hits"][0]["inconclusive"] is False
+
+    def test_test_rule_text_rule_inconclusive_false(self):
+        """关键词/正则规则恒 inconclusive=False（字段全量返回，前端契约稳定）"""
+        result = self.checker.test_rule("保证治好", "R001")
+        assert result["hits"][0]["inconclusive"] is False

@@ -422,11 +422,21 @@ class ComplianceChecker:
         rules_to_test = [r for r in self.rules if not rule_code or r["id"] == rule_code]
         hits = []
         for rule in rules_to_test:
+            inconclusive = False
             if rule["type"] in ("keyword", "regex"):
                 matched = self._match_rule(content, rule)
             else:
                 # 语义规则走 LLM
                 result = self._semantic_check(content, [rule], {})
+                # C7（2026-08-13 低危批）：语义层返回 R999（输出不可解析/拒答/
+                # 网络异常等 fail-closed 拦截）时，当前规则实际"没有审核结论"——
+                # 与"内容合规"同样表现为 hit=False，管理员在规则试跑页无法区分。
+                # 加 inconclusive 标记（纯新增字段，不破坏现有 hits 契约）。
+                r999 = next((v for v in result if v["rule_code"] == "R999"), None)
+                if r999:
+                    inconclusive = True
+                    logger.warning("规则 %s 语义审核失败（R999），试跑结果不可判定: %s",
+                                   rule["id"], r999.get("reason", ""))
                 # 语义结果与 hits 对齐：只认 rule_code 匹配当前规则的违规
                 # （LLM 返回其他规则或 R999 解析失败兜底时，不误算为当前规则命中）
                 aligned = next((v for v in result if v["rule_code"] == rule["id"]), None)
@@ -439,6 +449,7 @@ class ComplianceChecker:
                 "action": rule["action"],
                 "hit": matched is not None,
                 "matched_text": matched,
+                "inconclusive": inconclusive,
             })
         return {"content": content, "hits": hits, "total_rules_tested": len(rules_to_test)}
 

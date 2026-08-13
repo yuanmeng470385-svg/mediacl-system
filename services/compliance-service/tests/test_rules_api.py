@@ -343,6 +343,75 @@ def test_check_fast_flag_passthrough(client, monkeypatch):
     assert calls[1][1] is False  # 默认全量检查
 
 
+# ==================== C1/C6: /check 参数健壮性 ====================
+
+def _check_headers(monkeypatch):
+    """/check 需要 X-Internal-Key（require_internal_key）"""
+    monkeypatch.setenv("INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("shared.common.internal_auth._INTERNAL_KEY", None)
+    return {"X-Internal-Key": "test-internal-key"}
+
+
+def test_check_content_non_str_400(client, monkeypatch):
+    """C1：content 非字符串（int/list/dict）→ 400，而非 checker 里
+    content.strip() 的 AttributeError 500"""
+    headers = _check_headers(monkeypatch)
+    for bad in (123, ["a"], {"text": "x"}):
+        resp = client.post("/api/v1/compliance/check", headers=headers, json={"content": bad})
+        assert resp.status_code == 400
+        assert "content" in resp.json()["message"]
+
+
+def test_check_context_non_dict_400(client, monkeypatch):
+    """C1：context 非对象（字符串/数组）→ 400，而非违规落库时
+    context.get() 崩溃 + JSONB 写入非对象"""
+    headers = _check_headers(monkeypatch)
+    for bad in ("user_input", [1, 2]):
+        resp = client.post("/api/v1/compliance/check", headers=headers,
+                           json={"content": "测试", "context": bad})
+        assert resp.status_code == 400
+        assert "context" in resp.json()["message"]
+
+
+def test_check_fast_string_false_is_false(client, monkeypatch):
+    """C1：fast="false" 必须解析为 False —— bool("false") == True 会让调用方
+    意外跳过 LLM 语义层（合规硬伤）；"true" 同理解析为 True"""
+    headers = _check_headers(monkeypatch)
+    calls = []
+
+    class _FakeChecker:
+        def check(self, content, context=None, fast=False):
+            calls.append(fast)
+            return {"blocked": False, "violations": [], "risk_level": "none", "checked_rules": []}
+
+    import app.api.rules as rules_api
+    monkeypatch.setattr(rules_api, "checker", _FakeChecker())
+
+    client.post("/api/v1/compliance/check", headers=headers, json={"content": "测试", "fast": "false"})
+    assert calls == [False]
+    client.post("/api/v1/compliance/check", headers=headers, json={"content": "测试", "fast": "true"})
+    assert calls == [False, True]
+
+
+def test_check_fast_invalid_400(client, monkeypatch):
+    """C1：fast 取值非法（"maybe"/2）→ 400 显式提示"""
+    headers = _check_headers(monkeypatch)
+    for bad in ("maybe", 2):
+        resp = client.post("/api/v1/compliance/check", headers=headers,
+                           json={"content": "测试", "fast": bad})
+        assert resp.status_code == 400
+        assert "fast" in resp.json()["message"]
+
+
+def test_check_content_too_long_400(client, monkeypatch):
+    """C6：content 超过 10000 字符 → 400（防超大文本放大 ReDoS 与 LLM 成本）"""
+    headers = _check_headers(monkeypatch)
+    resp = client.post("/api/v1/compliance/check", headers=headers,
+                       json={"content": "x" * 10001})
+    assert resp.status_code == 400
+    assert "10000" in resp.json()["message"]
+
+
 # ==================== 列表（仅需登录，无角色限制） ====================
 
 def test_list_rules_login_only(client):

@@ -123,6 +123,17 @@ async def upload_document(
     if doc_type not in ALLOWED_DOC_TYPES:
         raise ParamError("doc_type 不合法")
 
+    # C3（2026-08-13 低危批）：按列长校验（对照 app/models/knowledge_document.py：
+    # title String(500) / source String(200) / version String(20)）—— 超长值会被
+    # PostgreSQL varchar 直接拒绝（DataError），此前表现为 DB 异常 500；
+    # 入口 400 明确提示，避免超长 title 再进入审计/检索/百炼链路。
+    if len(title) > 500:
+        raise ParamError("title 长度不能超过 500 字符")
+    if source and len(source) > 200:
+        raise ParamError("source 长度不能超过 200 字符")
+    if version and len(version) > 20:
+        raise ParamError("version 长度不能超过 20 字符")
+
     parsed_tags = None
     if tags:
         try:
@@ -246,7 +257,14 @@ async def review_document(
     # 契约：{"approved": true/false}。兼容旧前端传 {"action": "approve"|"reject"}
     approved_raw = request.get("approved")
     if approved_raw is None:
-        approved = request.get("action") == "approve"
+        # C2（2026-08-13 低危批）：approved/action 键都缺时不再默认按驳回执行 ——
+        # 审核是高风险动作（驳回会清理检索索引、拒绝上架），请求体不完整 = 调用方
+        # bug 或接口误用，必须显式 400 让调用方修正。同时 action 值白名单校验：
+        # 拼写错误（如 "apporve"）不再静默落入驳回分支。
+        action_raw = request.get("action")
+        if action_raw not in ("approve", "reject"):
+            raise ParamError("必须提供 approved（布尔值）或 action（approve/reject）")
+        approved = action_raw == "approve"
     else:
         # M24: 显式布尔解析，字符串 "false" 必须解析为 False（原 bool("false") == True 是 bug）
         approved = _parse_bool_value(approved_raw)
