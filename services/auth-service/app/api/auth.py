@@ -8,7 +8,7 @@
 
 安全约定：
   - 错误信息统一模糊化，不区分"用户不存在"和"凭证错误"，避免账号枚举。
-  - 验证码校验成功后立即作废，防重放。
+  - 验证码匹配即作废：比较与作废在同一原子操作内完成，防并发重放。
   - Redis 不可用 → 抛 5xx，绝不放行。
   - profile/me 每次都从库里重新读用户，被停用的账号即便持有有效 token 也会被拒。
 """
@@ -25,8 +25,14 @@ from shared.common.db_session import get_db
 from shared.common.response import success, ParamError, AuthError, BusinessError
 
 from app.config import settings
-from app.core.code_store import CodeStore, CodeStoreError, RedisCodeStore
-from app.core.security import codes_equal, generate_code, verify_password
+from app.core.code_store import (
+    CONSUME_EXHAUSTED,
+    CONSUME_MATCHED,
+    CodeStore,
+    CodeStoreError,
+    RedisCodeStore,
+)
+from app.core.security import generate_code, verify_password
 from app.db.repositories.user_repo import UserRepo
 from app.services.audit_client import write_audit_log
 from app.services.sms import SmsSendError, get_sms_sender
@@ -232,17 +238,18 @@ def _login_by_code(db: Session, store: CodeStore, phone: str, code: str):
         raise ParamError("手机号格式不正确")
 
     try:
-        stored, exhausted = store.take_attempt(phone, settings.CODE_MAX_ATTEMPTS)
+        result = store.consume(phone, code, settings.CODE_MAX_ATTEMPTS)
     except CodeStoreError as exc:
         logger.error(f"验证码存储不可用: {exc}")
         raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
 
-    if exhausted:
+    if result == CONSUME_EXHAUSTED:
         # 对外文案与通用登录失败完全一致：exhausted 只会出现在"手机号已注册
         # 且验证码在存"的路径上，文案差异会泄露注册状态，真实原因只进 debug 日志
         logger.debug(f"验证码尝试次数已用尽，需重新获取 phone={phone}")
-        raise AuthError(_ERR_CODE_LOGIN)
-    if not codes_equal(stored, code):
+    if result != CONSUME_MATCHED:
+        # matched 之外的状态（mismatch/exhausted/notfound）对外文案统一，
+        # 防账号枚举与验证码探测
         raise AuthError(_ERR_CODE_LOGIN)
 
     user = UserRepo.get_by_phone(db, phone)
@@ -250,13 +257,7 @@ def _login_by_code(db: Session, store: CodeStore, phone: str, code: str):
         # 正常流程下这里不该命中（未注册的手机号拿不到验证码），仍兜一层
         raise AuthError(_ERR_CODE_LOGIN)
 
-    # 一次性：校验通过立刻作废
-    try:
-        store.drop(phone)
-    except CodeStoreError as exc:
-        logger.error(f"验证码作废失败: {exc}")
-        raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
-
+    # 一次性：consume 匹配成功时已在同一原子操作内作废，无需再 drop
     return user
 
 

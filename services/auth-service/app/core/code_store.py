@@ -11,14 +11,21 @@
 import time
 import json
 import logging
+import threading
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class CodeStoreError(RuntimeError):
     """存储不可用。调用方应转成 5xx，绝不能当作"验证通过"。"""
+
+
+# consume() 返回状态
+CONSUME_NOTFOUND = "notfound"    # 无验证码：未发送 / 已过期 / 已作废
+CONSUME_MATCHED = "matched"      # 匹配成功，验证码已在同一原子操作内作废
+CONSUME_MISMATCH = "mismatch"    # 不匹配，已消耗一次尝试（仍在上限内）
+CONSUME_EXHAUSTED = "exhausted"  # 尝试次数用尽，验证码已作废
 
 
 class CodeStore(ABC):
@@ -33,18 +40,18 @@ class CodeStore(ABC):
         """写入验证码并起冷却计时"""
 
     @abstractmethod
-    def take_attempt(self, phone: str, max_attempts: int) -> Tuple[Optional[str], bool]:
+    def consume(self, phone: str, code: str, max_attempts: int) -> str:
         """
-        消耗一次校验机会。
+        原子「校验并消耗」验证码：比较与作废必须在同一原子操作内完成，
+        防止两个并发请求携带同一正确码各自通过校验（签出多个 token）。
 
-        语义：单个验证码最多可校验 max_attempts 次。第 1..max_attempts 次
-        （含最后一次）都返回 exhausted=False，可正常校验；第 max_attempts 次
-        之后（即下一次调用）才返回 exhausted=True，验证码随之作废。
+        语义：单个验证码最多可校验 max_attempts 次。每次调用（无论对错）
+        消耗一次尝试；第 1..max_attempts 次调用正常比对，第 max_attempts
+        次之后（即下一次调用）返回 CONSUME_EXHAUSTED，验证码随之作废
+        （用尽后任何输入都被拒）。匹配成功立即作废。
 
         Returns:
-            (code, exhausted)
-            code      — 当前存储的验证码，不存在/已过期则为 None
-            exhausted — 尝试次数已用尽（此时验证码已被作废）
+            CONSUME_NOTFOUND / CONSUME_MATCHED / CONSUME_MISMATCH / CONSUME_EXHAUSTED
         """
 
     @abstractmethod
@@ -60,26 +67,61 @@ def _cooldown_key(phone: str) -> str:
     return f"authcode:cd:{phone}"
 
 
-# 原子消耗验证码尝试次数（B5 修复 2026-08-12）：
-#   GET → 递增 attempts → 超限 DEL / 未超限 SETEX（保留剩余 TTL）
-#   返回值 {state, code}：state 0=无验证码 / 1=可校验 / 2=已用尽（验证码已作废）
-_TAKE_ATTEMPT_LUA = """
+# 原子校验并消耗验证码（H1 修复 2026-08-13）：
+#   B5（2026-08-12）只把「尝试计数」原子化了，比较在 Python 侧、作废是
+#   第三次独立调用 —— 两个并发请求携带同一正确码时，两次比较都能通过，
+#   各自签出 token。本脚本把「计数 + 比较 + 命中即 DEL」收进同一个 Lua
+#   脚本，Redis 单线程串行执行，验证码只能被消耗一次。
+#   尝试次数语义与旧 take_attempt 完全一致：每次调用（无论对错）先消耗
+#   一次尝试，超过 max_attempts 即作废 —— 用尽后任何输入（包括正确码）
+#   都被拒（见 tests/test_auth.py 既有用例）。
+#   返回值 {state}：state 0=无验证码 / 1=匹配成功（已作废）/
+#   2=不匹配（仍在尝试上限内）/ 3=尝试用尽（验证码已作废）
+_CONSUME_LUA = """
+-- 常量时间比较：验证码只有 6 位数字且比较发生在 Redis 进程内（不跨网络），
+-- 时序侧信道本身很弱，仍按既有约定逐字节比较、不提前退出。
+local function cteq(a, b)
+  local n = #a
+  if #b > n then
+    n = #b
+  end
+  local diff = 0
+  for i = 1, n do
+    local ba = 0
+    local bb = 0
+    if i <= #a then
+      ba = string.byte(a, i)
+    end
+    if i <= #b then
+      bb = string.byte(b, i)
+    end
+    if ba ~= bb then
+      diff = diff + 1
+    end
+  end
+  return diff == 0
+end
+
 local raw = redis.call('GET', KEYS[1])
 if not raw then
-  return {0, ''}
+  return {0}
 end
 local data = cjson.decode(raw)
 data.attempts = data.attempts + 1
-if data.attempts > tonumber(ARGV[1]) then
+if data.attempts > tonumber(ARGV[2]) then
   redis.call('DEL', KEYS[1])
-  return {2, data.code}
+  return {3}
+end
+if cteq(data.code, ARGV[1]) then
+  redis.call('DEL', KEYS[1])
+  return {1}
 end
 local remaining = redis.call('TTL', KEYS[1])
 if remaining < 1 then
   remaining = 1
 end
 redis.call('SETEX', KEYS[1], remaining, cjson.encode(data))
-return {1, data.code}
+return {2}
 """
 
 
@@ -112,23 +154,21 @@ class RedisCodeStore(CodeStore):
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
-    def take_attempt(self, phone: str, max_attempts: int) -> Tuple[Optional[str], bool]:
+    def consume(self, phone: str, code: str, max_attempts: int) -> str:
         try:
-            # 原子消耗（B5 修复 2026-08-12）：旧实现 GET→修改→SETEX 非原子 ——
-            # 并发登录请求同时读到同一 attempts 值，验证码可被并发重放。
-            # Lua 单脚本内完成 读→递增→超限作废/回写，Redis 单线程保证串行。
-            # 返回 {state, code}：state 0=无验证码 / 1=可校验 / 2=已用尽（验证码已作废）
-            state, code = self._redis.eval(
-                _TAKE_ATTEMPT_LUA, 1, _key(phone), str(int(max_attempts))
+            # 原子校验并消耗（H1 修复 2026-08-13）：比较与作废在同一 Lua 脚本内，
+            # Redis 单线程保证两个并发请求只有一个能 matched。
+            state = int(
+                self._redis.eval(
+                    _CONSUME_LUA, 1, _key(phone), code, str(int(max_attempts))
+                )[0]
             )
-            state = int(state)
-            if state == 2:
-                return code or None, True
-            if state == 0:
-                return None, False
-            return code or None, False
-        except CodeStoreError:
-            raise
+            return (
+                CONSUME_NOTFOUND,
+                CONSUME_MATCHED,
+                CONSUME_MISMATCH,
+                CONSUME_EXHAUSTED,
+            )[state]
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
@@ -145,6 +185,8 @@ class MemoryCodeStore(CodeStore):
     def __init__(self):
         self._codes: dict = {}
         self._cooldowns: dict = {}
+        # 模拟 Redis 单线程语义：consume 整段持锁，并发下验证码也只消耗一次
+        self._lock = threading.Lock()
 
     def in_cooldown(self, phone: str) -> int:
         expire = self._cooldowns.get(phone, 0)
@@ -155,16 +197,20 @@ class MemoryCodeStore(CodeStore):
         self._codes[phone] = {"code": code, "attempts": 0, "expire": time.time() + ttl}
         self._cooldowns[phone] = time.time() + cooldown
 
-    def take_attempt(self, phone: str, max_attempts: int) -> Tuple[Optional[str], bool]:
-        entry = self._codes.get(phone)
-        if not entry or entry["expire"] < time.time():
-            self._codes.pop(phone, None)
-            return None, False
-        entry["attempts"] += 1
-        if entry["attempts"] > max_attempts:
-            self._codes.pop(phone, None)
-            return entry["code"], True
-        return entry["code"], False
+    def consume(self, phone: str, code: str, max_attempts: int) -> str:
+        with self._lock:
+            entry = self._codes.get(phone)
+            if not entry or entry["expire"] < time.time():
+                self._codes.pop(phone, None)
+                return CONSUME_NOTFOUND
+            entry["attempts"] += 1
+            if entry["attempts"] > max_attempts:
+                self._codes.pop(phone, None)
+                return CONSUME_EXHAUSTED
+            if entry["code"] == code:
+                self._codes.pop(phone, None)
+                return CONSUME_MATCHED
+            return CONSUME_MISMATCH
 
     def drop(self, phone: str) -> None:
         self._codes.pop(phone, None)

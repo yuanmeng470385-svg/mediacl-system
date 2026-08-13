@@ -77,7 +77,7 @@ class BrokenCodeStore(CodeStore):
     def save(self, phone, code, ttl, cooldown):
         raise CodeStoreError("redis down")
 
-    def take_attempt(self, phone, max_attempts):
+    def consume(self, phone, code, max_attempts):
         raise CodeStoreError("redis down")
 
     def drop(self, phone):
@@ -214,6 +214,27 @@ class TestLoginByCode:
         assert client.post("/api/v1/auth/login", json=body).status_code == 200
         # 同一验证码重放必须失败
         assert client.post("/api/v1/auth/login", json=body).status_code == 401
+
+    def test_同一验证码并发登录只有一个成功(self):
+        """H1 回归：两个并发请求携带同一正确码，只有一个能签出 token。
+        比较与作废已收进 store.consume 的原子操作（修复前 take_attempt →
+        Python 比较 → drop 三次独立调用之间存在竞态，两个并发请求都能通过）。"""
+        import asyncio
+
+        import httpx
+
+        _send_code(ACTIVE_PHONE)
+        body = {"phone": ACTIVE_PHONE, "code": _issued_code(ACTIVE_PHONE)}
+
+        async def login():
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                return (await ac.post("/api/v1/auth/login", json=body)).status_code
+
+        async def run():
+            return await asyncio.gather(login(), login())
+
+        assert sorted(asyncio.run(run())) == [200, 401]
 
     def test_错误验证码被拒(self):
         _send_code(ACTIVE_PHONE)
