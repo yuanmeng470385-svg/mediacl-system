@@ -67,9 +67,11 @@ export default function UserList() {
               // 后端更新白名单是 full_name（users.py UPDATEABLE_FIELDS），name 不生效
               const payload: Partial<User> = {
                 full_name: values.full_name,
-                phone: values.phone,
                 region: values.region,
               };
+              // 手机号变更仅限 admin（users.py:158-159）：非 admin 传 phone（含原值重提）必 403。
+              // 禁用输入框的值仍会进入 values，故必须按值比较，仅在确实变化时才携带
+              if (values.phone !== editing.phone) payload.phone = values.phone;
               // 仅 admin 且非本人时才带 role —— 否则后端必 403
               // （manager 带 role 拒绝 / 自改 role 拒绝），manager 编辑不再 403
               if (canEditRole) payload.role = values.role;
@@ -99,7 +101,10 @@ export default function UserList() {
           <ProFormText name="username" label="用户名" rules={[{ required: true }]} placeholder="登录账号（创建后不可修改）" />
         )}
         <ProFormText name="full_name" label="姓名" rules={[{ required: true }]} />
-        <ProFormText name="phone" label="手机号" rules={[{ required: true }]} />
+        {/* 手机号变更仅限 admin（users.py:158-159 非 admin 传 phone 必 403）—— 非 admin 编辑时禁用 */}
+        <ProFormText name="phone" label="手机号" rules={[{ required: true }]}
+          disabled={!!editing && me?.role !== 'admin'}
+          tooltip={editing && me?.role !== 'admin' ? '仅 admin 可变更用户手机号' : undefined} />
         <ProFormSelect name="role" label="角色" rules={[{ required: true }]}
           disabled={editing ? !canEditRole : me?.role !== 'admin'}
           tooltip={editing

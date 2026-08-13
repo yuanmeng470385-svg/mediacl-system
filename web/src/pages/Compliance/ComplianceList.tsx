@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import {
-  ProTable, ModalForm, ProFormText, ProFormTextArea, ProFormSelect, ProFormSwitch,
+  ProTable, ModalForm, ProFormText, ProFormTextArea, ProFormSelect, ProFormSwitch, ProFormDependency,
 } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { Button, Tag, Space, Drawer, Input, Alert, Row, Col, App } from 'antd';
@@ -146,15 +146,17 @@ export default function ComplianceList() {
             .split(/\r?\n|[,，、]/)
             .map((s: string) => s.trim())
             .filter((s: string) => s.length > 0);
-          const payload = {
+          const payload: Partial<ComplianceRule> = {
             rule_name: values.rule_name,
             rule_type: values.rule_type,
             severity: values.severity,
             action: values.action,
             description: values.description || '',
             enabled: values.enabled,
-            content: { patterns },
           };
+          // 语义规则（R003-R007 等）无匹配模式，后端 _validate_rule_fields 只要求
+          // keyword/regex 提供非空 patterns，且空数组一律 400 —— patterns 为空时整体省略 content
+          if (patterns.length) payload.content = { patterns };
           try {
             if (editing) {
               await complianceAPI.update(editing.id, payload);
@@ -201,10 +203,20 @@ export default function ComplianceList() {
             { value: 'log', label: '仅记录' },
           ]}
         />
-        <ProFormTextArea
-          name="patterns_text" label="匹配模式" rules={[{ required: true, message: '请输入匹配模式' }]}
-          placeholder={'每行一个匹配词或正则，例如：\n包治百病\n100%有效'}
-        />
+        {/* 语义规则（R003-R007 等）无匹配模式：semantic 时隐藏且非必填；keyword/regex 仍必填 */}
+        <ProFormDependency name={['rule_type']}>
+          {({ rule_type }) => {
+            const isSemantic = rule_type === 'semantic';
+            return (
+              <ProFormTextArea
+                name="patterns_text" label="匹配模式"
+                hidden={isSemantic}
+                rules={isSemantic ? [] : [{ required: true, message: '请输入匹配模式' }]}
+                placeholder={'每行一个匹配词或正则，例如：\n包治百病\n100%有效'}
+              />
+            );
+          }}
+        </ProFormDependency>
         <ProFormTextArea name="description" label="描述" placeholder="规则说明（语义规则建议填写，供 AI 审核参考）" />
         <ProFormSwitch name="enabled" label="启用" />
       </ModalForm>

@@ -37,10 +37,12 @@ export default function DoctorList() {
         actionRef={actionRef}
         columns={columns}
         request={async (params) => {
+          // 搜索参数对齐后端 list_hcps（hcps.py:54-75）：name/hospital/department/title/region/status/tag，
+          // 无 keyword；标签列（dataIndex: 'tags'）在 ProTable 搜索表单里的参数名是 tags
           const res = await doctorAPI.list({
             page: params.current || 1, page_size: params.pageSize || 10,
-            keyword: params.keyword, hospital: params.hospital,
-            department: params.department, tag: params.tag,
+            name: params.name, title: params.title, hospital: params.hospital,
+            department: params.department, tag: params.tags,
           });
           return { data: res.data.data.items, total: res.data.data.total, success: true };
         }}

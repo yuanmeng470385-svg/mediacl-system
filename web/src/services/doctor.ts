@@ -10,6 +10,10 @@
  */
 import client from './client';
 import type { ApiResponse, PaginatedResponse, Doctor } from '../types';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
+
+dayjs.extend(utc);
 
 /** 医生详情（映射自后端 /hcps/{id} to_dict） */
 export interface DoctorDetail {
@@ -66,11 +70,10 @@ export function formatProfileField(v: unknown): string {
   return String(v);
 }
 
-/** ISO/带空格时间 → "YYYY-MM-DD HH:mm"（空值回退 ''） */
+/** ISO/带空格时间 → "YYYY-MM-DD HH:mm"（后端为 UTC 字面量，转本地时区展示；空值回退 ''） */
 export function formatVisitTime(v?: string | null): string {
   if (!v) return '';
-  const s = String(v).replace('T', ' ');
-  return s.length > 16 ? s.slice(0, 16) : s;
+  return dayjs.utc(v).local().format('YYYY-MM-DD HH:mm');
 }
 
 function mapInteraction(raw: any): DoctorInteraction {
@@ -229,7 +232,8 @@ function mapDoctorDetail(raw: any): DoctorDetail {
 }
 
 export const doctorAPI = {
-  list: (params?: { page?: number; page_size?: number; keyword?: string; hospital?: string; department?: string; tag?: string }) =>
+  // 筛选参数对齐后端 list_hcps（hcps.py:54-75）：name/hospital/department/title/region/status/tag，无 keyword
+  list: (params?: { page?: number; page_size?: number; name?: string; hospital?: string; department?: string; title?: string; tag?: string }) =>
     client.get<PaginatedResponse<Doctor>>('/hcps', { params }),
 
   detail: (id: string) =>
@@ -253,9 +257,10 @@ export const doctorAPI = {
   update: (id: string, data: Partial<Doctor>) =>
     client.put<ApiResponse<Doctor>>(`/hcps/${id}`, data),
 
+  // 后端期望 {"tags": ["x"]}（hcps.py:246/263 取 request["tags"] 数组，传单值会被拒）
   addTag: (id: string, tag: string) =>
-    client.post<ApiResponse<null>>(`/hcps/${id}/tags`, { tag }),
+    client.post<ApiResponse<null>>(`/hcps/${id}/tags`, { tags: [tag] }),
 
   removeTag: (id: string, tag: string) =>
-    client.delete<ApiResponse<null>>(`/hcps/${id}/tags`, { data: { tag } }),
+    client.delete<ApiResponse<null>>(`/hcps/${id}/tags`, { data: { tags: [tag] } }),
 };
