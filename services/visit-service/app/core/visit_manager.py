@@ -442,6 +442,22 @@ class VisitManager:
         if not text_content:
             raise ParamError("转写结果为空")
 
+        # F5（2026-08-13）：尾缀去重 —— WS 路径服务端已在每个 final 句落库，
+        # 移动端会话结束后又把末句经 REST 补传 → 与现有转写末段相同则跳过落库
+        # 与全部后续检测流程（合规/异议/LLM 推荐/审计），防重复句 + 重复异议
+        # 检测/审计，直接返回当前 transcript
+        if self._is_duplicate_tail(record.conversation_transcript, text_content):
+            return {
+                "visit_id": visit_id,
+                "transcript": text_content,
+                "duplicate": True,  # 移动端契约：未知字段可忽略；供联调排查用
+                "compliance": {"blocked": False, "violations": [], "risk_level": "none"},
+                "objections": {"objections": [], "interests": [], "sentiment": "neutral", "method": "rules"},
+                "suggestions": {"objection_responses": [], "compliance_warnings": []},
+                "key_nodes": [],
+                "ai_suggestion": None,
+            }
+
         # 合规实时检查（D）
         compliance = await check_compliance(
             text_content,
@@ -502,6 +518,18 @@ class VisitManager:
             "compliance_warnings": compliance.get("violations", []),
         }
 
+    @staticmethod
+    def _is_duplicate_tail(existing: Optional[str], text: str) -> bool:
+        """判断 text 是否与现有转写的末段相同（F5：WS 已落库、REST 补传的场景）
+
+        转写以 "\n" 分段追加（每句一行），末段 = 最后一个非空行；仅整段相等才算
+        重复（不用 endswith —— 新句恰好是末句后缀时不应误判去重）。
+        """
+        if not existing or not text:
+            return False
+        parts = [p.strip() for p in existing.split("\n") if p.strip()]
+        return bool(parts) and parts[-1] == text
+
     # ==================== 拜访中：LLM 实时推荐（关键节点 + 话术建议） ====================
 
     _LLM_REC_COOLDOWN_SECONDS = 20.0
@@ -520,9 +548,11 @@ class VisitManager:
         if len(stripped) < self._LLM_REC_MIN_LENGTH:
             return None
 
-        # 行锁读：并发 process_transcript 对同一 visit 的 key_nodes 追加不互相覆盖
-        # （读改写窗口内另一请求 commit 的批次不会丢失；锁随下方 LLM 调用窗口持有）
-        record = VisitRepo.get(db, visit_id, for_update=True)
+        # F2（2026-08-13）：冷却判断先无锁读。行锁只覆盖 key_nodes 追加的读改写
+        # 窗口，绝不跨 LLM 调用 —— 旧实现 FOR UPDATE 从冷却判断一路持有到 qwen
+        # 返回（含解析失败/冷却命中的提前 return 不 commit），挂死请求会长期阻塞
+        # 同一 visit 的并发追加，锁持续到 session 关闭。
+        record = VisitRepo.get(db, visit_id)
         if not record:
             return None
         if record.key_nodes is not None and not isinstance(record.key_nodes, list):
@@ -558,6 +588,8 @@ class VisitManager:
             )},
         ]
         try:
+            # F2：LLM 调用在锁外执行（无任何行锁；并发请求各自调用，追加窗口
+            # 由下方短锁串行化）
             result = await asyncio.to_thread(
                 self.qwen.chat, prompt, temperature=0.2, max_tokens=800,
             )
@@ -588,8 +620,18 @@ class VisitManager:
                     "advice": str(suggestion.get("advice", "")).strip()[:200],
                 }
             if key_nodes:
-                record.key_nodes = nodes + key_nodes
-                db.commit()
+                # F2：短持锁追加 —— 重读该行（冷却判断与 LLM 调用期间可能有
+                # 并发追加，避免覆盖丢失），追加 + commit 后立即释放。锁窗口内
+                # 无任何网络调用。
+                record = VisitRepo.get(db, visit_id, for_update=True)
+                if record is None:
+                    logger.warning("visit %s 记录已不存在，key_nodes 不追加", visit_id)
+                elif record.key_nodes is not None and not isinstance(record.key_nodes, list):
+                    # 锁内复查：key_nodes 变成脏数据 → 不追加（降级铁律：不抛异常）
+                    logger.warning("visit %s key_nodes 脏数据，跳过追加", visit_id)
+                else:
+                    record.key_nodes = list(record.key_nodes or []) + key_nodes
+                    db.commit()
             await write_audit_log(
                 user_id=user_id, action="visit_llm_recommend",
                 resource_type="visit", resource_id=str(visit_id),

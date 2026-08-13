@@ -103,3 +103,74 @@ def test_empty_text():
     result = det.detect("")
     assert result["objections"] == []
     assert result["sentiment"] == "neutral"
+
+
+# ---------- F4 回归（2026-08-13）：qwen 输出畸形不抛异常、坏项跳过 ----------
+
+class FakeQwenPayload:
+    """返回任意畸形 payload 的语义层桩"""
+    def __init__(self, payload):
+        self._payload = payload
+
+    def chat(self, messages, **kwargs):
+        return {"content": json.dumps(self._payload)}
+
+
+def test_malformed_objection_items_skipped_not_raised():
+    """F4：objections 混入坏项（非 dict/缺 text/text 为空）→ 坏项跳过，合法项保留"""
+    det = ObjectionDetector(qwen=FakeQwenPayload({
+        "objections": [
+            {"type": "efficacy", "text": "效果不如文献"},
+            "裸字符串",
+            None,
+            123,
+            {"type": "price"},                    # 缺 text 键
+            {"type": "safety", "text": ""},       # 空 text
+            {"type": "competition", "text": "   "},  # 空白 text
+        ],
+        "interests": ["长期安全性", 123, None, {"nested": 1}, "  ", "适应症扩展"],
+        "sentiment": {"bad": True},
+    }))
+    result = det.detect("今天天气不错")  # 无规则命中的中性文本
+    assert result["method"] == "rules+semantic"
+    assert result["objections"] == [{"type": "efficacy", "text": "效果不如文献"}]
+    assert result["interests"] == ["长期安全性", "适应症扩展"]
+    assert result["sentiment"] == "neutral"
+
+
+def test_objections_as_string_not_raised():
+    """F4：objections 为字符串（旧实现逐个字符取 ["text"] 抛 TypeError）→ 不抛异常"""
+    det = ObjectionDetector(qwen=FakeQwenPayload({
+        "objections": "这是一个字符串而不是数组",
+        "interests": [],
+        "sentiment": "neutral",
+    }))
+    result = det.detect("今天天气不错")
+    assert result["method"] == "rules+semantic"
+    assert result["objections"] == []
+
+
+def test_objections_as_dict_or_none_not_raised():
+    """F4：objections 为 dict / None → 不抛异常，按坏项跳过"""
+    for bad in ({"oops": 1}, None):
+        det = ObjectionDetector(qwen=FakeQwenPayload({
+            "objections": bad,
+            "interests": "兴趣字符串而非数组",   # interests 类型钳制
+            "sentiment": 42,                    # sentiment 类型钳制
+        }))
+        result = det.detect("今天天气不错")
+        assert result["method"] == "rules+semantic"
+        assert result["objections"] == []
+        assert result["interests"] == []
+        assert result["sentiment"] == "neutral"
+
+
+def test_objection_text_number_coerced_to_string():
+    """F4：text 为数字 → 经 str() 钳制后保留（不因类型逃出异常）"""
+    det = ObjectionDetector(qwen=FakeQwenPayload({
+        "objections": [{"type": "other", "text": 12345}],
+        "interests": [],
+        "sentiment": "neutral",
+    }))
+    result = det.detect("今天天气不错")
+    assert result["objections"] == [{"type": "other", "text": "12345"}]

@@ -182,6 +182,9 @@ class _FakeAsrQuery:
     def filter(self, *args, **kwargs):
         return self
 
+    def populate_existing(self):
+        return self
+
     def first(self):
         if self._model is not None and self._model.__name__ == "User":
             # H2（2026-08-11）：asr_ws 鉴权实时查库——返回 active 用户
@@ -250,3 +253,150 @@ class TestAsrWebSocketFlow:
                 ws.receive_json()  # 断句完成 → 触发 _check_later（合规抛 RuntimeError）
             time.sleep(0.3)  # 等后台任务收尾
         assert "跳过合规推送" in caplog.text
+
+
+# ---------- F3 回归（2026-08-13）：warn 级违规也推合规帧 + 落库 compliance_flags ----------
+
+class _FakeAsrSessionWithRecord:
+    """假 session：归属校验通过；记录带 status/ai_summary/compliance_flags 等真实字段
+
+    旧 _FakeAsrSession 的记录是 SimpleNamespace(user_id, product_id, hcp_id)——
+    断句落库访问 rec.status 会 AttributeError（恰好走缓冲兜底路径）。F3 断言
+    compliance_flags 落库需要记录支持真实字段 + session 支持 commit。
+    """
+
+    def __init__(self, user_id: int = 7):
+        self._user_id = user_id
+        self.is_active = True
+        self.record = SimpleNamespace(
+            user_id=user_id, product_id=1, hcp_id=1,
+            status="in_progress", ai_summary=None, compliance_flags=None,
+            conversation_transcript="",
+        )
+
+    def query(self, model):
+        return _FakeAsrQueryWithRecord(self._user_id, model, self.record)
+
+    def commit(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _FakeAsrQueryWithRecord:
+    def __init__(self, user_id, model, record):
+        self._user_id = user_id
+        self._model = model
+        self._record = record
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def with_for_update(self):
+        return self
+
+    def populate_existing(self):
+        return self
+
+    def first(self):
+        if self._model is not None and self._model.__name__ == "User":
+            return SimpleNamespace(id=self._user_id, username="rep1", role="rep", status="active")
+        return self._record
+
+
+def _run_ws_warn_flow(monkeypatch, compliance_fn):
+    """跑一轮 NLS_MOCK WS 会话，返回 (合规帧, session)"""
+    from app.api import asr_ws
+    session = _FakeAsrSessionWithRecord()
+    monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
+    monkeypatch.delenv("NLS_APPKEY", raising=False)
+    monkeypatch.setenv("NLS_MOCK", "1")
+    monkeypatch.setattr(asr_ws, "check_compliance", compliance_fn)
+
+    token = create_token(7, "rep1", "rep")
+    compliance_frame = None
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/visits/1/asr") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
+            ws.receive_json()  # ready
+            ws.send_bytes(b"\x00" * 3200)
+            for _ in range(3):
+                frame = ws.receive_json()
+                if frame.get("type") == "compliance":
+                    compliance_frame = frame
+                    break
+            ws.send_text(json.dumps({"type": "stop"}))
+            ws.receive_json()  # completed
+        time.sleep(0.3)  # 等后台任务落库收尾
+    return compliance_frame, session
+
+
+class TestAsrWebSocketComplianceFrames:
+    """F3：WS 实时合规帧——warn 级违规推送 + compliance_flags 落库（与 REST 同口径）"""
+
+    def test_warn_violations_push_frame_and_persist_flags(self, monkeypatch):
+        """violations 非空、blocked=False（warn 级）→ 推送合规帧（blocked=False 区分轻重）+ 落库"""
+
+        async def _warn_compliance(text, context=None):
+            return {"blocked": False, "risk_level": "medium",
+                    "violations": [{"rule_code": "R002", "severity": "warn", "matched_text": text}]}
+
+        frame, session = _run_ws_warn_flow(monkeypatch, _warn_compliance)
+        assert frame is not None, "warn 级违规也应推送合规帧"
+        assert frame["blocked"] is False
+        assert len(frame["violations"]) == 1
+        assert frame["violations"][0]["rule_code"] == "R002"
+        # 落库与 REST 同口径：violations 累加、blocked 取或
+        flags = session.record.compliance_flags
+        assert flags is not None, "warn 级违规应落库 compliance_flags"
+        assert flags["blocked"] is False
+        assert len(flags["violations"]) == 1
+
+    def test_blocked_violations_push_frame_and_persist_blocked_flag(self, monkeypatch):
+        """blocked=True 路径不受重构影响：帧带 blocked=True，落库 blocked 取或"""
+
+        async def _blocked_compliance(text, context=None):
+            return {"blocked": True, "risk_level": "high",
+                    "violations": [{"rule_code": "R001", "severity": "high", "matched_text": text}]}
+
+        frame, session = _run_ws_warn_flow(monkeypatch, _blocked_compliance)
+        assert frame is not None
+        assert frame["blocked"] is True
+        assert len(frame["violations"]) == 1
+        flags = session.record.compliance_flags
+        assert flags["blocked"] is True
+        assert len(flags["violations"]) == 1
+
+    def test_warn_frame_pushed_but_flags_not_appended_after_visit_ended(self, monkeypatch):
+        """已结束拜访（证据封存）：帧仍然推送（实时告警），但 compliance_flags 不追加"""
+
+        async def _warn_compliance(text, context=None):
+            return {"blocked": False, "risk_level": "medium",
+                    "violations": [{"rule_code": "R002", "severity": "warn", "matched_text": text}]}
+
+        from app.api import asr_ws
+        session = _FakeAsrSessionWithRecord()
+        session.record.ai_summary = "真实总结已生成"  # 拜访已结束
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
+        monkeypatch.delenv("NLS_APPKEY", raising=False)
+        monkeypatch.setenv("NLS_MOCK", "1")
+        monkeypatch.setattr(asr_ws, "check_compliance", _warn_compliance)
+
+        token = create_token(7, "rep1", "rep")
+        frame = None
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                ws.receive_json()  # ready
+                ws.send_bytes(b"\x00" * 3200)
+                for _ in range(3):
+                    f = ws.receive_json()
+                    if f.get("type") == "compliance":
+                        frame = f
+                        break
+                ws.send_text(json.dumps({"type": "stop"}))
+                ws.receive_json()  # completed
+            time.sleep(0.3)
+        assert frame is not None and frame["blocked"] is False
+        assert session.record.compliance_flags is None, "已结束拜访不应追加合规标记"

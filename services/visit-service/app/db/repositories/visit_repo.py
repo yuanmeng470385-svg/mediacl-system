@@ -22,10 +22,14 @@ class VisitRepo:
 
     @staticmethod
     def get(db: Session, visit_id: int, for_update: bool = False) -> Optional[VisitRecord]:
-        """按 id 取拜访记录；for_update=True 时对行加锁（防并发读改写丢失更新）"""
+        """按 id 取拜访记录；for_update=True 时对行加锁并刷新为最新已提交行（防并发读改写丢失更新）"""
         query = db.query(VisitRecord).filter(VisitRecord.id == visit_id)
         if for_update:
-            query = query.with_for_update()
+            # F2 终审（2026-08-13）：populate_existing —— 不加则 Session 内已缓存的
+            # 旧实例（如 _llm_recommend 冷却判断的无锁读）被 identity map 直接返回，
+            # 锁内重读名存实亡，LLM 窗口内并发提交的 key_nodes 追加仍会覆盖丢失。
+            # populate_existing 仅刷新已在 session 中的对象为最新行，首读无副作用。
+            query = query.with_for_update().populate_existing()
         return query.first()
 
     @staticmethod

@@ -67,6 +67,9 @@ class _FakeQuery:
     def with_for_update(self):
         return self  # 行锁是真实 DB 语义，fake 下等价普通查询
 
+    def populate_existing(self):
+        return self  # identity map 刷新是真实 ORM 语义，fake 无过期状态，等价普通查询
+
     def offset(self, n):
         return self
 
@@ -820,3 +823,102 @@ def test_parse_end_visit_tasks():
     assert items2 == []
     items3 = _parse_end_visit_tasks([], {"materials_to_send": []})
     assert items3 == []
+
+
+# ---------- F5 回归（2026-08-13）：REST 补传末句尾缀去重 ----------
+
+class _SpyDetector:
+    """记录 detect 调用的假异议识别器（F5：重复句不应触发检测）"""
+
+    def __init__(self):
+        self.calls = []
+
+    def detect(self, text):
+        self.calls.append(text)
+        return {"objections": [], "interests": [], "sentiment": "neutral", "method": "rules"}
+
+
+class _CountingQwen:
+    """记录 chat 调用的假千问（F5：重复句不应触发 LLM 推荐）"""
+
+    def __init__(self):
+        self.calls = []
+
+    def chat(self, messages, **kwargs):
+        self.calls.append(messages)
+        return {"content": json.dumps({"key_nodes": []})}
+
+
+def test_is_duplicate_tail():
+    """F5 工具函数：仅与现有转写末段整段相同才算重复（后缀包含不算）"""
+    from app.core.visit_manager import VisitManager
+    assert VisitManager._is_duplicate_tail("第一句\n第二句\n", "第二句") is True
+    assert VisitManager._is_duplicate_tail("第一句\n  第二句  \n", "第二句") is True  # 空白容忍
+    assert VisitManager._is_duplicate_tail("这个药价格贵\n", "价格贵") is False  # 末句后缀不算重复
+    assert VisitManager._is_duplicate_tail("", "第二句") is False
+    assert VisitManager._is_duplicate_tail(None, "第二句") is False
+    assert VisitManager._is_duplicate_tail("第一句\n第二句\n", "第一句") is False  # 非末段不算
+    assert VisitManager._is_duplicate_tail("第一句\n第二句\n", "第一句\n第二句") is False  # 多行不等同单段
+
+
+def test_process_transcript_duplicate_tail_skips_detection():
+    """F5：REST 补传末句与 WS 已落库末段相同 → 不落库、不检测、不审计、不推荐
+
+    模拟：WS 会话已在每个 final 句落库（"第一句转写\n第二句转写\n"），会话结束后
+    移动端又把末句经 REST /transcript 补传 —— 旧实现会重复追加 + 重复异议检测/审计。
+    """
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    spy_detector = _SpyDetector()
+    qwen = _CountingQwen()
+    mgr = VisitManager(tingwu=FakeTingwu(), detector=spy_detector, qwen=qwen)
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    rec = FakeDb._records[visit_id]
+    rec.conversation_transcript = "第一句转写\n第二句转写\n"  # WS 已落库
+
+    calls = {"compliance": 0, "audit": 0}
+
+    async def _counting_compliance(content, context=None):
+        calls["compliance"] += 1
+        return {"blocked": False, "violations": [], "risk_level": "none"}
+
+    async def _counting_audit(**kwargs):
+        calls["audit"] += 1
+        return 1
+
+    vm_module.check_compliance = _counting_compliance
+    vm_module.write_audit_log = _counting_audit
+    try:
+        result = asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="第二句转写"))
+    finally:
+        vm_module.check_compliance = _fake_compliance_ok  # 恢复 setup 假实现
+        vm_module.write_audit_log = _fake_audit_ok
+
+    assert result["duplicate"] is True
+    assert result["transcript"] == "第二句转写"
+    # 跳过全部检测流程：合规/异议/LLM 推荐/审计零调用
+    assert calls["compliance"] == 0
+    assert calls["audit"] == 0
+    assert spy_detector.calls == []
+    assert qwen.calls == []
+    # 落库内容不变：末句未被再次追加
+    assert rec.conversation_transcript == "第一句转写\n第二句转写\n"
+    assert rec.compliance_flags is None  # 未写合规标记
+
+
+def test_process_transcript_non_duplicate_still_appends():
+    """F5 反例：非重复句走正常路径（追加 + 检测），去重不误伤"""
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    spy_detector = _SpyDetector()
+    mgr = VisitManager(tingwu=FakeTingwu(), detector=spy_detector, qwen=_CountingQwen())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    rec = FakeDb._records[visit_id]
+    rec.conversation_transcript = "第一句转写\n"
+
+    result = asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="第二句转写"))
+    assert result.get("duplicate") is None
+    assert rec.conversation_transcript == "第一句转写\n第二句转写\n"
+    assert len(spy_detector.calls) == 1  # 正常执行了异议检测

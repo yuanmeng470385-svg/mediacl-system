@@ -181,13 +181,40 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
                             text,
                             {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
                         )
-                        if compliance.get("blocked"):
+                        violations = compliance.get("violations") or []
+                        blocked = bool(compliance.get("blocked"))
+                        # F3（2026-08-13）：violations 非空即推送合规帧 —— warn 级违规
+                        # 也要实时告警（旧实现只推 blocked），帧内保留 blocked 布尔
+                        # 区分轻重（移动端 default case 忽略未知字段，不影响旧客户端）
+                        if blocked or violations:
                             async with send_lock:
                                 await websocket.send_json({
                                     "type": "compliance",
-                                    "blocked": True,
-                                    "violations": compliance.get("violations", []),
+                                    "blocked": blocked,
+                                    "violations": violations,
                                 })
+                        # F3：warn 级违规同样落库 —— 与 REST process_transcript 同口径
+                        # （violations 累加不整句覆盖、blocked 取或），保证 evidence 完整。
+                        # 与断句落库同一状态守卫：已结束/已取消的拜访不再追加合规标记
+                        # （证据已封存）；并发追加以行锁串行化
+                        if violations:
+                            try:
+                                rec = VisitRepo.get(db, visit_id, for_update=True)
+                                if rec and rec.status == VISIT_STATUS_CANCELLED:
+                                    logger.warning("拜访已取消，合规标记不追加: visit_id=%s", visit_id)
+                                elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
+                                    logger.warning("拜访已结束，合规标记不追加: visit_id=%s", visit_id)
+                                elif rec:
+                                    existing_flags = rec.compliance_flags or {"violations": []}
+                                    existing_violations = existing_flags.get("violations") or []
+                                    existing_violations.extend(violations)
+                                    rec.compliance_flags = {
+                                        "violations": existing_violations,
+                                        "blocked": existing_flags.get("blocked", False) or blocked,
+                                    }
+                                    db.commit()
+                            except Exception as exc:
+                                logger.error("合规标记落库失败: visit_id=%s err=%s", visit_id, exc)
                     except (ConcurrencyError, ConnectionClosed, RuntimeError):
                         # 客户端已断开 / 发送竞争 / 连接关闭后 starlette send 抛 RuntimeError：
                         # 跳过推送，不是合规检查失败

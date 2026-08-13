@@ -59,16 +59,32 @@ class ObjectionDetector:
         semantic = self._semantic_detect(text)
 
         if semantic:
-            # 合并：规则层命中 + 语义层补充（按原文去重）
+            # 合并：规则层命中 + 语义层补充（按原文去重）。
+            # F4（2026-08-13）：qwen 输出畸形（缺 text 键 / 字符串数组 / objections
+            # 为字符串等）时逐项校验，坏项跳过 —— 不再 KeyError/TypeError 逃出
+            # 导致 process_transcript 500。
             seen = {o["text"] for o in rule_objections}
-            for obj in semantic.get("objections", []):
-                if obj["text"] not in seen:
-                    rule_objections.append(obj)
-                    seen.add(obj["text"])
+            for obj in semantic.get("objections") or []:
+                if not isinstance(obj, dict):
+                    continue
+                obj_text = str(obj.get("text") or "").strip()
+                if not obj_text or obj_text in seen:
+                    continue
+                rule_objections.append({"type": obj.get("type"), "text": obj_text})
+                seen.add(obj_text)
+            # interests/sentiment 同样做类型钳制（模型可能返回字符串/其他类型）
+            interests = semantic.get("interests") or []
+            if not isinstance(interests, list):
+                interests = []
+            interests = [str(i).strip() for i in interests
+                         if isinstance(i, str) and str(i).strip()]
+            sentiment = semantic.get("sentiment")
+            if not isinstance(sentiment, str) or not sentiment.strip():
+                sentiment = "neutral"
             return {
                 "objections": rule_objections,
-                "interests": semantic.get("interests", []),
-                "sentiment": semantic.get("sentiment", "neutral"),
+                "interests": interests,
+                "sentiment": sentiment,
                 "method": "rules+semantic",
             }
         return {"objections": rule_objections, "interests": [], "sentiment": "neutral", "method": "rules"}
