@@ -114,7 +114,7 @@ export default function KnowledgeList() {
       })
       .catch((err) => {
         options.onError?.(err);
-        message.error(err?.response?.data?.message || '上传失败，请重试');
+        // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
       });
   };
 
@@ -123,8 +123,8 @@ export default function KnowledgeList() {
       await knowledgeAPI.review(r.id, approved ? 'approve' : 'reject');
       message.success(approved ? '审核通过，文档已上架' : '已驳回');
       actionRef.current?.reload();
-    } catch (err: any) {
-      message.error(err?.response?.data?.message || (approved ? '审核失败' : '驳回失败'));
+    } catch {
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
     }
   };
 
@@ -134,9 +134,9 @@ export default function KnowledgeList() {
     try {
       const res = await knowledgeAPI.detail(r.id);
       setDetailDoc(res.data.data);
-    } catch (err: any) {
+    } catch {
       setDetailOpen(false);
-      message.error(err?.response?.data?.message || '获取详情失败');
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
     } finally {
       setDetailLoading(false);
     }

@@ -34,6 +34,8 @@ export default function UserList() {
       valueEnum: { admin: '管理员', manager: '管理者', rep: '代表', compliance: '合规', medical: '医学', finance: '财务' } },
     { title: '区域', dataIndex: 'region', width: 120 },
     { title: '状态', dataIndex: 'status', width: 80,
+      // valueEnum 让搜索表单渲染为 启用/禁用 下拉（后端 users.py list 支持 status 筛选）
+      valueEnum: { active: '启用', disabled: '禁用' },
       render: (_, r) => <Tag color={r.status === 'active' ? 'green' : 'red'}>{r.status === 'active' ? '启用' : '禁用'}</Tag> },
     { title: '操作', width: 100,
       render: (_, r) => <a onClick={() => { setEditing(r); setFormOpen(true); }}>编辑</a> },
@@ -46,7 +48,7 @@ export default function UserList() {
         actionRef={actionRef}
         columns={columns}
         request={async (params) => {
-          const res = await userAPI.list({ page: params.current || 1, page_size: params.pageSize || 10, role: params.role });
+          const res = await userAPI.list({ page: params.current || 1, page_size: params.pageSize || 10, role: params.role, status: params.status });
           return { data: res.data.data.items, total: res.data.data.total, success: true };
         }}
         rowKey="id"

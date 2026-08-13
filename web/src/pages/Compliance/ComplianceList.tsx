@@ -14,12 +14,6 @@ const SEVERITY_TEXT: Record<string, string> = { high: '高', medium: '中', low:
 const ACTION_TEXT: Record<string, string> = { reject: '拒绝', warn: '警告', log: '仅记录' };
 const RULE_TYPE_TEXT: Record<string, string> = { keyword: '关键词', regex: '正则', semantic: '语义' };
 
-/** 从后端错误响应提取中文提示（ParamError → HTTP 400, {code:1000, message:"..."}） */
-function errorMessage(e: unknown, fallback: string): string {
-  const err = e as { response?: { data?: { message?: string } } };
-  return err?.response?.data?.message || fallback;
-}
-
 export default function ComplianceList() {
   const actionRef = useRef<ActionType>();
   const [formOpen, setFormOpen] = useState(false);
@@ -45,8 +39,8 @@ export default function ComplianceList() {
       const res = await complianceAPI.reload();
       message.success(`规则热更新完成，共加载 ${res.data.data?.reloaded_rules ?? 0} 条`);
       actionRef.current?.reload();
-    } catch (e) {
-      message.error(errorMessage(e, '热更新失败'));
+    } catch {
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
     }
   };
 
@@ -89,8 +83,8 @@ export default function ComplianceList() {
                 await complianceAPI.delete(r.id);
                 message.success('规则已禁用');
                 actionRef.current?.reload();
-              } catch (e) {
-                message.error(errorMessage(e, '删除失败'));
+              } catch {
+                // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
               }
             }}
           >删除</a>
@@ -167,9 +161,8 @@ export default function ComplianceList() {
             actionRef.current?.reload();
             refreshStats();
             return true;
-          } catch (e) {
-            message.error(errorMessage(e, `${editing ? '编辑' : '新增'}失败`));
-            return false; // 保持弹窗打开，便于修正后重提
+          } catch {
+            return false; // 保持弹窗打开，便于修正后重提；失败 toast 由全局拦截器统一弹
           }
         }}
       >
@@ -234,8 +227,8 @@ export default function ComplianceList() {
               const res = await complianceAPI.test(testContent);
               setTestResult(res.data.data.hits);
               setTestTotal(res.data.data.total_rules_tested);
-            } catch (e) {
-              message.error(errorMessage(e, '规则测试失败'));
+            } catch {
+              // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
             } finally {
               setTesting(false);
             }

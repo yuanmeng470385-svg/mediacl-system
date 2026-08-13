@@ -17,7 +17,6 @@ const RISK_ENUM = { high: '高危', medium: '中危', low: '低危' };
 
 /** 展开行：拉取单条日志详情，展示真实字段（ai_prompt_hash / ai_response_hash 等） */
 function LogDetail({ log }: { log: AuditLog }) {
-  const { message } = App.useApp();
   const [data, setData] = useState<AuditLog | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,10 +25,11 @@ function LogDetail({ log }: { log: AuditLog }) {
     setLoading(true);
     auditAPI.detail(log.id)
       .then((res) => { if (!cancelled) setData(res.data.data); })
-      .catch(() => { if (!cancelled) message.error('加载日志详情失败'); })
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
+      .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [log.id, message]);
+  }, [log.id]);
 
   if (loading) return <Spin size="small" />;
 
@@ -106,6 +106,8 @@ export default function AuditList() {
     { title: '服务', dataIndex: 'service_name', width: 130, fieldProps: { placeholder: '如 specialist-service' } },
     { title: '操作', dataIndex: 'action', width: 150, fieldProps: { placeholder: '如 chat_response' } },
     { title: '用户 ID', dataIndex: 'user_id', width: 90, fieldProps: { placeholder: '用户 ID' } },
+    // 关键词搜索（B5 后端已支持 ILIKE 多字段：操作/服务/资源/请求ID/取证内容），仅作搜索列不在表格展示
+    { title: '关键词', dataIndex: 'keyword', hideInTable: true, fieldProps: { placeholder: '操作/服务/资源/请求ID/取证内容' } },
     {
       title: '风险等级', dataIndex: 'risk_level', width: 100, valueEnum: RISK_ENUM,
       render: (_, r) => (r.risk_level ? <Tag color={RISK_COLOR[r.risk_level] || 'default'}>{RISK_ENUM[r.risk_level] ?? r.risk_level}</Tag> : '—'),
@@ -124,7 +126,11 @@ export default function AuditList() {
     try {
       const res = await auditAPI.export(body);
       const blob = res.data;
-      if (!(blob instanceof Blob) || blob.size === 0) throw new Error('empty response');
+      // 空响应不是 HTTP 错误，拦截器不会弹 —— 这里兜底提示
+      if (!(blob instanceof Blob) || blob.size === 0) {
+        message.error('导出失败，请稍后重试');
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const cd = res.headers?.['content-disposition'] ?? '';
       const m = /filename="?([^";]+)"?/.exec(cd);
@@ -138,7 +144,7 @@ export default function AuditList() {
       URL.revokeObjectURL(url);
       message.success('导出成功');
     } catch {
-      message.error('导出失败，请稍后重试');
+      // HTTP 错误已由全局拦截器统一弹 toast，此处不重复弹（避免双弹）
     }
   };
 
@@ -164,6 +170,7 @@ export default function AuditList() {
             service_name: params.service_name,
             action: params.action,
             risk_level: params.risk_level,
+            keyword: params.keyword,
           };
           filterRef.current = query;
           const res = await auditAPI.list(query);

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Tag, Switch, Button, Space, App, Flex,
+  Tag, Switch, Button, Space, Flex,
 } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { specialistAPI } from '../../services/specialist';
@@ -29,7 +29,6 @@ export default function SpecialistOffice({
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const timerRef = useRef<number | null>(null);
-  const { message } = App.useApp();
 
   const load = async () => {
     try {
@@ -92,7 +91,7 @@ export default function SpecialistOffice({
                 const res = await specialistAPI.detail(item.id);
                 onEdit(res.data.data);
               } catch {
-                message.error('获取专员详情失败，请稍后重试');
+                // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
               }
             }}
             onToggleStatus={(item) => onToggleStatus(toSpecialist(item))}

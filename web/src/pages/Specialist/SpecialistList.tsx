@@ -14,12 +14,6 @@ import { specialistAPI, type SpecialistFeedback } from '../../services/specialis
 import { STATUS_MAP } from '../../constants/specialist';
 import type { Specialist, SpecialistStats } from '../../types';
 
-/** axios 错误里取后端 message（ParamError 400 / 404 / 403 均带 message） */
-function errMsg(err: unknown, fallback: string): string {
-  const resp = (err as { response?: { data?: { message?: string } } })?.response;
-  return resp?.data?.message || fallback;
-}
-
 /** 表单值 → 后端白名单 payload：空值不提交，product_id 转数字 */
 function toPayload(values: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
@@ -147,8 +141,8 @@ export default function SpecialistList() {
       message.success(next === 'disabled' ? '专员已停用' : '专员已启用');
       actionRef.current?.reload();
       loadCounts();
-    } catch (err) {
-      message.error(errMsg(err, '状态更新失败'));
+    } catch {
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
     }
   }, [message, loadCounts]);
 
@@ -167,9 +161,8 @@ export default function SpecialistList() {
       actionRef.current?.reload();
       loadCounts();
       return true;
-    } catch (err) {
-      message.error(errMsg(err, '保存失败'));
-      return false; // 保留弹窗让用户修改
+    } catch {
+      return false; // 保留弹窗让用户修改；失败 toast 由全局拦截器统一弹
     }
   }, [editing, message, loadCounts]);
 

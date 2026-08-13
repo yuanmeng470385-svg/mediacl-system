@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ProTable } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { App, Spin, Tag } from 'antd';
+import { Spin, Tag } from 'antd';
 import { complianceAPI } from '../../services/compliance';
 import { userAPI } from '../../services/user';
 import type { ComplianceBlock } from '../../types';
@@ -17,7 +17,6 @@ const SEVERITY_ENUM = { high: '高', medium: '中', low: '低' };
 
 /** 展开行：拉取单条拦截详情，展示完整内容与上下文（列表接口 content 截断 200 字、不含 context） */
 function BlockDetail({ block, userName }: { block: ComplianceBlock; userName: string }) {
-  const { message } = App.useApp();
   const [data, setData] = useState<ComplianceBlock | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -26,10 +25,11 @@ function BlockDetail({ block, userName }: { block: ComplianceBlock; userName: st
     setLoading(true);
     complianceAPI.blockDetail(block.id)
       .then((res) => { if (!cancelled) setData(res.data.data); })
-      .catch(() => { if (!cancelled) message.error('加载拦截详情失败'); })
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
+      .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [block.id, message]);
+  }, [block.id]);
 
   if (loading) return <Spin size="small" />;
 

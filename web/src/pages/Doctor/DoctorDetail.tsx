@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { PageContainer } from '@ant-design/pro-components';
-import { Alert, App, Card, Descriptions, Empty, Space, Spin, Tag, Timeline, Typography } from 'antd';
+import { Alert, Card, Descriptions, Empty, Space, Spin, Tag, Timeline, Typography } from 'antd';
 import { PhoneOutlined } from '@ant-design/icons';
 import {
   doctorAPI,
@@ -19,7 +19,6 @@ export default function DoctorDetail() {
   const [profile, setProfile] = useState<DoctorProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileFailed, setProfileFailed] = useState(false);
-  const { message } = App.useApp();
 
   useEffect(() => {
     if (!id) return;
@@ -28,7 +27,8 @@ export default function DoctorDetail() {
         setDoctor(dr.data.data);
         setInteractions(ir.data.data);
       })
-      .catch(() => message.error('加载失败'))
+      // 失败 toast 由全局拦截器统一弹，此处不重复弹（避免双弹）
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [id]);
 
