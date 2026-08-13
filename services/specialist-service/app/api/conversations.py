@@ -1,6 +1,7 @@
 """对话反馈 / 收藏 / 我的收藏"""
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.common.auth import get_current_user
@@ -115,7 +116,14 @@ async def toggle_favorite(
         citations=citations,
     )
     db.add(fav)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # D4（2026-08-13）：并发双点 toggle —— check-then-insert 竞态下第二个
+        # 请求撞 (user_id, conversation_id) 唯一约束。此时该收藏已由并发请求
+        # 写入，最终态即"已收藏"，按幂等成功返回，防 500。
+        db.rollback()
+        return success({"is_favorite": True})
     return success({"is_favorite": True})
 
 

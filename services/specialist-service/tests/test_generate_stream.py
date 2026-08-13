@@ -54,7 +54,8 @@ class _FakeQwen:
     def __init__(self, content="降级答案"):
         self.content = content
 
-    def chat(self, messages, model, temperature):
+    def chat(self, messages, model, temperature, max_tokens=2000):
+        # max_tokens：D5 起降级路径收紧为 600（300 字上限），替身兼容该参数
         return {"content": self.content}
 
 

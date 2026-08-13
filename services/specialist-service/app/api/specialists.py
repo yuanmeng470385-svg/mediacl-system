@@ -2,7 +2,7 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from shared.common.response import success, ParamError
+from shared.common.response import success, ParamError, BusinessError
 from shared.common.auth import get_current_user, require_roles
 from shared.common.pagination import PaginationParams, paginate
 from app.services.audit_client import write_audit_log
@@ -213,13 +213,14 @@ async def chat_with_specialist(
         from app.api.conversations import assert_session_owner
         assert_session_owner(db, session_id, current_user["id"])
 
-    # 调用答案生成器
+    # 调用答案生成器（D5：传 db —— 降级时取同 session 最近几轮问答拼多轮上下文）
     generator = AnswerGenerator()
     result = await generator.generate(
         question=question,
         specialist=specialist,
         user_id=current_user["id"],
         session_id=session_id,
+        db=db,
     )
 
     # 对话记录入库 —— conversation_id 是前端反馈/收藏的主键
@@ -354,17 +355,42 @@ def _validate_specialist_fields(request: dict, creating: bool) -> dict:
 
     creating 与 updating 都接受 SPECIALIST_UPDATE_FIELDS 白名单字段，
     白名单之外的字段一律 ParamError；creating 额外要求 name 与 product_id 非空。
+    D2（2026-08-13）：
+    - name 传了就必须非空（含 update —— name 是 NOT NULL 列，null/空串无法落库）；
+    - product_id 传了就必须能转 int（防 create 的 int() 抛 ValueError 变 500）；
+      显式 null 放行（update 清空 product_id 引用，可空 FK）。
     """
-    allowed = set(request.keys()) - SPECIALIST_UPDATE_FIELDS
+    data = dict(request)
+    allowed = set(data.keys()) - SPECIALIST_UPDATE_FIELDS
     if allowed:
         raise ParamError(f"不允许的字段: {sorted(allowed)}")
     if creating:
-        name = (request.get("name") or "").strip()
-        if not name:
+        # create 必须带非空 name 与 product_id
+        if not (data.get("name") or "").strip():
             raise ParamError("name 不能为空")
-        if not request.get("product_id"):
+        if not data.get("product_id"):
             raise ParamError("product_id 不能为空")
-    return request
+    elif "name" in data and not (data.get("name") or "").strip():
+        # update 传了 name 就必须非空（name 是 NOT NULL 列，null/空串无法落库）
+        raise ParamError("name 不能为空")
+    if "product_id" in data and data.get("product_id") is not None:
+        try:
+            data["product_id"] = int(data["product_id"])
+        except (TypeError, ValueError):
+            raise ParamError("product_id 必须为整数")
+    return data
+
+
+def _ensure_product_exists(db: Session, product_id: int) -> None:
+    """D2（2026-08-13）：product_id 引用的产品必须存在。
+
+    否则提交时撞 products FK 约束变 500 IntegrityError；预检后转业务错误，
+    与 auth A2 的 manager_id 存在性预检同思路。
+    """
+    from shared.models.product import Product
+    exists = db.query(Product).filter(Product.id == product_id).first()
+    if not exists:
+        raise BusinessError(f"产品不存在: {product_id}")
 
 
 # ==================== 专员 CRUD（S6：仅 admin） ====================
@@ -377,9 +403,10 @@ async def create_specialist(
 ):
     """创建专员"""
     data = _validate_specialist_fields(request, creating=True)
+    _ensure_product_exists(db, data["product_id"])
     specialist = Specialist(
         name=data["name"].strip(),
-        product_id=int(data["product_id"]),
+        product_id=data["product_id"],
         persona=data.get("persona"),
         knowledge_scope=data.get("knowledge_scope"),
         compliance_level=data.get("compliance_level", "internal"),
@@ -409,10 +436,23 @@ async def update_specialist(
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在")
     data = _validate_specialist_fields(request, creating=False)
+    if "product_id" in data and data["product_id"] is not None:
+        _ensure_product_exists(db, data["product_id"])
     for field in SPECIALIST_UPDATE_FIELDS:
-        if field in data and data[field] is not None:
-            value = _normalize_status(data[field]) if field == "status" else data[field]
-            setattr(specialist, field, value)
+        if field not in data:
+            continue
+        value = data[field]
+        if value is None:
+            # D2（2026-08-13）：显式 null → 清空字段。旧实现 data[field] is not None
+            # 使 persona/knowledge_scope/bailian_app_id/product_id 等可空字段
+            # 永远无法清空。name 已被 _validate 拦截（NOT NULL 列）；
+            # status 有枚举语义，显式 null 同样按非法值处理。
+            if field == "status":
+                raise ParamError("status 不能为 null")
+            setattr(specialist, field, None)
+            continue
+        value = _normalize_status(value) if field == "status" else value
+        setattr(specialist, field, value)
     db.commit()
     db.refresh(specialist)
     await write_audit_log(

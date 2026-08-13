@@ -113,6 +113,9 @@ class FakeDb:
         self.specialist_stub = ChainStub(specialists or [])
         self.conv = ScalarStub()
         self.feedback = ScalarStub()
+        # D2（2026-08-13）：create/update 预检产品存在性 —— 默认有一行产品
+        # （first() 返回 truthy 即"存在"）
+        self.product_stub = ChainStub([object()])
         self.added = []
         self.user_role = "admin"  # _client 按 role 参数覆写
 
@@ -125,6 +128,8 @@ class FakeDb:
         name = getattr(table, "name", None) or getattr(model, "__name__", None)
         if name == "digital_specialists":
             return self.specialist_stub
+        if name == "products":
+            return self.product_stub
         if name == "conversations":
             return self.conv
         if name == "conversation_feedback":

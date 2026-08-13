@@ -59,7 +59,8 @@ class FakeGenerator:
     def __init__(self, frames):
         self._frames = frames
 
-    async def generate_stream(self, question, specialist, user_id, session_id=None):
+    async def generate_stream(self, question, specialist, user_id, session_id=None, db=None):
+        # db：D5 起 WS chat 会传（降级多轮上下文），替身兼容该参数
         for f in self._frames:
             yield f
 

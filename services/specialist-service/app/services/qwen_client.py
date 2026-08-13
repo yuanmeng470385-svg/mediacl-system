@@ -6,7 +6,7 @@
 
 import os
 import logging
-from typing import List, Dict, Generator
+from typing import List, Dict
 
 import httpx
 from openai import OpenAI
@@ -60,26 +60,5 @@ class QwenClient:
         except Exception as e:
             logger.error(f"通义千问调用失败: {e}")
             raise
-
-    def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        model: str = None,
-        **kwargs
-    ) -> Generator[str, None, None]:
-        """流式调用通义千问"""
-        model = model or os.getenv("QWEN_MAX_MODEL", "qwen-max")
-        try:
-            stream = self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=True,
-                **kwargs
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    yield delta.content
-        except Exception as e:
-            logger.error(f"通义千问流式调用失败: {e}")
-            raise
+    # D1（2026-08-13）：chat_stream 死代码删除 —— 全仓 grep 无任何调用方
+    # （流式走百炼 bailian_client.chat_stream；本客户端只服务降级同步路径）。

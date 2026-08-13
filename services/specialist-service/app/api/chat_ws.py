@@ -152,6 +152,7 @@ async def chat_ws(
             specialist=specialist,
             user_id=user_id,
             session_id=session_id,
+            db=db,  # D5：降级多轮上下文取历史（与 REST chat 同口径）
         ):
             if stop_event.is_set():
                 break

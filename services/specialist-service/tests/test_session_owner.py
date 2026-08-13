@@ -205,7 +205,8 @@ def test_chat_不带session_id_正常新建不校验(client_factory, monkeypatch
 
 
 class _FakeGenerator:
-    async def generate(self, question, specialist, user_id, session_id=None):
+    async def generate(self, question, specialist, user_id, session_id=None, db=None):
+        # db：D5 起 REST chat 会传（降级多轮上下文），替身兼容该参数
         return {"answer": "新会话答案", "session_id": "dlg-new", "citations": [],
                 "blocked": False, "violations": []}
 
@@ -216,7 +217,8 @@ class FakeGenerator:
     def __init__(self, frames):
         self._frames = frames
 
-    async def generate_stream(self, question, specialist, user_id, session_id=None):
+    async def generate_stream(self, question, specialist, user_id, session_id=None, db=None):
+        # db：D5 起 WS chat 会传（降级多轮上下文），替身兼容该参数
         for f in self._frames:
             yield f
 

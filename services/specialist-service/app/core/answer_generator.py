@@ -43,6 +43,7 @@ class AnswerGenerator:
         specialist: Specialist,
         user_id: int,
         session_id: Optional[str] = None,
+        db=None,
     ) -> Dict:
         """
         生成回答（主流程）
@@ -52,6 +53,7 @@ class AnswerGenerator:
             specialist: 数字专员 ORM 对象（含 bailian_app_id）
             user_id: 当前用户 ID
             session_id: 会话 ID（多轮对话时传入上次返回的 dialog_id）
+            db: DB 会话（D5 起降级多轮上下文需要；未传则不拼历史，兼容旧调用/单测）
 
         Returns:
             {
@@ -77,13 +79,27 @@ class AnswerGenerator:
                 context={"user_id": user_id, "type": "user_input"}
             )
             if question_check.get("blocked"):
+                # D3（2026-08-13）：预检被拦留痕 —— 与答案被拦路径同口径：
+                # 观测延迟 + 写 question_blocked 审计（此前被拦请求在审计
+                # 与监控中完全不可见）
+                latency_ms = int((time.time() - start_time) * 1000)
+                from app.api.metrics import CHAT_LATENCY
+                CHAT_LATENCY.observe(latency_ms / 1000.0)
+                await write_audit_log(
+                    user_id=user_id,
+                    action="question_blocked",
+                    ai_involved=False,
+                    ai_prompt=question,
+                    compliance_result=question_check,
+                    request_id=request_id,
+                )
                 return {
                     "answer": "您的问题包含不合规内容，请调整后重试。",
                     "citations": [],
                     "evidence_level": None,
                     "session_id": session_id,
                     "request_id": request_id,
-                    "latency_ms": 0,
+                    "latency_ms": latency_ms,
                     "blocked": True,
                     "violations": question_check.get("violations", []),
                 }
@@ -115,8 +131,11 @@ class AnswerGenerator:
                 logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
                 # G3（2026-08-13）：qwen 是同步 SDK 调用，放入 worker 线程，
                 # 避免阻塞事件循环拖垮同进程其他请求
+                # D5（2026-08-13）：降级带多轮上下文 —— 同 session 最近几轮
+                # 问答拼入 qwen messages，追问不再丢上下文
+                history = self._load_fallback_history(db, session_id, user_id)
                 answer = await asyncio.to_thread(
-                    self._fallback_generate, question, specialist,
+                    self._fallback_generate, question, specialist, history,
                 )
                 citations = []
                 ai_prompt = question
@@ -193,6 +212,7 @@ class AnswerGenerator:
         specialist: Specialist,
         user_id: int,
         session_id: Optional[str] = None,
+        db=None,
     ):
         """流式版 generate()：逐帧 yield delta，末尾 yield done。
 
@@ -213,6 +233,20 @@ class AnswerGenerator:
                 context={"user_id": user_id, "type": "user_input"}
             )
             if question_check.get("blocked"):
+                # D3（2026-08-13）：预检被拦留痕 —— 与 REST generate 同口径：
+                # 观测延迟 + 写 question_blocked 审计（此前被拦请求在审计
+                # 与监控中完全不可见）
+                latency_ms = int((time.time() - start_time) * 1000)
+                from app.api.metrics import CHAT_LATENCY
+                CHAT_LATENCY.observe(latency_ms / 1000.0)
+                await write_audit_log(
+                    user_id=user_id,
+                    action="question_blocked",
+                    ai_involved=False,
+                    ai_prompt=question,
+                    compliance_result=question_check,
+                    request_id=request_id,
+                )
                 yield {
                     "type": "done",
                     "answer": "您的问题包含不合规内容，请调整后重试。",
@@ -220,7 +254,7 @@ class AnswerGenerator:
                     "evidence_level": None,
                     "session_id": session_id,
                     "request_id": request_id,
-                    "latency_ms": 0,
+                    "latency_ms": latency_ms,
                     "blocked": True,
                     "violations": question_check.get("violations", []),
                 }
@@ -279,8 +313,10 @@ class AnswerGenerator:
                 logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
                 # G3（2026-08-13）：qwen 是同步 SDK 调用，放入 worker 线程，
                 # 避免阻塞事件循环（与 REST generate 同一口径）
+                # D5（2026-08-13）：降级带多轮上下文（与 REST generate 同口径）
+                history = self._load_fallback_history(db, session_id, user_id)
                 answer = await asyncio.to_thread(
-                    self._fallback_generate, question, specialist,
+                    self._fallback_generate, question, specialist, history,
                 )
                 citations = []
                 ai_response = answer
@@ -382,8 +418,18 @@ class AnswerGenerator:
             context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
         )
         latency_ms = int((time.time() - start_time) * 1000)
-        from app.api.metrics import CHAT_LATENCY
+        from app.api.metrics import CHAT_LATENCY, COMPLIANCE_BLOCKS
         CHAT_LATENCY.observe(latency_ms / 1000.0)
+        # D1（2026-08-13）：COMPLIANCE_BLOCKS 接线（此前死代码恒 0 —— arms 告警
+        # 引用的 compliance_blocks_total 在 specialist 侧无样本）。口径对齐
+        # compliance checker：只计 action=reject；blocked=True 但 violations
+        # 缺 action 字段（旧版检查结果/测试替身）时兜底按 reject 记一条。
+        violations = full_check.get("violations", []) or []
+        rejects = [v for v in violations if (v or {}).get("action") == "reject"]
+        for v in (rejects or [{}]):
+            COMPLIANCE_BLOCKS.labels(
+                action="reject", severity=(v or {}).get("severity", "unknown"),
+            ).inc()
         await write_audit_log(
             user_id=user_id, action="chat_blocked", ai_involved=True,
             ai_model=ai_model, ai_prompt=ai_prompt, ai_response=text,
@@ -408,11 +454,22 @@ class AnswerGenerator:
 
     # ==================== 降级方案 ====================
 
-    def _fallback_generate(self, question: str, specialist: Specialist) -> str:
+    def _fallback_generate(
+        self,
+        question: str,
+        specialist: Specialist,
+        history: Optional[list] = None,
+    ) -> str:
         """百炼不可用时，直接调通义千问（不带知识库检索）。
 
         同步函数（qwen SDK 阻塞式）：调用方必须用 asyncio.to_thread 包裹，
         本函数内部已兜底 —— 降级也失败时返回固定话术而非抛异常。
+
+        D5（2026-08-13）：
+        - history：同 session 最近几轮问答 [{"role": "user"/"assistant",
+          "content": ...}]，拼在最终 prompt 之前，让追问有上下文；
+        - 输出硬性 300 字符截断（提示词"不超过 300 字"对模型只是软约束），
+          max_tokens 同步收紧（中文约 1-2 token/字，600 封顶防超长后再截）。
         """
         prompt = f"""你是{specialist.name}，医药产品 AI 学术专员。
 
@@ -425,16 +482,53 @@ class AnswerGenerator:
 
 回答："""
 
+        messages = []
+        for m in (history or []):
+            role = m.get("role") if isinstance(m, dict) else None
+            content = m.get("content") if isinstance(m, dict) else None
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+
         try:
             result = self.qwen.chat(
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 model="qwen-max",
                 temperature=0.1,
+                max_tokens=600,
             )
-            return result["content"]
+            content = (result.get("content") or "")
+            if len(content) > 300:
+                logger.info(
+                    f"降级回答 {len(content)} 字符超 300 字上限，截断为 300"
+                )
+                content = content[:300]
+            return content
         except Exception as e:
             logger.error(f"降级生成也失败: {e}")
             return "抱歉，服务暂时不可用，请稍后重试或直接咨询医学顾问。"
+
+    def _load_fallback_history(self, db, session_id: Optional[str], user_id: int) -> list:
+        """降级多轮上下文：取同 session 最近几轮问答（最多 3 轮 / 6 行）。
+
+        D5（2026-08-13）：此前降级每次都只有当前问题，追问丢上下文。
+        归属校验复用 assert_session_owner（防经 generate 直调时跨用户读历史；
+        端点层已校验过，这里是纵深防御）。db 未传 / 无 session_id 时返回空列表。
+        """
+        if db is None or not session_id:
+            return []
+        from app.models.conversation import Conversation
+        from app.api.conversations import assert_session_owner
+        assert_session_owner(db, session_id, user_id)
+        rows = db.query(Conversation).filter(
+            Conversation.session_id == session_id,
+            Conversation.user_id == user_id,
+        ).order_by(Conversation.id.desc()).limit(6).all()
+        history = [
+            {"role": "user" if r.role == "user" else "assistant", "content": r.content}
+            for r in reversed(rows)
+        ]
+        return history
 
     # ==================== 辅助方法 ====================
 
