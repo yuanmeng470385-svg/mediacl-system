@@ -78,3 +78,87 @@ def test_chat_stream_error_event_raises(monkeypatch):
 
     with pytest.raises(BailianException):
         asyncio.run(run())
+
+
+# ==================== G2：传输层异常统一转 BailianException ====================
+
+def test_chat_stream_transport_timeout_wrapped(monkeypatch):
+    """G2 回归：ws.recv 超时（wait_for TimeoutError）→ BailianException（与 REST chat() 同语义）"""
+    class _TimeoutWs(_FakeWs):
+        async def recv(self):
+            raise TimeoutError("recv timeout")
+
+    monkeypatch.setattr(
+        "app.services.bailian_client.websockets.connect", lambda *a, **k: _TimeoutWs([]),
+    )
+
+    async def run():
+        client = BailianClient()
+        async for _ in client.chat_stream(app_id="app-1", prompt="你好"):
+            pass
+
+    with pytest.raises(BailianException) as ei:
+        asyncio.run(run())
+    assert "超时" in str(ei.value)
+
+
+def test_chat_stream_connection_closed_wrapped(monkeypatch):
+    """G2 回归：ws 断连（websockets.exceptions.ConnectionClosed）→ BailianException"""
+    import websockets
+
+    class _ClosedWs(_FakeWs):
+        async def recv(self):
+            raise websockets.exceptions.ConnectionClosed(None, None)
+
+    monkeypatch.setattr(
+        "app.services.bailian_client.websockets.connect", lambda *a, **k: _ClosedWs([]),
+    )
+
+    async def run():
+        client = BailianClient()
+        async for _ in client.chat_stream(app_id="app-1", prompt="你好"):
+            pass
+
+    with pytest.raises(BailianException) as ei:
+        asyncio.run(run())
+    assert "连接关闭" in str(ei.value)
+
+
+def test_chat_stream_malformed_json_wrapped(monkeypatch):
+    """G2 回归：畸形帧（非 JSON）→ BailianException，而非裸 JSONDecodeError"""
+    class _BadJsonWs(_FakeWs):
+        async def recv(self):
+            return "not-json{{{"
+
+    monkeypatch.setattr(
+        "app.services.bailian_client.websockets.connect", lambda *a, **k: _BadJsonWs([]),
+    )
+
+    async def run():
+        client = BailianClient()
+        async for _ in client.chat_stream(app_id="app-1", prompt="你好"):
+            pass
+
+    with pytest.raises(BailianException) as ei:
+        asyncio.run(run())
+    assert "格式异常" in str(ei.value)
+
+
+def test_chat_stream_malformed_frame_wrapped(monkeypatch):
+    """G2 回归：JSON 合法但结构畸形（payload 非 dict → AttributeError）→ BailianException"""
+    class _BadFrameWs(_FakeWs):
+        async def recv(self):
+            return json.dumps({"payload": "not-a-dict"})
+
+    monkeypatch.setattr(
+        "app.services.bailian_client.websockets.connect", lambda *a, **k: _BadFrameWs([]),
+    )
+
+    async def run():
+        client = BailianClient()
+        async for _ in client.chat_stream(app_id="app-1", prompt="你好"):
+            pass
+
+    with pytest.raises(BailianException) as ei:
+        asyncio.run(run())
+    assert "格式异常" in str(ei.value)

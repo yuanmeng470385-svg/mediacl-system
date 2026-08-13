@@ -14,6 +14,7 @@
 import time
 import re
 import uuid
+import asyncio
 import logging
 from typing import Dict, Optional
 
@@ -112,7 +113,11 @@ class AnswerGenerator:
             except BailianException as e:
                 # ---- 降级：百炼不可用时直调通义千问 ----
                 logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
-                answer = self._fallback_generate(question, specialist)
+                # G3（2026-08-13）：qwen 是同步 SDK 调用，放入 worker 线程，
+                # 避免阻塞事件循环拖垮同进程其他请求
+                answer = await asyncio.to_thread(
+                    self._fallback_generate, question, specialist,
+                )
                 citations = []
                 ai_prompt = question
                 ai_response = answer
@@ -240,7 +245,12 @@ class AnswerGenerator:
                         # 流式合规门禁（S-*）：对累积文本做关键词/正则快速检查
                         # （fast=True 跳语义层，毫秒级），命中 reject 立即阻断，
                         # 当前 delta 不转发 —— 违规内容不再到达客户端。
-                        accumulated = answer + frame["text"]
+                        # G1（2026-08-13）：百炼 RespondingContent.text 每帧是全量
+                        # 累积文本（非增量，见 bailian_client"每次是全量"），直接取
+                        # 帧文本即可；旧实现 answer + text 拼接会产出"你你好…"
+                        # 重复前缀 —— 误拦截风险 + ai_response/compliance_blocks
+                        # 审计留痕损坏 + O(n²) 膨胀。answer 仅作最终落库/审计用。
+                        accumulated = frame["text"]
                         frame_check = await check_compliance(
                             content=accumulated,
                             context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
@@ -267,7 +277,11 @@ class AnswerGenerator:
                     raise BailianException("百炼返回空答案（App 未发布或无检索结果）")
             except BailianException as e:
                 logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
-                answer = self._fallback_generate(question, specialist)
+                # G3（2026-08-13）：qwen 是同步 SDK 调用，放入 worker 线程，
+                # 避免阻塞事件循环（与 REST generate 同一口径）
+                answer = await asyncio.to_thread(
+                    self._fallback_generate, question, specialist,
+                )
                 citations = []
                 ai_response = answer
                 ai_model = "qwen-max"
@@ -395,7 +409,11 @@ class AnswerGenerator:
     # ==================== 降级方案 ====================
 
     def _fallback_generate(self, question: str, specialist: Specialist) -> str:
-        """百炼不可用时，直接调通义千问（不带知识库检索）"""
+        """百炼不可用时，直接调通义千问（不带知识库检索）。
+
+        同步函数（qwen SDK 阻塞式）：调用方必须用 asyncio.to_thread 包裹，
+        本函数内部已兜底 —— 降级也失败时返回固定话术而非抛异常。
+        """
         prompt = f"""你是{specialist.name}，医药产品 AI 学术专员。
 
 代表问题：{question}

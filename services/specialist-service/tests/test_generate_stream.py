@@ -182,3 +182,138 @@ def test_generate_stream_fallback_blocked_not_forwarded(monkeypatch):
     # 降级文本先过 fast 门禁，再全量复核（拦截记录用）
     assert calls[-1][2] is False
     assert "违禁降级答案" in calls[-1][0]
+
+
+def test_generate_stream_gate_receives_cumulative_frame_text(monkeypatch):
+    """G1 回归：百炼 RespondingContent.text 每帧是全量累积文本 —— 门禁收到的
+    必须是帧全文，不得是 answer + text 拼接出的"你你好…"重复前缀
+    （误拦截 + ai_response/compliance_blocks 审计留痕损坏）。"""
+    calls = []
+
+    async def _fake_check(content, context, fast=False):
+        await asyncio.sleep(0)
+        calls.append((content, context.get("type"), fast))
+        return {"blocked": False, "violations": []}
+
+    monkeypatch.setattr("app.core.answer_generator.check_compliance", _fake_check)
+    monkeypatch.setattr("app.core.answer_generator.write_audit_log", _fake_audit)
+    generator = AnswerGenerator()
+    # 按百炼全量语义构造帧：每帧 text 都是截至当前的全部文本
+    generator.bailian = FakeBailianStream([
+        _delta("你好"),
+        _delta("你好，我是专员。"),
+        _done("你好，我是专员。"),
+    ])
+
+    async def run():
+        frames = []
+        async for frame in generator.generate_stream("问题", _spec(), user_id=1):
+            frames.append(frame)
+        return frames
+
+    frames = asyncio.run(run())
+    assert [f["type"] for f in frames] == ["delta", "delta", "done"]
+    # 逐帧门禁（ai_output + fast）收到的文本 = 各帧全文，无重复前缀
+    gate = [c for c, t, f in calls if t == "ai_output" and f]
+    assert gate == ["你好", "你好，我是专员。"]
+    assert all("你你好" not in c for c in gate)
+    # Step 3 全量复核（ai_output 非 fast）同样是最后帧全文，无拼接污染
+    review = [c for c, t, f in calls if t == "ai_output" and not f]
+    assert review == ["你好，我是专员。"]
+
+
+def test_generate_stream_bailian_transport_error_falls_back(monkeypatch):
+    """G2 回归：百炼流式中途传输层超时（wait_for TimeoutError）→ chat_stream
+    统一转 BailianException → generate_stream 捕获后走 qwen 降级。
+    修复前 TimeoutError 裸抛会绕过 except BailianException 直接冒泡。"""
+    class _TimeoutWs:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def send(self, data):
+            pass
+
+        async def recv(self):
+            raise TimeoutError("recv timeout")
+
+    monkeypatch.setattr(
+        "app.services.bailian_client.websockets.connect", lambda *a, **k: _TimeoutWs(),
+    )
+    monkeypatch.setattr("app.core.answer_generator.check_compliance", _fake_check_pass)
+    monkeypatch.setattr("app.core.answer_generator.write_audit_log", _fake_audit)
+    # 内置真 BailianClient（websockets.connect 已 mock），走真实 chat_stream 包裹
+    generator = AnswerGenerator()
+    generator.qwen = _FakeQwen("降级答案")
+
+    async def run():
+        frames = []
+        async for frame in generator.generate_stream("你好", _spec(), user_id=1):
+            frames.append(frame)
+        return frames
+
+    frames = asyncio.run(run())
+    assert [f["type"] for f in frames] == ["delta", "done"]
+    assert frames[0]["text"] == "降级答案"
+    assert frames[-1]["blocked"] is False
+
+
+def test_generate_stream_fallback_runs_in_worker_thread(monkeypatch):
+    """G3 回归：降级 qwen 是同步 SDK 调用 —— 必须经 asyncio.to_thread 包裹，
+    不阻塞事件循环（REST generate 与 generate_stream 两处同口径）"""
+    real_to_thread = asyncio.to_thread
+    threaded = []
+
+    async def _spy(fn, *args, **kw):
+        threaded.append(fn.__name__)
+        return await real_to_thread(fn, *args, **kw)
+
+    monkeypatch.setattr("app.core.answer_generator.asyncio.to_thread", _spy)
+    monkeypatch.setattr("app.core.answer_generator.check_compliance", _fake_check_pass)
+    monkeypatch.setattr("app.core.answer_generator.write_audit_log", _fake_audit)
+    generator = AnswerGenerator()
+    generator.bailian = _BailianDown()
+    generator.qwen = _FakeQwen("降级答案")
+
+    async def run():
+        frames = []
+        async for frame in generator.generate_stream("你好", _spec(), user_id=1):
+            frames.append(frame)
+        return frames
+
+    frames = asyncio.run(run())
+    assert [f["type"] for f in frames] == ["delta", "done"]
+    assert frames[0]["text"] == "降级答案"
+    assert threaded == ["_fallback_generate"]
+
+
+def test_generate_fallback_runs_in_worker_thread(monkeypatch):
+    """G3 回归（REST generate 路径）：降级 qwen 同步调用经 asyncio.to_thread"""
+    from app.services.bailian_client import BailianException
+
+    class _BailianChatDown:
+        async def chat(self, app_id, prompt, session_id=None, history=None):
+            raise BailianException("bailian down")
+
+    real_to_thread = asyncio.to_thread
+    threaded = []
+
+    async def _spy(fn, *args, **kw):
+        threaded.append(fn.__name__)
+        return await real_to_thread(fn, *args, **kw)
+
+    monkeypatch.setattr("app.core.answer_generator.asyncio.to_thread", _spy)
+    monkeypatch.setattr("app.core.answer_generator.check_compliance", _fake_check_pass)
+    monkeypatch.setattr("app.core.answer_generator.write_audit_log", _fake_audit)
+    generator = AnswerGenerator()
+    generator.bailian = _BailianChatDown()
+    generator.qwen = _FakeQwen("降级答案")
+
+    async def run():
+        return await generator.generate("你好", _spec(), user_id=1)
+
+    result = asyncio.run(run())
+    assert result["answer"] == "降级答案"
+    assert threaded == ["_fallback_generate"]

@@ -287,10 +287,13 @@ async def get_specialist_feedback(
     specialist_id: int,
     page: int = 1,
     page_size: int = 20,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles("admin", "manager")),
     db: Session = Depends(get_db),
 ):
     """专员反馈明细（B4 修复 2026-08-12：web 数据抽屉此前只有聚合统计，无明细接口）。
+
+    G4（2026-08-13）：web 后台专用 —— 问答快照含全部用户的 question/answer，
+    任意登录用户可读属越权（与 stats 等管理端点同口径），仅 admin/manager。
 
     返回该专员每条反馈（点赞/点踩）对应的问答快照：
       {id, conversation_id, rating(1/-1), comment, question, answer, citations, created_at}

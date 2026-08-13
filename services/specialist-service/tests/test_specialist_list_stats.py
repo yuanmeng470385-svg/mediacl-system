@@ -238,6 +238,25 @@ def test_stats_404_when_specialist_missing():
     assert resp.status_code == 404
 
 
+# ==================== feedback：仅 admin/manager（G4 2026-08-13） ====================
+
+def test_feedback_requires_admin_or_manager():
+    """G4 回归：反馈明细含全部用户问答快照（web 后台专用），rep 访问 → 403"""
+    db = FakeDb(specialists=[FakeSpecialist(1, "A", "active")])
+    resp = _client(db, role="rep").get("/api/v1/specialists/1/feedback")
+    assert resp.status_code == 403
+
+
+def test_feedback_admin_returns_200():
+    """G4 回归：admin 访问反馈明细正常（空明细时 200 + 空 items）"""
+    db = FakeDb(specialists=[FakeSpecialist(1, "A", "active")])
+    resp = _client(db, role="admin").get("/api/v1/specialists/1/feedback")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["items"] == []
+    assert data["total"] == 0
+
+
 # ==================== create/update：白名单行为 ====================
 
 def test_create_accepts_whitelist_fields():
