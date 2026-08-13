@@ -76,7 +76,7 @@ echo ""
 echo "🚀 启动所有微服务..."
 docker compose up -d --scale specialist-service=1 --scale visit-service=1 \
     --scale knowledge-service=1 --scale compliance-service=1 \
-    --scale audit-service=1 --scale hcp-service=1 gateway
+    --scale audit-service=1 --scale hcp-service=1 --scale auth-service=1 gateway
 
 echo "等待服务启动..."
 sleep 10
@@ -93,6 +93,7 @@ SERVICES=(
     "compliance-service:8004"
     "audit-service:8005"
     "hcp-service:8006"
+    "auth-service:8007"
 )
 
 ALL_OK=true

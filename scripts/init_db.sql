@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS visit_records (
     product_id BIGINT REFERENCES products(id),
     specialist_id BIGINT REFERENCES digital_specialists(id),
     visit_time TIMESTAMP NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'in_progress',  -- 显式状态（迁移 008）：仅 cancelled 以此列为准，completed/in_progress 由 ai_summary 推导
     duration_minutes INT,
     conversation_transcript TEXT,
     ai_summary TEXT,
@@ -96,9 +97,13 @@ CREATE TABLE IF NOT EXISTS visit_records (
     compliance_flags JSONB,
     next_visit_plan JSONB,
     attachments JSONB,
+    key_nodes JSONB,                       -- LLM 实时推荐：关键节点标记数组（迁移 006）
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+-- 注意：key_nodes / status 两列由迁移 006 / 008 引入 —— 旧库（早期版本 init_db.sql 建的表）
+-- 不会因 CREATE TABLE IF NOT EXISTS 自动补列，仍须执行 scripts/migrations/006_add_visit_key_nodes.sql
+-- 与 008_add_visit_status.sql（008 含状态回填）。
 CREATE INDEX IF NOT EXISTS idx_visits_hcp ON visit_records(hcp_id);
 CREATE INDEX IF NOT EXISTS idx_visits_user ON visit_records(user_id);
 CREATE INDEX IF NOT EXISTS idx_visits_time ON visit_records(visit_time);

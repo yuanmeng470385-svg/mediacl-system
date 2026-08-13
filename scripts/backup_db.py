@@ -40,7 +40,13 @@ DEFAULT_CONFIG = {
 
 
 def load_config() -> dict:
-    """读取仓库根 .env（若存在且环境未设置则补充），返回配置 dict。"""
+    """读取仓库根 .env 与默认值合并，环境变量优先级最高。
+
+    合并规则：.env 中非空的键覆盖脚本默认值（空值行保留默认值 —— 如
+    BACKUP_DIR= 空行不得把备份落到 cwd；A4 修复在此收紧）；环境变量（非空）
+    再覆盖 .env，优先级最高。.env 中不在默认表的键（DATABASE_URL / DB_USER /
+    DB_PASSWORD 等）也会并入 cfg 供下游使用。
+    """
     cfg = dict(DEFAULT_CONFIG)
     env_file = ROOT / ".env"
     if env_file.exists():
@@ -50,7 +56,8 @@ def load_config() -> dict:
                 continue
             key, _, value = line.partition("=")
             key, value = key.strip(), value.strip()
-            if key not in cfg or not cfg[key]:
+            # 空值行不覆盖非空默认值（如 BACKUP_DIR= 空行否则 Path("") 落到 cwd）
+            if value:
                 cfg[key] = value
     for key in list(cfg):
         env_val = os.getenv(key)
@@ -158,7 +165,7 @@ def cleanup_oss(cfg: dict) -> int:
     cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
     prefix = cfg["BACKUP_OSS_PREFIX"]
     bucket = _oss_bucket(cfg)
-    pattern = re.compile(rf"^{re.escape(prefix)}medagent-(\d{{8}})-\d{{4}}\.dump$")
+    pattern = re.compile(rf"^{re.escape(prefix)}medagent-(\d{{8}})-\d{{6}}\.dump$")  # 秒级时间戳（与 cleanup_local 一致）
     removed = 0
     for obj in oss2.ObjectIterator(bucket, prefix=prefix):
         m = pattern.match(obj.key)

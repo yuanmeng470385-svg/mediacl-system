@@ -6,17 +6,23 @@
     python scripts/restore_db.py --source local --dump backups/medagent-20260812-0200.dump
     python scripts/restore_db.py --source oss               # 从 OSS 下载最近一份
     python scripts/restore_db.py --source local --target-db medagent_restore --yes
+    python scripts/restore_db.py --source oss --pg-user medagent_root   # 生产（002 降级后）
 
 配置同 backup_db.py（复用 load_config）。
 恢复默认到 medagent_restore 临时库，绝不自动覆盖生产库；覆盖需显式 --yes。
+--pg-user：ensure_target_db 执行 CREATE DATABASE 的数据库角色（默认 medagent）。
+    002 迁移把 medagent 降级为 NOSUPERUSER（无 CREATEDB），生产环境须传
+    medagent_root（其口令经 PG_ROOT_PASSWORD 环境变量或 .env 提供，未设置会报错）；
+    目标库 owner 仍为 medagent，后续 pg_restore / 行数校验继续以 medagent 执行。
 恢复生产库的步骤（人执行，勿自动化）：
     1) 停所有服务（docker compose -f deploy/docker-compose.prod.yml stop）
     2) docker exec medagent-postgres psql -U medagent -c "DROP DATABASE medagent WITH (FORCE)"
-    3) python scripts/restore_db.py --source oss --target-db medagent --yes
+    3) python scripts/restore_db.py --source oss --target-db medagent --yes --pg-user medagent_root
     4) 重启服务；审计不可篡改配置（002 迁移）需在新库重新执行
 """
 import argparse
 import datetime
+import os
 import re
 import subprocess
 import sys
@@ -27,10 +33,20 @@ from backup_db import load_config, log, pg_password, _oss_bucket, ROOT
 BACKUP_DIR = Path(load_config()["BACKUP_DIR"])
 
 
-def _psql(cfg: dict, db: str, sql: str) -> subprocess.CompletedProcess:
-    """docker exec psql 执行单条 SQL，返回 CompletedProcess。"""
-    cmd = ["docker", "exec", "-e", f"PGPASSWORD={pg_password(cfg)}", cfg["BACKUP_PG_CONTAINER"],
-           "psql", "-U", "medagent", "-d", db, "-t", "-A", "-c", sql]
+def _psql(cfg: dict, db: str, sql: str, user: str = "medagent") -> subprocess.CompletedProcess:
+    """docker exec psql 执行单条 SQL，返回 CompletedProcess。
+
+    user：执行 SQL 的角色（默认 medagent，口令取自备份口令）。其他角色
+    （生产 medagent_root）的口令经 PG_ROOT_PASSWORD 环境变量或 .env 提供，缺失时报错。
+    """
+    if user == "medagent":
+        password = pg_password(cfg)
+    else:
+        password = os.getenv("PG_ROOT_PASSWORD", "") or cfg.get("PG_ROOT_PASSWORD", "")
+        if not password:
+            raise RuntimeError(f"以 {user} 执行 SQL 需配置 PG_ROOT_PASSWORD（环境变量或 .env）")
+    cmd = ["docker", "exec", "-e", f"PGPASSWORD={password}", cfg["BACKUP_PG_CONTAINER"],
+           "psql", "-U", user, "-d", db, "-t", "-A", "-c", sql]
     return subprocess.run(cmd, capture_output=True)
 
 
@@ -66,8 +82,13 @@ def pick_dump(cfg: dict, source: str, dump_arg: str | None) -> Path:
     return target
 
 
-def ensure_target_db(cfg: dict, target_db: str, yes: bool) -> None:
-    """目标库已存在时要求确认（--yes 跳过）后 drop 重建，owner 为 medagent。"""
+def ensure_target_db(cfg: dict, target_db: str, yes: bool, pg_user: str = "medagent") -> None:
+    """目标库已存在时要求确认（--yes 跳过）后 drop 重建，owner 为 medagent。
+
+    CREATE DATABASE 以 --pg-user 身份执行（002 迁移后 medagent 无 CREATEDB，
+    生产须传 medagent_root）；owner 保持 medagent，使后续 pg_restore / 行数校验
+    以及下次演练的 DROP 都能继续用 medagent 完成。
+    """
     proc = _psql(cfg, "postgres", f"SELECT 1 FROM pg_database WHERE datname='{target_db}'")
     if proc.returncode != 0:
         raise RuntimeError(f"检查目标库失败: {proc.stderr.decode('utf-8', 'replace')[:300]}")
@@ -80,7 +101,7 @@ def ensure_target_db(cfg: dict, target_db: str, yes: bool) -> None:
         proc = _psql(cfg, "postgres", f"DROP DATABASE {target_db} WITH (FORCE)")
         if proc.returncode != 0:
             raise RuntimeError(f"drop 目标库失败: {proc.stderr.decode('utf-8', 'replace')[:300]}")
-    proc = _psql(cfg, "postgres", f"CREATE DATABASE {target_db} OWNER medagent")
+    proc = _psql(cfg, "postgres", f"CREATE DATABASE {target_db} OWNER medagent", user=pg_user)
     if proc.returncode != 0:
         raise RuntimeError(f"创建目标库失败: {proc.stderr.decode('utf-8', 'replace')[:300]}")
 
@@ -129,13 +150,17 @@ def main() -> int:
     parser.add_argument("--dump", default=None, help="指定 dump 文件（默认取最近一份）")
     parser.add_argument("--target-db", default="medagent_restore", help="恢复目标库（默认临时库）")
     parser.add_argument("--yes", action="store_true", help="目标库已存在时跳过确认直接重建")
+    parser.add_argument("--pg-user", default="medagent",
+                        help="执行 CREATE DATABASE 的数据库角色（默认 medagent；002 降级后生产传 medagent_root）")
     args = parser.parse_args()
     cfg = load_config()
     try:
         if not re.fullmatch(r"[A-Za-z0-9_]+", args.target_db):
             raise RuntimeError(f"目标库名非法（仅允许字母/数字/下划线）: {args.target_db}")
+        if not re.fullmatch(r"[A-Za-z0-9_]+", args.pg_user):
+            raise RuntimeError(f"--pg-user 非法（仅允许字母/数字/下划线）: {args.pg_user}")
         dump_path = pick_dump(cfg, args.source, args.dump)
-        ensure_target_db(cfg, args.target_db, args.yes)
+        ensure_target_db(cfg, args.target_db, args.yes, args.pg_user)
         restore_dump(cfg, dump_path, args.target_db)
         result = verify_counts(cfg, "medagent", args.target_db)
     except Exception as exc:

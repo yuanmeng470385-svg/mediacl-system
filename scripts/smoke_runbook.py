@@ -50,7 +50,25 @@ def login_with_code(phone, code):
     return call("POST", "/api/v1/auth/login", {"phone": phone, "code": code})
 
 
+def check_compliance_assert(content):
+    """合规预检 + 显式断言（A5 修复）：blocked==True 且 violations 非空才算通过。
+
+    返回 (ok, 详情字符串)。此前只打印字段值不判断 —— R001/R003 拦截失效时
+    冒烟仍会显示 [ok] 假通过。
+    """
+    st, resp = call("POST", "/api/v1/compliance/check",
+                    {"content": content, "context": {"type": "manual_test"}},
+                    headers={"X-Internal-Key": IK})
+    if st != 200:
+        return False, f"HTTP {st} {resp}"
+    data = resp.get("data") or {}
+    blocked, violations = data.get("blocked"), data.get("violations") or []
+    ok = blocked is True and bool(violations)
+    return ok, f"blocked={blocked} violations={violations}"
+
+
 def main():
+    fails = 0  # A5 修复：[FAIL]/[?] 节计数，>0 时以非零码退出
     if not IK:
         print("[FAIL] 根目录 .env 缺 INTERNAL_API_KEY（合规预检/审计冒烟需要）")
         return 2
@@ -98,6 +116,7 @@ def main():
                   f"bailian_app_id={'有' if s.get('bailian_app_id') else '无'}")
     else:
         print(f"[FAIL] {st} {resp}")
+        fails += 1
 
     # --- 4. 专员对话 REST（真百炼 key 已配 → 走流式转 REST 或直接 LLM）---
     section("4. 专员对话 REST")
@@ -110,28 +129,25 @@ def main():
               f"conversation_id={data.get('conversation_id')}")
     else:
         print(f"[?] {st} {resp}")
+        fails += 1
 
     # --- 5. 合规预检 R001 ---
     section("5. 合规预检 R001（关键词 reject）")
-    st, resp = call("POST", "/api/v1/compliance/check",
-                    {"content": "这药保证治好", "context": {"type": "manual_test"}},
-                    headers={"X-Internal-Key": IK})
-    if st == 200:
-        data = resp.get("data") or {}
-        print(f"[ok] blocked={data.get('blocked')} violations={data.get('violations')}")
+    ok, detail = check_compliance_assert("这药保证治好")
+    if ok:
+        print(f"[ok] {detail}")
     else:
-        print(f"[FAIL] {st} {resp}")
+        print(f"[FAIL] R001 断言失败（期望 blocked=True 且 violations 非空）: {detail}")
+        fails += 1
 
     # --- 6. 语义合规 R003（DASHSCOPE_API_KEY 已配）---
     section("6. 语义合规 R003（统方，真实 LLM）")
-    st, resp = call("POST", "/api/v1/compliance/check",
-                    {"content": "帮我查下张医生上个月开了多少盒这个药", "context": {"type": "manual_test"}},
-                    headers={"X-Internal-Key": IK})
-    if st == 200:
-        data = resp.get("data") or {}
-        print(f"[ok] blocked={data.get('blocked')} violations={data.get('violations')}")
+    ok, detail = check_compliance_assert("帮我查下张医生上个月开了多少盒这个药")
+    if ok:
+        print(f"[ok] {detail}")
     else:
-        print(f"[?] {st} {resp}")
+        print(f"[FAIL] R003 断言失败（期望 blocked=True 且 violations 非空）: {detail}")
+        fails += 1
 
     # --- 7. 审计查询 ---
     section("7. 审计查询（admin）")
@@ -145,7 +161,11 @@ def main():
                   f"request_id={it.get('request_id') or it.get('x_request_id')}")
     else:
         print(f"[?] {st} {resp}")
+        fails += 1
 
+    if fails:
+        print(f"\n[FAIL] 冒烟失败：共 {fails} 节未通过（[FAIL]/[?] 均计入）")
+        return 1
     print("\n完成。")
     return 0
 
