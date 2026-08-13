@@ -96,7 +96,10 @@ async def main():
         check("专员列表(需auth)", r.status_code == 200, f"HTTP {r.status_code}: {r.text[:100]}")
 
         r = await client.get(f"{GATEWAY}/api/v1/compliance/rules")
-        check("合规规则(白名单)", r.status_code == 200, f"HTTP {r.status_code}")
+        # 2026-08-11 起该端点收紧 RBAC（require_roles，仅 admin/manager/compliance）：
+        # 不再是网关白名单直通端点。不带 token 时网关 AuthMiddleware 直接 401
+        # （code 2000），上游根本到不了 —— 断言 401 验证"未认证不可见规则库"。
+        check("合规规则(无token被拒)", r.status_code == 401, f"HTTP {r.status_code}")
 
         # ====== Test 5: Specialist Chat (Full Pipeline) ======
         print("\n📌 Test 5: 数字专员对话（全链路：合规→百炼→合规→审计）")

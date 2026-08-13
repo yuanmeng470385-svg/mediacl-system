@@ -7,6 +7,7 @@
 
 import os
 from sqlalchemy import create_engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
@@ -28,17 +29,28 @@ def _resolve_db_url() -> str:
     默认密码 medagent123 意味着任何能触达 DB 端口的攻击者可直接登录 ——
     仅当显式 dev 标志（DEV_MODE / AUTH_DEV_MODE 任一为 true）时才豁免
     （本地开发/测试用默认本地库）。
+
+    S4（2026-08-13）：口令比较改为精确匹配 —— 旧实现整串子串匹配，
+    强密码只要包含 "medagent123" 子串（如 "medagent123!Xx9#"）就会被误拒启动；
+    现用 sqlalchemy URL 解析出 password 字段做等值比较。
     """
     url = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
     is_dev = (
         os.getenv("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
         or os.getenv("AUTH_DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
     )
-    if not is_dev and DEFAULT_DB_PASSWORD in url:
-        raise RuntimeError(
-            "生产环境禁止使用默认数据库密码 medagent123，请在 .env 配置 DATABASE_URL"
-            "（本地开发设置 DEV_MODE=true 豁免）"
-        )
+    if not is_dev:
+        try:
+            password = make_url(url).password
+        except Exception:
+            # URL 解析失败：不在此拦截（交给 create_engine 报真实的连接串错误），
+            # 避免守卫把畸形 URL 误报成"默认密码"问题
+            return url
+        if password == DEFAULT_DB_PASSWORD:
+            raise RuntimeError(
+                "生产环境禁止使用默认数据库密码 medagent123，请在 .env 配置 DATABASE_URL"
+                "（本地开发设置 DEV_MODE=true 豁免）"
+            )
     return url
 
 
