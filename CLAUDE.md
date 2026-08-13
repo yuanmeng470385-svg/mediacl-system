@@ -56,15 +56,15 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 全项目审查修复批后 459 passed）
-cd services/auth-service && python -m pytest tests/ -v        # 56 用例（含验证码并发 consume Lua 用例）
-cd services/specialist-service && python -m pytest tests/ -v  # 85（含反馈明细角色/流式门禁全量帧）
-cd services/hcp-service && python -m pytest tests/ -v         # 39
-cd services/visit-service && python -m pytest tests/ -v       # 87（含取消/结束态拦截/直调 qwen/转写去重）
-cd services/compliance-service && python -m pytest tests/ -v  # 64（语义网络错误 fail-closed/禁用规则生效）
-cd services/knowledge-service && python -m pytest tests/ -v   # 57（ES 检索 status 过滤/索引后置写入）
-cd services/audit-service && python -m pytest tests/ -v       # 19
-cd services/gateway && python -m pytest tests/ -v             # 46（CORS 白名单/WS 首帧鉴权/信任代理）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 低危批后 537 passed）
+cd services/auth-service && python -m pytest tests/ -v        # 70 用例（含验证码并发 consume Lua 用例）
+cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
+cd services/hcp-service && python -m pytest tests/ -v         # 54
+cd services/visit-service && python -m pytest tests/ -v       # 99（含取消/结束态拦截/直调 qwen/转写去重/ASR 状态守卫）
+cd services/compliance-service && python -m pytest tests/ -v  # 72（语义网络错误 fail-closed/禁用规则生效/参数健壮性）
+cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
+cd services/audit-service && python -m pytest tests/ -v       # 26
+cd services/gateway && python -m pytest tests/ -v             # 49（CORS 白名单/WS 首帧鉴权/信任代理）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -141,7 +141,9 @@ from shared.models.base import Base, TimestampMixin  # ORM 基类（id, created_
 
 错误码区间：1000-1999 参数 / 2000-2999 认证 / 3000-3999 权限 / 4000-4999 业务（含合规拦截）/ 5000-5999 系统 / 6000-6999 第三方。
 
-shared 层自带测试 `shared/common/tests/`（test_internal_auth.py + conftest.py），从 `shared/` 目录跑：`python -m pytest common/tests/ -v`。
+shared 层自带测试 `shared/common/tests/`（test_internal_auth.py + test_exception_handler.py + conftest.py），从 `shared/` 目录跑：`python -m pytest common/tests/ -v`。
+
+**统一错误渲染（2026-08-13 低危批 S1）**：`register_exception_handlers(app)` 现还注册 HTTPException 与 RequestValidationError 两个处理器——7 个业务服务的 404/422 等全部渲染为 `{code,message,data}`（HTTPException 的 detail 若为含 `code` 键的 dict 则原样透传，保住 auth 2001/2002/2003 与 internal_auth 3001 语义；否则按状态码映射：400→1000/401→2000/403→3000/404→4000/405→1000/429→5003/500→5000；422→code 1000）。**gateway 不注册**（有自身渲染，错误码 5001-5005）。
 
 ## main.py 标准模板
 
@@ -408,6 +410,18 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~specialist 流式门禁重复拼接~~（accumulated=帧全量）；~~流式传输异常绕过降级~~（chat_stream 统一转 BailianException）；~~降级同步调 qwen~~（to_thread+30s 超时）；~~/feedback 跨用户~~（require_roles admin/manager）
 - ~~验证码并发复用~~（Lua consume-if-match：计数+比较+DEL 单脚本原子）；~~hcp 画像 qwen 无超时~~（30s）；~~网关 XFF 失真~~（TRUSTED_PROXY_CIDRS 信任代理才保留注入头，默认行为不变）；~~knowledge 索引先于终态写入~~（先 _finish_approve 后写索引）；~~knowledge 检索阻塞事件循环~~（to_thread）；~~prod compose env_file 指向不存在路径~~（../.env + 运行命令注释）；~~arms-monitor 告警死配置~~（PromQL+完整参数+List 后 Update 幂等）
 - 测试基线（2026-08-13 修复批后）：audit 19 / auth 56 / compliance 64 / gateway 46 / hcp 39 / knowledge 57 / specialist 85 / visit 87 = **459 passed**；mobile jest 73；web build PASS
+
+已修（2026-08-13 低危批，8 域约 53 项，11abedb..d9cfa9e 已推 origin/master；fable 终审 1 中 6 低，中危与 1 项低危已修、其余挂账见下）：
+- shared：~~HTTPException/422 形状不统一~~（S1 统一渲染，见 Shared Layer 节）；~~.env.example 缺 CORS_ALLOW_ORIGINS~~；~~NLS_APPKEY truthy 占位绕过 fail-closed~~（改空串）；~~默认口令守卫子串误判~~（make_url 精确比较）；~~prod postgres max_connections 默认 100 不够~~（300）；~~e2e 对已收紧 RBAC 端点断言 200~~（改 401）
+- auth/audit：~~密码登录时序枚举~~（dummy bcrypt 拉平）；~~重复手机号/坏 manager_id 500~~（预检 + IntegrityError 兜底）；~~非 dict body 500~~；~~审计时间非法 500~~；~~保留天数 0 删光审计~~（守卫）；~~审计列超长静默丢~~（按列长截断 + request_id 用上下文值）；~~SMS 阻塞/每次重建 sender~~（to_thread + 缓存）；~~并发发码覆盖~~（SET NX）；未知号时序补偿（缓解）
+- visit：~~WS 兜底落库无状态复查~~；~~end_visit 重试 violations 翻倍~~（去重）；~~status 非法值静默~~（白名单）；~~已封存拜访可开 ASR~~（连接即拒，不建付费会话）；~~finish 固定 0.5s 丢末句~~（等 TranscriptionCompleted）；~~full_transcript 无类型校验~~
+- knowledge/compliance：~~/check 非字符串 500 + "false" 被当 true~~；~~review 缺键默认驳回~~；~~上传字段无长度校验~~；~~DV query 不查响应码静默空结果~~；~~test_embed 断言 1536~~；~~/check 无长度上限~~；~~test_rule 把 R999 显示为未命中~~（inconclusive 标记）
+- specialist：~~COMPLIANCE_BLOCKS 恒 0~~（阻断落点接线）+ chat_stream 死代码删；~~CRUD 校验缺口~~；~~问题被拦不写审计~~（question_blocked）；~~收藏并发 500~~（IntegrityError 幂等）；~~300 字限制未落实 + 降级无多轮上下文~~（截断 + 最近 3 轮注入）
+- hcp/gateway：~~WS 上游仍带 token query~~（首帧 token 不再拼）；~~上游 JSON 解析失败 500 纯文本~~（502 code 5005）；~~hcp 404/422 形状不统一~~（缺档案 422 code 4001，对齐 knowledge 约定；注意此前是 404）；~~非 dict body 500~~；~~画像缓存 scan 前缀过宽~~；~~医生档案写操作零审计~~（create/update/tags/import 留痕）
+- web：~~状态搜索未传参~~；~~audit keyword 无搜索列~~（已加）；~~14 处双弹 toast~~；~~兜底文案"无权限操作"误导~~（改"请求失败"）；~~routes.ts 死代码~~（删除）；~~网络错误无提示~~（拦截器补兜底，终审发现）
+- mobile：~~"我的统计"误路由~~（移除）；~~Content 缺资讯 Tab~~；~~api 层 3 处死代码~~（删除）；~~Home/HCP 失败静默置空~~（错误态+重试）；~~结束按钮未含 sending~~；~~历史 evidence_level 恒空~~（移除字段）
+- 测试基线（2026-08-13 低危批后）：audit 26 / auth 70 / compliance 72 / gateway 49 / hcp 54 / knowledge 64 / specialist 103 / visit 99 = **537 passed**（+shared 19）；mobile jest 73；web build PASS
+- **低危批挂账**（终审记录，下轮候选）：send-code 撞 SET NX 的 4002 文案宣称"已发送"与实际不符；B2 去重对 matched_text=None 条目过宽；B5 时序测试断言边界偏紧（CI 高负载或 flaky）；"资源不存在"语义码 4000（HTTP 404）与 4001（HTTP 422）全仓并存待统一；E7 审计调用同步等待 5s 可考虑 create_task 异步化
 - 已修（2026-08-12 全量修复批，B1-B7，本地未提交）：~~拜访无显式取消~~（POST /visits/{id}/cancel + visit_records.status 列，迁移 008 待实跑）、~~end_visit 重复结束报错~~（行锁 + 移动端 getById fallback）、~~follow_up 依赖专员链路常 degraded~~（直调 qwen）、~~模拟输入注入假转写~~（删 simulateInput 改真实文本输入）、~~拜访任务/收藏无移动端页面~~（TaskList/Favorites 新页 + Profile 真实计数）、~~web 无拜访管理页~~（VisitList + 任务展示）、~~专员数据抽屉无反馈明细~~（新接口 GET /specialists/{id}/feedback）、~~manager 可改他人手机号接管账号~~（仅 admin）、~~合规检查 fail-open~~（两处 client 抛异常 + 语义层网络错误 R999 拦截）、~~验证码并发可重放~~（Redis Lua 原子消耗）、~~生产可用 console 短信打印验证码~~（非 dev 禁 console 通道）、~~网关 CORS 全放行~~（env 白名单）、~~网关 WS 零鉴权 + token 明文 query~~（网关验 token + 首帧 auth 帧协议，保留 query 兜底）、~~XFF 伪造透传~~（网关覆盖为真实对端）、~~默认 DB 密码生产可用~~（shared/db_session 启动守卫）、~~审计 keyword 参数被忽略~~（ILIKE 多字段搜索）、~~HCP 标签仅 admin/manager~~（放开任意登录用户）、~~live-status 泄露他人问题内容~~（非 admin 剥离 snippet）、~~ES 检索含未上架文档~~（status=ready 过滤）、~~knowledge search product_id 非 int 500~~（显式校验）、~~备份静默回退默认密码~~（DB_USER/DB_PASSWORD + fail-fast + 秒级时间戳）、~~pg_restore 部分失败假成功~~（--exit-on-error）、~~docker-verify 构建失败被 tail 掩盖~~（pipefail）、~~通知页 4 个死开关~~（改"即将上线"）
 
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
