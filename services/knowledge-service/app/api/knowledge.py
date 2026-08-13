@@ -89,11 +89,15 @@ async def search_knowledge(
             raise ParamError("product_id 必须是整数")
     else:
         product_id = None
-    results, source = _manager(db).search(
-        query=data["query"],
-        product_id=product_id,
-        doc_type=request.get("doc_type"),
-        top_k=data["top_k"],
+    # E2（2026-08-13）：检索链路含 embedding HTTP（DashVector）/ES/百炼等同步
+    # 网络 IO——与 upload/review 一致丢线程池执行，避免阻塞事件循环
+    results, source = await asyncio.to_thread(
+        lambda: _manager(db).search(
+            query=data["query"],
+            product_id=product_id,
+            doc_type=request.get("doc_type"),
+            top_k=data["top_k"],
+        )
     )
     return success({"results": results, "source": source,
                     "empty": not results and source != "bailian",
@@ -312,7 +316,9 @@ async def search_test(
             logger.error("search-test 后端 %s 失败: %s", backend, exc)
             return {"backend": backend, "error": str(exc), "results": []}
 
-    outputs = [_run(b) for b in backends]
+    # E2（2026-08-13）：各后端调用（embedding HTTP/ES/百炼）均为同步网络 IO，
+    # 整体丢线程池执行，避免阻塞事件循环（与 upload/review 一致）
+    outputs = await asyncio.to_thread(lambda: [_run(b) for b in backends])
     return success({"query": data["query"], "backends": outputs})
 
 

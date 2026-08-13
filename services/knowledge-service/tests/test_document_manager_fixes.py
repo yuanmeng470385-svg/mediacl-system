@@ -550,3 +550,63 @@ def test_restore_blocked_by_concurrent_reject(caplog):
     assert doc.status == "rejected"  # 保持现状，不翻回 draft
     assert repo.status_log == ["processing"]  # 无 draft 追加
     assert any("未恢复为" in r.message for r in caplog.records)
+
+
+# ---------- 2026-08-13: E1 索引写入后置（终态条件更新失败时不写检索索引） ----------
+
+def test_approve_concurrent_reject_no_index_writes(monkeypatch):
+    """E1：导入期间被并发驳回 → 终态条件更新失败 → DV/ES 索引不得写入。
+
+    回归背景：DV upsert / ES 索引原在 try_mark_final 之前执行——驳回清理时
+    索引尚不存在（清理落空），导入完成后仍把被驳回文档写入检索后端，造成
+    DB 已 rejected 但检索仍可命中。修复后先终态后索引，本用例断言无索引残留。
+    """
+    doc = _Doc()
+    repo = _StatusRepo(doc)
+    dv = _FakeDV(configured=True)
+    indexed = []
+    _fake_es(monkeypatch, indexed=indexed, deleted=[])
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.bailian = _ConcurrentRejectBailian(doc)  # import 阶段并发驳回已落库
+    dm.dashvector = dv
+
+    with pytest.raises(BusinessError) as ei:
+        dm.approve_document(5, reviewer_id=1)
+
+    assert ei.value.code == 4001
+    assert "未上架" in ei.value.message
+    assert doc.status == "rejected"          # 被驳回状态保持
+    assert dv.upserted_fields is None        # DashVector 未写入
+    assert indexed == []                     # ES 未写入
+
+
+def test_approve_without_bailian_concurrent_reject_no_index_writes(monkeypatch):
+    """E1：离线上架路径同序——终态条件更新失败时不写 DV/ES（防被驳回文档索引残留）"""
+    doc = _Doc()
+    repo = _StatusRepo(doc)
+
+    class _ConcurrentRejectRepo(_StatusRepo):
+        """try_mark_final 返回 False 模拟并发驳回已先提交（status=rejected）"""
+
+        def try_mark_final(self, doc_id, status, reviewer_id=None):
+            self.doc.status = "rejected"  # 并发驳回已提交
+            return False
+
+    repo = _ConcurrentRejectRepo(doc)
+    dv = _FakeDV(configured=True)
+    indexed = []
+    _fake_es(monkeypatch, indexed=indexed, deleted=[])
+    dm = _manager()
+    dm.repo = repo
+    dm.oss = _FakeOSS()
+    dm.dashvector = dv
+
+    with pytest.raises(BusinessError) as ei:
+        dm.approve_without_bailian(5, reviewer_id=1)
+
+    assert ei.value.code == 4001
+    assert doc.status == "rejected"
+    assert dv.upserted_fields is None        # DashVector 未写入
+    assert indexed == []                     # ES 未写入

@@ -90,6 +90,7 @@ class DocumentManager:
         # 原子抢占（UPDATE 带状态条件）保证双击/多管理同时审核时只有一个成功。
         if not self.repo.try_mark_processing(doc_id, reviewer_id):
             raise BusinessError("文档正在审核中或状态已变化，请刷新后重试", code=4001)
+        chunks: List[str] = []
         try:
             if not doc.file_url:
                 raise BailianKnowledgeError("document has no file_url")
@@ -103,25 +104,12 @@ class DocumentManager:
                     original_file_url=doc.file_url,
                     tags=[doc.doc_type] if doc.doc_type else None,
                 )
-                # 正文入库 + DashVector 向量化（可选后端：未配置自动跳过）
+                # 正文入库 + 分块；向量化延后到终态写成功之后（见下），防被驳回文档索引残留
                 from app.services.document_processor import extract_text, chunk_text
                 text = extract_text(local_path)
                 if text:
                     doc.content = text[:100000]  # 截断防超长
                     chunks = chunk_text(text)
-                    if self.dashvector.is_configured():
-                        try:
-                            fields = {"doc_type": doc.doc_type or ""}
-                            if doc.product_id is not None:
-                                # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
-                                fields["product_id"] = int(doc.product_id)
-                            self.dashvector.upsert_chunks(
-                                doc_id, doc.title or "", chunks,
-                                fields=fields,
-                            )
-                            logger.info("document %s 向量化 %d chunks → DashVector", doc_id, len(chunks))
-                        except Exception as exc:
-                            logger.error("DashVector 写入失败（不影响上架，检索将降级）: %s", exc)
             finally:
                 if os.path.exists(local_path):
                     os.unlink(local_path)
@@ -137,9 +125,13 @@ class DocumentManager:
             self._restore_status(doc_id, prev_status, reviewer_id)
             raise BusinessError(f"审核处理失败（状态已恢复，可重试）: {exc}", code=5000) from exc
 
-        # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
-        self._index_es(doc_id, doc.title or "", doc.content or "", doc)
-        return self._finish_approve(doc_id, reviewer_id)
+        # E1（2026-08-13）：索引写入放在终态条件更新之后。抢占 processing 后百炼
+        # 导入最长 1h，期间被并发驳回/归档时 try_mark_final 返回 False 抛错——
+        # DV/ES 索引不写入，避免「DB 已 rejected 但检索仍可命中」的残留；只有
+        # 状态确认为 ready 才写索引，语义自洽。
+        result = self._finish_approve(doc_id, reviewer_id)
+        self._index_ready_document(doc, chunks)
+        return result
 
     def approve_without_bailian(self, doc_id: int, reviewer_id: int):
         """离线上架：仅本地正文入库 + 向量化，跳过百炼导入（种子/演示/无百炼凭证场景）"""
@@ -169,25 +161,16 @@ class DocumentManager:
         finally:
             if os.path.exists(local_path):
                 os.unlink(local_path)
+        chunks: List[str] = []
         if text:
             doc.content = text[:100000]
-            if self.dashvector.is_configured():
-                chunks = chunk_text(text)
-                fields = {"doc_type": doc.doc_type or ""}
-                if doc.product_id is not None:
-                    # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
-                    fields["product_id"] = int(doc.product_id)
-                try:
-                    self.dashvector.upsert_chunks(
-                        doc_id, doc.title or "", chunks,
-                        fields=fields,
-                    )
-                    logger.info("document %s 向量化 %d chunks → DashVector", doc_id, len(chunks))
-                except Exception as exc:
-                    logger.error("DashVector 写入失败（不影响上架，检索将降级）: %s", exc)
-        # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
-        self._index_es(doc_id, doc.title or "", doc.content or "", doc)
-        return self._finish_approve(doc_id, reviewer_id)
+            chunks = chunk_text(text)
+        # E1（2026-08-13）：与 approve_document 同序——终态条件更新成功后（状态
+        # ready）才写检索索引。此路径无百炼导入但仍有下载/提取窗口，期间被并发
+        # 驳回时同样不得把被驳回文档写回 DV/ES。
+        result = self._finish_approve(doc_id, reviewer_id)
+        self._index_ready_document(doc, chunks)
+        return result
 
     def _finish_approve(self, doc_id: int, reviewer_id: int):
         """终态写入（H4，2026-08-11）：仅 processing 可进入 ready。
@@ -228,6 +211,29 @@ class DocumentManager:
         # M23: 驳回时清理检索侧索引（DashVector 必删；ES 配置时删；百炼侧无删除封装则记日志说明）
         self._cleanup_indexes(doc_id, doc)
         return self.repo.update_status(doc_id, "rejected", reviewer_id)
+
+    def _index_ready_document(self, doc, chunks: List[str]) -> None:
+        """上架索引写入（DashVector 向量 + ES 关键词）：终态 ready 写成功后调用。
+
+        两个后端失败均降级记日志，不阻塞、不翻回审核状态（检索降级）。
+        """
+        doc_id = doc.id
+        # DashVector 向量化（可选后端：未配置自动跳过）
+        if self.dashvector.is_configured() and chunks:
+            try:
+                fields = {"doc_type": doc.doc_type or ""}
+                if doc.product_id is not None:
+                    # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
+                    fields["product_id"] = int(doc.product_id)
+                self.dashvector.upsert_chunks(
+                    doc_id, doc.title or "", chunks,
+                    fields=fields,
+                )
+                logger.info("document %s 向量化 %d chunks → DashVector", doc_id, len(chunks))
+            except Exception as exc:
+                logger.error("DashVector 写入失败（不影响上架，检索将降级）: %s", exc)
+        # M21: ES 关键词索引（失败降级记日志，不阻塞审核）
+        self._index_es(doc_id, doc.title or "", doc.content or "", doc)
 
     def _index_es(self, doc_id: int, title: str, content: str, doc) -> None:
         """M21: 上架后写入 ES 关键词索引；失败降级记日志，不阻塞审核流程"""
