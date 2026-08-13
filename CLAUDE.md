@@ -56,15 +56,15 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-12 全量修复批后 404 passed）
-cd services/auth-service && python -m pytest tests/ -v        # 50 用例（含 test_jwt_failfast.py）
-cd services/specialist-service && python -m pytest tests/ -v  # 74（含反馈明细/WS 首帧鉴权）
-cd services/hcp-service && python -m pytest tests/ -v         # 38
-cd services/visit-service && python -m pytest tests/ -v       # 73（含取消/结束态拦截/直调 qwen）
-cd services/compliance-service && python -m pytest tests/ -v  # 59（语义网络错误 fail-closed）
-cd services/knowledge-service && python -m pytest tests/ -v   # 51（ES 检索 status 过滤）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 全项目审查修复批后 459 passed）
+cd services/auth-service && python -m pytest tests/ -v        # 56 用例（含验证码并发 consume Lua 用例）
+cd services/specialist-service && python -m pytest tests/ -v  # 85（含反馈明细角色/流式门禁全量帧）
+cd services/hcp-service && python -m pytest tests/ -v         # 39
+cd services/visit-service && python -m pytest tests/ -v       # 87（含取消/结束态拦截/直调 qwen/转写去重）
+cd services/compliance-service && python -m pytest tests/ -v  # 64（语义网络错误 fail-closed/禁用规则生效）
+cd services/knowledge-service && python -m pytest tests/ -v   # 57（ES 检索 status 过滤/索引后置写入）
 cd services/audit-service && python -m pytest tests/ -v       # 19
-cd services/gateway && python -m pytest tests/ -v             # 40（CORS 白名单/WS 首帧鉴权）
+cd services/gateway && python -m pytest tests/ -v             # 46（CORS 白名单/WS 首帧鉴权/信任代理）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -93,11 +93,16 @@ cd services/gateway && python -m uvicorn app.main:app --port 8000
 # 单独构建某个镜像：build context 必须是仓库根目录（镜像要 COPY shared/）
 docker build -f services/auth-service/Dockerfile -t medagent/auth-service .
 
-# 部署/CI 相关（deploy/ + scripts/ 下，CLAUDE.md 2026-08-11 补记）
-#   deploy/docker-compose.prod.yml   生产 compose（DB_USER/DB_PASSWORD/REDIS_PASSWORD/AUDIT_DB_PASSWORD 必填校验）
-#   deploy/arms-monitor.py           ARMS 监控上报（RPC 签名，HMAC 密钥 = AK Secret + "&"，--dry-run）
+# 部署/CI 相关（deploy/ + scripts/ 下，CLAUDE.md 2026-08-11 补记；2026-08-13 更新）
+#   deploy/docker-compose.prod.yml   生产 compose（DB_USER/DB_PASSWORD/REDIS_PASSWORD/AUDIT_DB_PASSWORD 必填校验；
+#                                    env_file 为 ../.env（仓库根）；仓库根运行：docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d）
+#   deploy/arms-monitor.py           ARMS 监控上报（RPC 签名，HMAC 密钥 = AK Secret + "&"，--dry-run；2026-08-13 起
+#                                    告警规则真实落地：PromQL Expression + List 同名则 Update 幂等；ClusterId 用 ARMS_CLUSTER_ID）
 #   deploy/arms-alerts.yaml          ARMS 告警规则源文件（只保留有真实指标源的规则）
-#   scripts/ci-pipeline.yaml         阿里云云效 Flow 流水线；scripts/docker-verify.sh Docker 验证脚本
+#   scripts/ci-pipeline.yaml         阿里云云效 Flow 流水线（2026-08-13 重写为合法 Flow YAML：version v1.0/stages 映射式/
+#                                     needs 依赖，lint 真实生效，test 覆盖 8 服务+shared+web build+mobile jest）
+#   scripts/docker-verify.sh Docker 验证脚本（8 服务含 auth）；scripts/smoke_runbook.py 冒烟（2026-08-13 起 R001/R003
+#                                    真断言 blocked/violations，任一节失败非零退出，不再恒绿）
 
 # 数据库备份/恢复（详见下方 "Backup & Restore" 小节）
 python scripts/backup_db.py --local-only          # 本机备份+校验（开发）；ECS cron 每日 02:00 全流程
@@ -218,7 +223,7 @@ async with httpx.AsyncClient(timeout=10.0) as client:
 
 ## Database
 
-PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes` 列由迁移 006 新增（LLM 实时推荐落库））。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
+PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes`（006）与 `visit_records.status`（008）两列 2026-08-13 起也已并入 init_db.sql，旧库仍须按序执行 006/008）。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
 
 **审计表不可篡改（`scripts/migrations/002_audit_immutable.sql`）**：audit_logs 的 owner 是 NOLOGIN 占位角色 `medagent_audit_owner`；`medagent_audit`（审计服务专用，`AUDIT_DATABASE_URL` 配置）只有 INSERT/SELECT；`medagent` 只 SELECT。该 migration 还会把 medagent 从 superuser 降级（PostgreSQL 官方镜像默认把 `POSTGRES_USER` 设为 superuser，superuser 无视 REVOKE）。migration 只需执行一次（medagent 降级后无法重跑，补权限找表 owner 或单用户模式）。
 
@@ -251,7 +256,7 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 **fast 模式（2026-08-11 流式门禁引入）**：`POST /api/v1/compliance/check` 支持 `fast` 参数（透传给 `checker.check(fast=True)`）——**跳过 LLM 语义层，只跑关键词/正则**（毫秒级），fast 命中不写 compliance_blocks、不计 COMPLIANCE_BLOCKS 指标（阻断时由调用方对完整文本做 full 复核统一记录）。供 specialist 流式逐帧门禁使用。
 
-**语义检查安全行为（S7）**：内容包裹在 `<user_content>` 标记中（其中的任何指令都只是数据）；LLM 输出**解析失败**（JSON 错误/截断）时按违规拦截（R999, action=reject）——这是注入攻击与截断的迹象，fail-closed；只有**网络/API 错误**才 fail-open 降级。
+**语义检查安全行为（S7）**：内容包裹在 `<user_content>` 标记中（其中的任何指令都只是数据）；LLM 输出**解析失败**（JSON 错误/截断）时按违规拦截（R999, action=reject）——这是注入攻击与截断的迹象；**网络/API 错误同样 fail-closed**（2026-08-12 B5 批起 R999 收敛，此前"网络错误 fail-open"的描述已过时）。
 
 ## Bailian WebSocket Protocol
 
@@ -313,10 +318,10 @@ cd mobile && npx react-native start                   # Metro（Node v25 实测�
 # git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
 cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（70 用例 = 契约 31 + wsChat 9 + asr 8 + tts 10 + asrStreaming 8 + date 4，锁 URL/method/body/响应形状；2026-08-11 核对）
+# 测试：cd mobile && npx jest（73 用例 = 契约 34 + wsChat 9 + asr 8 + tts 10 + asrStreaming 8 + date 4，锁 URL/method/body/响应形状；2026-08-13 核对）
 ```
 
-结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；**注意 `HCPProfile`/`ComplianceRuleDetail` 是声明了但从未注册的死路由**）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
+结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；2026-08-13 确认旧记录的死路由 `HCPProfile`/`ComplianceRuleDetail` 已不存在，仅残留 HCPProfile 类型接口）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
 
 其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 17 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 13（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
 
@@ -394,6 +399,15 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~Android 录音静默失败~~（Android 13+ 麦克风运行时权限请求）+ ~~异议列表 key 冲突~~（全局唯一 key）
 - ~~录音双按双会话泄漏~~（press 入口同步防重入）；~~TTS 合成无超时~~（30s 超时 + 播放初始化错误透传底层信息）；~~asr 流式推流三处竞态~~（轮询重入门禁 / 空块自旋终止 / flush 串行链）
 - 测试基线（2026-08-12 全量修复批后）：audit 19 / auth 50 / compliance 59 / gateway 40 / hcp 38 / knowledge 51 / specialist 74 / visit 73 = **404 passed**；mobile jest 70（6 套件）；web build PASS
+
+已修（2026-08-13 全项目审查修复批，9 域并行审查 320 文件 + 11 域并行修复，7 高 23 中全修）：
+- ~~web manager 编辑用户必 403~~（UserList 仅手机号变化才带 phone + 非 admin 禁编辑手机号）；~~compliance 禁用 YAML 源规则无效~~（_load_db_rules 加载全量行、DB disabled 覆盖 YAML、单点过滤；update_rule content 非 dict 400 防毒化 DB 规则加载）
+- ~~mobile 今日拜访恒空~~（date_to 传 T23:59:59）；~~聊天违规明细恒空~~（matched_text/reason 兜底）；~~AI 占位串误判 completed~~（识别占位串 retryable + VisitEnd 重试）；~~start_visit 静默丢字段~~（不发送 + UI 注明仅本次参考）
+- ~~备份 OSS 30 天清理正则死~~（\d{6}）；~~init_db.sql 缺 006/008 列~~（visit_records 补 key_nodes/status，旧库仍跑 006/008）；~~restore 生产建库必挂~~（--pg-user + PG_ROOT_PASSWORD）；~~load_config .env 非空默认键覆盖失效~~；~~smoke 断言恒绿~~（blocked/violations 真断言 + 非零退出）；~~docker-verify 漏 auth~~；~~ci-pipeline 非法 Flow YAML~~（按官方语法重写，lint 不再 || true，测试覆盖 8 服务+shared+web+mobile）
+- ~~visit qwen 无超时~~（60s/重试 1）；~~_llm_recommend 行锁跨 LLM~~（冷却无锁读、LLM 锁外、短持锁追加+populate_existing 真重读）；~~WS 丢 warn 违规~~（violations 非空即推帧+落库）；~~异议语义层畸形输出 500~~（形状校验坏项跳过）；~~末句 REST 双写~~（尾缀去重 duplicate:true）
+- ~~specialist 流式门禁重复拼接~~（accumulated=帧全量）；~~流式传输异常绕过降级~~（chat_stream 统一转 BailianException）；~~降级同步调 qwen~~（to_thread+30s 超时）；~~/feedback 跨用户~~（require_roles admin/manager）
+- ~~验证码并发复用~~（Lua consume-if-match：计数+比较+DEL 单脚本原子）；~~hcp 画像 qwen 无超时~~（30s）；~~网关 XFF 失真~~（TRUSTED_PROXY_CIDRS 信任代理才保留注入头，默认行为不变）；~~knowledge 索引先于终态写入~~（先 _finish_approve 后写索引）；~~knowledge 检索阻塞事件循环~~（to_thread）；~~prod compose env_file 指向不存在路径~~（../.env + 运行命令注释）；~~arms-monitor 告警死配置~~（PromQL+完整参数+List 后 Update 幂等）
+- 测试基线（2026-08-13 修复批后）：audit 19 / auth 56 / compliance 64 / gateway 46 / hcp 39 / knowledge 57 / specialist 85 / visit 87 = **459 passed**；mobile jest 73；web build PASS
 - 已修（2026-08-12 全量修复批，B1-B7，本地未提交）：~~拜访无显式取消~~（POST /visits/{id}/cancel + visit_records.status 列，迁移 008 待实跑）、~~end_visit 重复结束报错~~（行锁 + 移动端 getById fallback）、~~follow_up 依赖专员链路常 degraded~~（直调 qwen）、~~模拟输入注入假转写~~（删 simulateInput 改真实文本输入）、~~拜访任务/收藏无移动端页面~~（TaskList/Favorites 新页 + Profile 真实计数）、~~web 无拜访管理页~~（VisitList + 任务展示）、~~专员数据抽屉无反馈明细~~（新接口 GET /specialists/{id}/feedback）、~~manager 可改他人手机号接管账号~~（仅 admin）、~~合规检查 fail-open~~（两处 client 抛异常 + 语义层网络错误 R999 拦截）、~~验证码并发可重放~~（Redis Lua 原子消耗）、~~生产可用 console 短信打印验证码~~（非 dev 禁 console 通道）、~~网关 CORS 全放行~~（env 白名单）、~~网关 WS 零鉴权 + token 明文 query~~（网关验 token + 首帧 auth 帧协议，保留 query 兜底）、~~XFF 伪造透传~~（网关覆盖为真实对端）、~~默认 DB 密码生产可用~~（shared/db_session 启动守卫）、~~审计 keyword 参数被忽略~~（ILIKE 多字段搜索）、~~HCP 标签仅 admin/manager~~（放开任意登录用户）、~~live-status 泄露他人问题内容~~（非 admin 剥离 snippet）、~~ES 检索含未上架文档~~（status=ready 过滤）、~~knowledge search product_id 非 int 500~~（显式校验）、~~备份静默回退默认密码~~（DB_USER/DB_PASSWORD + fail-fast + 秒级时间戳）、~~pg_restore 部分失败假成功~~（--exit-on-error）、~~docker-verify 构建失败被 tail 掩盖~~（pipefail）、~~通知页 4 个死开关~~（改"即将上线"）
 
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
@@ -443,7 +457,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **M16 specialist chat 无长度/并发限制**（网关 WS 绕过限流）
 - **M17 web localStorage JWT 无 CSP + 前端零角色访问控制**（`client.ts:10`/`AuthContext.tsx:37`；`App.tsx:43-64` 路由守卫只验登录态）
 - **M18 specialist /live-status question_snippet 跨用户**（`specialists.py:101` + `activity_registry.py:54`）
-- **Low 批**（归档）：mobile release debug 签名（build.gradle:53-60）/AsyncStorage 明文 JWT/无 FLAG_SECURE/401 无全局登出；web CORS `*`+credentials（gateway main.py:68-69）、/health 泄露 backends 内网拓扑（:147-165）；specialist draft/disabled 专员配置对所有登录用户可见、默认 DB 口令硬编码（db_session.py:13-16）、/metrics 无鉴权；knowledge 上传仅校验扩展名不校验魔数（XSS 载体）、/search-test 泄露内部异常、/stats 泄露云资源 ID 与未上架计数、检索参数健壮性（product_id 非法值静默丢过滤/无长度限制）、feedback doc_id 不校验、被驳回文档百炼索引未清理（降级路径仍可命中）；compliance 报告导出无上限（report.py:90）、正则 ReDoS 可入库（rules.py:90-95）、审计 client_ip 信 XFF 首段（logs.py:280-285）、拦截记录/审计 JSONB 明文留存敏感片段；visit audio_url 无 scheme/域名校验（tingwu_client.py:50-53 SSRF/费用滥用）、end_visit 状态锁非原子 + 任务幂等 TOCTOU、NLS 会话失败静默吞掉无 error 帧、任务状态变更无审计日志；auth 验证码取号/作废非原子（code_store.py:92-111 并发可用两次）、审计 client_ip 可被 XFF 伪造
+- **Low 批**（归档）：mobile release debug 签名（build.gradle:53-60）/AsyncStorage 明文 JWT/无 FLAG_SECURE/~~401 无全局登出~~（已实现：client.ts onUnauthorized + AuthContext 全局登出，仅 401/2000-2003 触发）；web CORS `*`+credentials（gateway main.py:68-69）、/health 泄露 backends 内网拓扑（:147-165）；specialist draft/disabled 专员配置对所有登录用户可见、默认 DB 口令硬编码（db_session.py:13-16）、/metrics 无鉴权；knowledge 上传仅校验扩展名不校验魔数（XSS 载体）、/search-test 泄露内部异常、/stats 泄露云资源 ID 与未上架计数、检索参数健壮性（product_id 非法值静默丢过滤/无长度限制）、feedback doc_id 不校验、被驳回文档百炼索引未清理（降级路径仍可命中）；compliance 报告导出无上限（report.py:90）、正则 ReDoS 可入库（rules.py:90-95）、审计 client_ip 信 XFF 首段（logs.py:280-285）、拦截记录/审计 JSONB 明文留存敏感片段；visit audio_url 无 scheme/域名校验（tingwu_client.py:50-53 SSRF/费用滥用）、end_visit 状态锁非原子 + 任务幂等 TOCTOU、NLS 会话失败静默吞掉无 error 帧、任务状态变更无审计日志；auth 验证码取号/作废非原子（code_store.py:92-111 并发可用两次）、审计 client_ip 可被 XFF 伪造
 
 ## Backup & Restore（2026-08-12 新增）
 
@@ -452,7 +466,8 @@ adb shell am start -n com.medagent.mobile/.MainActivity
   （**不要加 `>> logs/backup.log 2>&1`**：脚本 log() 已自写 backup.log，加重定向每行日志双写）
 - **ECS 上线顺序**：① 以 medagent_root 执行 `scripts/migrations/007_grant_audit_seq.sql`（002 降级后 medagent 无 superuser 无法自行 GRANT，缺了首次备份必挂）→ ② .env 填 OSS_* 凭证 → ③ 配 cron → ④ 手动跑一次 `backup_db.py` 验证
 - **失败留痕**：`logs/backup.log` 追加 + `logs/backup-failed` 标记文件 + 非零退出码。可用 cron MAILTO 或阿里云 CloudMonitor 自定义监控检查标记文件感知失败；开发环境无 OSS 凭证时用 `--local-only`（本地备份+校验，不上传）
-- **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**；`--target-db` 仅允许 `[A-Za-z0-9_]+`（防注入）。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
+- **恢复验证**：`python scripts/restore_db.py --source local|oss [--dump 文件] [--target-db 库] [--yes] [--pg-user 用户]` —— 默认恢复到 `medagent_restore` 临时库并校验 users/conversations/audit_logs 行数，**不自动覆盖生产库**；`--target-db` 仅允许 `[A-Za-z0-9_]+`（防注入）。恢复生产库：停服务 → `DROP DATABASE medagent WITH (FORCE)` → restore --target-db medagent --yes → 启服务
+- **2026-08-13 修复**：ensure_target_db 的 CREATE DATABASE 改用 `--pg-user`（默认 medagent）。生产已执行 002 降级后 medagent 无 CREATEDB，恢复演练/灾备必须 `--pg-user medagent_root` 并配置 `PG_ROOT_PASSWORD`（.env.example 已有配置位；未配时 RuntimeError 不静默回退）。OSS 30 天过期清理正则已与秒级文件名一致（\d{6}）
 - **恢复后注意**：audit_logs 所有权/权限（002 审计不可篡改迁移）需在新库重新执行；Redis 不备份（缓存数据可重建）；二进制输出经 docker exec 直写文件（Windows CRLF 安全）
 - **2026-08-12 已验证**（本机全链路真实）：备份→校验→OSS 上传/过期清理（含删除测试对象无残留）→ 恢复 local+oss 双源三表行数一致（users 2/conversations 178/audit_logs 1418）→ 失败留痕三路径（dump 损坏/取消/非法库名均非零退出）→ 007 幂等重跑
 
@@ -472,7 +487,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **合规规则文件路径**：`RULES_YAML_PATH` 环境变量指定，容器内是 `/app/shared/compliance-rules/rules.yaml`。加载到 0 条规则会打 ERROR —— 那是"全部放行"的危险状态。
 - **`.env` 在 `.gitignore` 中**：根目录 `.env` 不会被提交，模板见 `.env.example`。
 - **hcp-service 的 visit_interaction_repo**：同库直读 `visit_records` 表（避免循环依赖），表不存在时降级为空列表。如果 visit-service 和 hcp-service 不在同一个 DB，需要改为 HTTP 调用。
-- **visit_records 表无 status 字段**：状态派生自 `ai_summary IS NULL → in_progress`，非独立字段。
+- **visit_records 有 status 列**（迁移 008 新增，2026-08-13 起已并入 init_db.sql）：completed/in_progress 语义仍从 ai_summary 推导（占位串 ≠ 已结束，可重试 end），cancelled 是显式状态；旧库须跑 006/008。
 - **前端字段 camelCase、后端 snake_case**：映射统一收在 `mobile/src/api/*.ts`（`prepareVisit` 等已修，2026-08-06 实测 pre-visit 200）。改后端 schema 或响应形状时，同步改 api 层 + 契约测试，屏幕组件只消费 api 层的映射结果，不直接碰请求体。
 - **跨服务 FK 需要注册元数据**：`visit_records` 的 FK 引用 hcps/products/digital_specialists，visit-service 必须 import `shared.models.hcp`/`product`/`digital_specialist`（见 `services/visit-service/app/models/visit_record.py`），否则 SQLAlchemy 报 `NoReferencedTableError`。共享模型放 `shared/models/`，各服务 `app/models/*.py` 是 re-export。
 - **Commit 格式**：遵循 conventional commits `feat(scope): subject`，末尾 `Co-Authored-By: Claude <noreply@anthropic.com>`。
