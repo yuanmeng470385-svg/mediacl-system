@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 import asyncio
 import inspect
+import ipaddress
 import websockets
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +85,51 @@ app.add_middleware(
 #    proxy 转发时合并进上游请求头 —— 网关是唯一入口，上下游自然贯穿）。
 #    OPTIONS 预检与 WS 握手直接透传（中间件内部处理，见 request_id_middleware.py）。
 app.add_middleware(RequestIDMiddleware)
+
+# ---- 信任代理网段（I2 修复，2026-08-13） ----
+# B5 修复无条件用 request.client.host 覆盖 X-Forwarded-For/X-Real-IP（防客户端
+# 伪造是对的），但反代/LB 部署下对端是 LB 地址，把部署层注入的真实客户端 IP
+# 也覆盖掉了 —— 审计 client_ip 全记成 LB 地址。TRUSTED_PROXY_CIDRS（逗号分隔
+# CIDR 列表，默认空）声明信任的代理网段：仅当对端命中信任网段时，才采用请求
+# 里部署层注入的 X-Real-IP（取第一个）作为真实客户端 IP；未配置/未命中时维持
+# 现有覆盖行为（不信任任意客户端自报 IP），默认行为与现状完全一致。
+
+_trusted_proxy_cidrs = [
+    c.strip() for c in _os.getenv("TRUSTED_PROXY_CIDRS", "").split(",") if c.strip()
+]
+
+
+def _parse_trusted_proxy_cidrs() -> list:
+    """解析 TRUSTED_PROXY_CIDRS 为 ipaddress 网段对象；非法项告警跳过（不影响启动）"""
+    nets = []
+    for cidr in _trusted_proxy_cidrs:
+        try:
+            nets.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            logger.warning("TRUSTED_PROXY_CIDRS 含非法 CIDR，已忽略: %r", cidr)
+    return nets
+
+
+_trusted_proxy_nets = _parse_trusted_proxy_cidrs()
+
+
+def _trusted_proxy_real_ip(request: Request, headers: dict):
+    """对端命中信任代理网段时，返回部署层注入的真实客户端 IP（X-Real-IP 首值）。
+
+    否则返回 None —— 调用方维持原有覆盖行为（用 request.client.host）。
+    """
+    if not _trusted_proxy_nets or not request.client:
+        return None
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return None
+    if not any(peer in net for net in _trusted_proxy_nets):
+        return None
+    injected = headers.get("x-real-ip", "").strip()
+    if injected:
+        return injected.split(",")[0].strip()
+    return None
 
 # ==================== 路由映射 ====================
 
@@ -283,9 +329,14 @@ async def proxy(request: Request, path: str):
             headers.pop("host", None)
             headers.pop("content-length", None)
             # B5 修复（2026-08-12）：客户端伪造的 X-Forwarded-For 不透传上游 ——
-            # 审计 IP / 限流按"真实对端地址"计（反代场景由部署层处理 X-Real-IP，
-            # 网关层不信任任意客户端自报 IP）
-            real_ip = request.client.host if request.client else None
+            # 审计 IP / 限流按"真实对端地址"计，网关层不信任任意客户端自报 IP。
+            # I2 修复（2026-08-13）：反代/LB 部署下无条件覆盖会把部署层注入的
+            # 真实客户端 IP 也抹掉（审计 client_ip 全记成 LB 地址）。仅当对端
+            # 命中 TRUSTED_PROXY_CIDRS 信任网段时，采用请求里部署层注入的
+            # X-Real-IP（首值）作为真实客户端 IP；否则维持现有覆盖行为。
+            real_ip = _trusted_proxy_real_ip(request, headers)
+            if real_ip is None:
+                real_ip = request.client.host if request.client else None
             if real_ip:
                 headers["x-forwarded-for"] = real_ip
                 headers["x-real-ip"] = real_ip
