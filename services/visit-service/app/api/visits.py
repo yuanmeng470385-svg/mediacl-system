@@ -11,7 +11,12 @@ from app.models.visit_record import VisitRecord
 from app.db.repositories.visit_repo import VisitRepo
 from app.core.visit_manager import VisitManager
 from app.services.audit_client import write_audit_log
-from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED
+from app.constants import (
+    AI_SUMMARY_PLACEHOLDER,
+    VISIT_STATUS_CANCELLED,
+    VISIT_STATUS_COMPLETED,
+    VISIT_STATUS_IN_PROGRESS,
+)
 
 router = APIRouter(prefix="/api/v1/visits", tags=["visits"])
 logger = logging.getLogger(__name__)
@@ -184,9 +189,14 @@ async def end_visit(
     _assert_visit_owner(db, visit_id, current_user)
     if request is not None and not isinstance(request, dict):
         raise ParamError("请求体必须是 JSON 对象")
+    full_transcript = (request or {}).get("full_transcript")
+    # B6（2026-08-13）：full_transcript 非字符串（数字/数组等）→ 400，不进 manager
+    # 拼接 prompt（旧实现会把垃圾拼进转写证据，或在下游 500）
+    if full_transcript is not None and not isinstance(full_transcript, str):
+        raise ParamError("full_transcript 必须是字符串")
     result = await _visit_manager.end_visit(
         db, visit_id, current_user["id"],
-        full_transcript=(request or {}).get("full_transcript"),
+        full_transcript=full_transcript,
         auth_token=_auth_token(raw_request),
     )
     return success(result)
@@ -268,8 +278,14 @@ async def list_visits(
 ):
     """拜访列表（分页 + 筛选）
 
-    status: in_progress（未生成总结）/ completed（已结束）
+    status: in_progress（未生成总结）/ completed（已结束）/ cancelled（已取消）
     """
+    # B3（2026-08-13）：status 白名单 —— 非法值直接 400，不再静默忽略返回全量
+    # （静默忽略掩盖客户端 bug，且接口文档承诺了筛选语义）
+    if status is not None and status not in (
+        VISIT_STATUS_IN_PROGRESS, VISIT_STATUS_COMPLETED, VISIT_STATUS_CANCELLED,
+    ):
+        raise ParamError("status 必须是 in_progress/completed/cancelled")
     # S4：非 admin 不能按 user_id 筛全公司记录 —— 强制只看自己的
     if current_user.get("role") != "admin":
         user_id = current_user["id"]

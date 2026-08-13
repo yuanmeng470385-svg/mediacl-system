@@ -36,8 +36,12 @@ def _override_deps():
     # 归属校验与 manager 全部打桩
     visits_mod._assert_visit_owner = lambda *a, **k: None
     _mgr = visits_mod._visit_manager
+    # B7（2026-08-13）：保存原函数，teardown 还原 —— 直接替换不还原会让
+    # 后续用到真实 end_visit 的用例（跨模块顺序敏感）拿到 AsyncMock
+    _orig_end_visit = _mgr.end_visit
     _mgr.end_visit = AsyncMock(return_value={"id": 46, "ai_summary": "mock"})
     yield
+    _mgr.end_visit = _orig_end_visit
     app.dependency_overrides.clear()
 
 
@@ -67,3 +71,32 @@ def test_end_visit_empty_object_ok():
     resp = client.post("/api/v1/visits/46/end", json={})
     assert resp.status_code == 200
     assert visits_mod._visit_manager.end_visit.call_args.kwargs["full_transcript"] is None
+
+
+def test_end_visit_full_transcript_not_str_400():
+    """B6：full_transcript 非字符串（数字/数组/对象）→ 400，不把垃圾拼进转写证据"""
+    client = TestClient(app)
+    for bad in (123, ["你好"], {"text": "你好"}, True):
+        resp = client.post("/api/v1/visits/46/end", json={"full_transcript": bad})
+        assert resp.status_code == 400, f"full_transcript={bad!r} 应 400"
+        assert resp.json()["code"] == 1000
+
+
+def test_list_visits_invalid_status_400():
+    """B3：列表 status 白名单 —— 非法值 400，不再静默忽略返回全量"""
+    client = TestClient(app)
+    resp = client.get("/api/v1/visits?status=hacked")
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_list_visits_valid_statuses_passthrough(monkeypatch):
+    """B3 反例：三种合法状态放行进入 repo（白名单不误伤正常筛选）"""
+    def _fake_list(db, **kwargs):
+        return [], 0
+
+    monkeypatch.setattr(visits_mod.VisitRepo, "list", staticmethod(_fake_list))
+    client = TestClient(app)
+    for status in ("in_progress", "completed", "cancelled"):
+        resp = client.get(f"/api/v1/visits?status={status}")
+        assert resp.status_code == 200, f"status={status} 应放行"

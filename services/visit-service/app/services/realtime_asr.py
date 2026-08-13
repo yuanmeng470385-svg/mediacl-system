@@ -120,10 +120,17 @@ class RealtimeAsrClient:
         await client.finish()                     # StopTranscription + 关闭
     """
 
+    # B5（2026-08-13）：finish 等待 TranscriptionCompleted 的超时上限（秒）。
+    # NLS 无响应/已断连时兜底强制收尾；测试可下调此值加速超时用例
+    COMPLETED_TIMEOUT = 5.0
+
     def __init__(self, app_key: Optional[str] = None):
         self.app_key = app_key or os.getenv("NLS_APPKEY", "")
         self._ws = None
         self._task_id = uuid.uuid4().hex
+        # 转写完成事件：listener 收到 TranscriptionCompleted（或监听终止）置位，
+        # finish 等待它而非固定 sleep（B5）
+        self._completed = asyncio.Event()
 
     def _next_message_id(self) -> str:
         # NLS 要求 message_id 为 32 位十六进制 UUID（每次请求唯一）——真实联调发现
@@ -190,6 +197,8 @@ class RealtimeAsrClient:
             await self.close()
             raise RuntimeError("NLS 实时转写启动失败（未收到 TranscriptionStarted）")
 
+        # B5：每个会话用新事件（防复用实例时上一会话的置位状态残留）
+        self._completed = asyncio.Event()
         # 后台任务：接收 NLS 事件并触发回调
         self._listener = asyncio.create_task(self._listen(on_sentence))
 
@@ -227,12 +236,18 @@ class RealtimeAsrClient:
                             )
                     elif name == "TranscriptionCompleted":
                         logger.info(f"实时转写完成: task_id={self._task_id}")
+                        self._completed.set()  # B5：解除 finish 的等待
                         break
                     elif name == "TaskFailed":
                         logger.error(f"NLS 转写失败: {payload}")
+                        self._completed.set()  # B5：失败不会再有 Completed，提前解除等待
                         break
         except Exception as exc:
             logger.error(f"NLS 事件监听异常: {exc}")
+        finally:
+            # B5：监听以任何方式终止（正常完成/失败/断连）都解除 finish 的等待，
+            # 防连接已断时 finish 空等满超时
+            self._completed.set()
 
     @staticmethod
     def _event_speaker(payload: dict, fallback):
@@ -251,7 +266,13 @@ class RealtimeAsrClient:
         await self._ws.send(audio_chunk)
 
     async def finish(self) -> None:
-        """结束转写：发送 StopTranscription 并等待完成"""
+        """结束转写：发送 StopTranscription 并等待 TranscriptionCompleted 再关闭
+
+        B5（2026-08-13）：旧实现发完 StopTranscription 固定 sleep 0.5s 后 close ——
+        末句的 SentenceEnd/TranscriptionCompleted 晚于 0.5s 到达时会被截断丢句；
+        改为事件等待（listener 收到 Completed 置位），COMPLETED_TIMEOUT 超时兜底
+        后仍 close/cancel listener 强制收尾。
+        """
         if not self._ws:
             return
         try:
@@ -268,8 +289,12 @@ class RealtimeAsrClient:
             await self._ws.send(json.dumps(stop_msg))
         except Exception as exc:
             logger.error(f"StopTranscription 发送失败: {exc}")
-        # 给监听任务留一点收尾时间（Completed 事件）
-        await asyncio.sleep(0.5)
+        try:
+            await asyncio.wait_for(self._completed.wait(), timeout=self.COMPLETED_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"等待 TranscriptionCompleted 超时（{self.COMPLETED_TIMEOUT}s），强制收尾: task_id={self._task_id}"
+            )
         await self.close()
 
     async def close(self) -> None:

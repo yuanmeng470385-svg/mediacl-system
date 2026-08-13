@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from app.services.realtime_asr import (
     MockRealtimeAsrClient, RealtimeAsrClient, nls_speaker_enabled, _sign_params, _percent_encode,
 )
@@ -73,16 +75,18 @@ class TestRealtimeAsrClient:
 
 class TestAsrWebSocket:
     def test_ws_rejects_without_token(self):
-        """WS 端点：query 与首帧 auth 都没有 token → 4401 关闭（B5 首帧鉴权协议）"""
+        """WS 端点：query 与首帧 auth 都没有 token → 4401 关闭（B5 首帧鉴权协议）
+
+        B7（2026-08-13）：旧实现 assert False 被外层 except 吞掉（测试恒绿、失去断言
+        价值）；改为显式断言 receive 抛 WebSocketDisconnect 且关闭码 4401。
+        """
         with TestClient(app) as client:
-            try:
-                with client.websocket_connect("/ws/visits/1/asr") as ws:
-                    # 新协议：连接后先发 auth 帧（token 为空 → 服务端关 4401）
-                    ws.send_text(json.dumps({"type": "auth", "token": ""}))
-                    ws.receive_json()  # 服务端 close(4401) → 这里抛 WebSocketDisconnect
-                    assert False, "无 token 不应连接成功"
-            except Exception:
-                pass  # 连接被关闭（4401），符合预期
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                # 新协议：连接后先发 auth 帧（token 为空 → 服务端关 4401）
+                ws.send_text(json.dumps({"type": "auth", "token": ""}))
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()  # 服务端 close(4401) → WebSocketDisconnect
+            assert exc_info.value.code == 4401, f"关闭码应为 4401，实际 {exc_info.value.code}"
 
 
 class TestSpeakerSeparation:
@@ -161,7 +165,11 @@ class TestSpeakerMapping:
 # ---------- WS 会话级测试（NLS_MOCK=1 + 假 Session/合规，不连真实服务） ----------
 
 class _FakeAsrSession:
-    """假 session：query(...).filter(...).first() → 归属校验通过的记录"""
+    """假 session：query(...).filter(...).first() → 归属校验通过的记录
+
+    B4（2026-08-13）：连接建立即查拜访状态 —— 记录带 status/ai_summary 字段
+    （进行中），缺失字段会触发状态守卫 AttributeError。
+    """
 
     def __init__(self, user_id: int = 7):
         self._user_id = user_id
@@ -189,7 +197,10 @@ class _FakeAsrQuery:
         if self._model is not None and self._model.__name__ == "User":
             # H2（2026-08-11）：asr_ws 鉴权实时查库——返回 active 用户
             return SimpleNamespace(id=self._user_id, username="rep1", role="rep", status="active")
-        return SimpleNamespace(user_id=self._user_id, product_id=1, hcp_id=1)
+        return SimpleNamespace(
+            user_id=self._user_id, product_id=1, hcp_id=1,
+            status="in_progress", ai_summary=None,
+        )
 
 
 class TestAsrWebSocketFlow:
@@ -260,9 +271,9 @@ class TestAsrWebSocketFlow:
 class _FakeAsrSessionWithRecord:
     """假 session：归属校验通过；记录带 status/ai_summary/compliance_flags 等真实字段
 
-    旧 _FakeAsrSession 的记录是 SimpleNamespace(user_id, product_id, hcp_id)——
-    断句落库访问 rec.status 会 AttributeError（恰好走缓冲兜底路径）。F3 断言
-    compliance_flags 落库需要记录支持真实字段 + session 支持 commit。
+    B4 后 _FakeAsrSession 的记录也补齐 status/ai_summary（连接建立的状态守卫
+    需要）；本 fake 额外支持 commit + with_for_update，供 F3 断言 compliance_flags
+    落库与 B1 断言兜底落库守卫使用。
     """
 
     def __init__(self, user_id: int = 7):
@@ -369,7 +380,11 @@ class TestAsrWebSocketComplianceFrames:
         assert len(flags["violations"]) == 1
 
     def test_warn_frame_pushed_but_flags_not_appended_after_visit_ended(self, monkeypatch):
-        """已结束拜访（证据封存）：帧仍然推送（实时告警），但 compliance_flags 不追加"""
+        """会话中拜访被 end（证据封存）：帧仍然推送（实时告警），但 compliance_flags 不追加
+
+        连接时拜访仍在进行中（B4 后已结束拜访在连接建立即被拒）；会话进行中拜访被
+        并发 end —— 状态守卫在每句落库时生效：帧照推、落库跳过。
+        """
 
         async def _warn_compliance(text, context=None):
             return {"blocked": False, "risk_level": "medium",
@@ -377,7 +392,6 @@ class TestAsrWebSocketComplianceFrames:
 
         from app.api import asr_ws
         session = _FakeAsrSessionWithRecord()
-        session.record.ai_summary = "真实总结已生成"  # 拜访已结束
         monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
         monkeypatch.delenv("NLS_APPKEY", raising=False)
         monkeypatch.setenv("NLS_MOCK", "1")
@@ -389,6 +403,7 @@ class TestAsrWebSocketComplianceFrames:
             with client.websocket_connect("/ws/visits/1/asr") as ws:
                 ws.send_text(json.dumps({"type": "auth", "token": token}))
                 ws.receive_json()  # ready
+                session.record.ai_summary = "真实总结已生成"  # 会话中拜访被并发 end
                 ws.send_bytes(b"\x00" * 3200)
                 for _ in range(3):
                     f = ws.receive_json()
@@ -400,3 +415,198 @@ class TestAsrWebSocketComplianceFrames:
             time.sleep(0.3)
         assert frame is not None and frame["blocked"] is False
         assert session.record.compliance_flags is None, "已结束拜访不应追加合规标记"
+
+
+# ---------- B4 回归（2026-08-13）：连接建立时拜访已结束/已取消 → error 帧 + 4404 ----------
+
+class TestAsrWsVisitStateGuard:
+    """B4：已封存证据的拜访拒绝开新转写会话（不开付费 NLS 会话）"""
+
+    def test_ws_rejects_ended_visit(self, monkeypatch):
+        """拜访已结束（真实总结）→ error 帧 + 4404 关闭，不收 ready"""
+        from app.api import asr_ws
+        session = _FakeAsrSessionWithRecord()
+        session.record.ai_summary = "真实总结已生成"
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert "已结束" in err["message"]
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == 4404, f"关闭码应为 4404，实际 {exc_info.value.code}"
+
+    def test_ws_rejects_cancelled_visit(self, monkeypatch):
+        """拜访已取消 → error 帧 + 4404 关闭"""
+        from app.api import asr_ws
+        from app.constants import VISIT_STATUS_CANCELLED
+        session = _FakeAsrSessionWithRecord()
+        session.record.status = VISIT_STATUS_CANCELLED
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert "已取消" in err["message"]
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == 4404
+
+
+# ---------- B1 回归（2026-08-13）：收尾兜底落库与主路径同守卫 ----------
+
+class TestAsrWsFallbackPersist:
+    """B1：兜底路径（last_final_text 收尾追加）加 for_update + 状态复查"""
+
+    def test_fallback_persist_skips_ended_visit(self, monkeypatch, caplog):
+        """主路径断句落库失败 → 缓冲末句；收尾兜底时拜访已结束 → 放弃追加并记日志"""
+        import logging
+        from app.api import asr_ws
+        from app.services.realtime_asr import MockRealtimeAsrClient
+
+        caplog.set_level(logging.INFO, logger="app.api.asr_ws")
+        session = _FakeAsrSessionWithRecord()
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
+
+        async def _ok_compliance(text, context=None):
+            return {"blocked": False, "violations": [], "risk_level": "none"}
+        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
+
+        # is_mock=False（假 ASR 客户端）→ 断句走真实落库路径（Mock 模式不落库）
+        monkeypatch.setattr(
+            asr_ws, "_get_asr_client",
+            lambda: (MockRealtimeAsrClient(sentences=["收尾前的末句"], interval=0), False),
+        )
+
+        calls = {"n": 0}
+
+        def _flaky_get(db, visit_id, for_update=False):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return session.record  # 连接建立的状态守卫（进行中，放行）
+            if calls["n"] == 2:
+                raise RuntimeError("simulated db failure")  # 主路径落库失败 → 缓冲
+            # 收尾兜底路径：期间拜访已被 end（证据已封存）
+            session.record.ai_summary = "真实总结已生成"
+            return session.record
+
+        monkeypatch.setattr(asr_ws, "VisitRepo", SimpleNamespace(get=_flaky_get))
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                ws.receive_json()  # ready
+                ws.send_bytes(b"\x00" * 3200)
+                ws.receive_json()  # 中间结果
+                ws.receive_json()  # 断句完成（主路径落库失败 → 缓冲末句）
+                ws.send_text(json.dumps({"type": "stop"}))
+                ws.receive_json()  # completed（finally 兜底落库已执行）
+            time.sleep(0.3)
+
+        # 兜底路径状态守卫：已结束 → 末句不追加（证据封存），且记日志
+        assert session.record.conversation_transcript == "", "已结束拜访兜底不应追加末句"
+        assert "收尾兜底不追加" in caplog.text, "应记日志说明放弃追加"
+
+
+# ---------- B5 回归（2026-08-13）：finish 等 TranscriptionCompleted 事件 ----------
+
+class TestFinishWaitsForCompletion:
+    """B5：finish 等 Completed 事件而非固定 sleep 0.5s（末句不丢）；超时兜底"""
+
+    def test_finish_waits_for_completed_event(self):
+        """Completed 事件晚于旧实现的固定 0.5s 才到 → finish 仍等到事件才 close"""
+
+        async def run():
+            client = RealtimeAsrClient(app_key="test-appkey")
+            closed = asyncio.Event()
+            queue = asyncio.Queue()
+
+            class _FakeWs:
+                def __init__(self):
+                    self.sent = []
+
+                async def send(self, data):
+                    self.sent.append(data)
+
+                async def close(self):
+                    assert client._completed.is_set(), "close 应发生在 TranscriptionCompleted 事件之后"
+                    closed.set()
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    try:
+                        return await asyncio.wait_for(queue.get(), timeout=10)
+                    except asyncio.TimeoutError:
+                        raise StopAsyncIteration
+
+            ws = _FakeWs()
+            client._ws = ws
+            client._listener = asyncio.create_task(client._listen(lambda t, i, f, s=None: None))
+            await asyncio.sleep(0.05)  # 让 listener 进入 recv 等待
+
+            async def _deliver():
+                await asyncio.sleep(1.0)  # 晚于旧实现固定 sleep 0.5s
+                await queue.put(json.dumps({"header": {"name": "TranscriptionCompleted"}, "payload": {}}))
+
+            deliver = asyncio.create_task(_deliver())
+            t0 = time.monotonic()
+            await client.finish()
+            elapsed = time.monotonic() - t0
+            await deliver
+            await client._listener
+            assert closed.is_set(), "finish 后应已 close"
+            assert any("StopTranscription" in str(m) for m in ws.sent)
+            # 事件 1.0s 到达 → finish 约 1.0s 返回；旧实现固定 0.5s close 会提前返回
+            assert elapsed >= 0.9, f"应等 Completed 事件到达才 close，实际 {elapsed:.3f}s"
+            assert elapsed < 2.0, f"应在事件到达后立即 close（未撞超时兜底），实际 {elapsed:.3f}s"
+
+        asyncio.run(run())
+
+    def test_finish_timeout_fallback_closes(self):
+        """Completed 永远不到（NLS 无响应）→ 超时兜底强制 close/cancel listener"""
+        import time as _time
+
+        async def run():
+            client = RealtimeAsrClient(app_key="test-appkey")
+            client.COMPLETED_TIMEOUT = 0.2  # 测试加速（生产 5s）
+            closed = asyncio.Event()
+
+            class _SilentWs:
+                def __init__(self):
+                    self.sent = []
+
+                async def send(self, data):
+                    self.sent.append(data)
+
+                async def close(self):
+                    closed.set()
+
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    await asyncio.sleep(10)  # 一直等，不发 Completed
+                    raise StopAsyncIteration
+
+            client._ws = _SilentWs()
+            client._listener = asyncio.create_task(client._listen(lambda t, i, f, s=None: None))
+            await asyncio.sleep(0.05)
+            t0 = _time.monotonic()
+            await client.finish()  # 0.2s 超时兜底 → close + cancel listener
+            elapsed = _time.monotonic() - t0
+            assert closed.is_set(), "超时后应强制 close"
+            assert elapsed < 1.0, f"超时兜底不应等满生产 5s，实际 {elapsed:.3f}s"
+            await asyncio.sleep(0.05)  # 等 cancel 传播
+            assert client._listener.done(), "listener 应已被 cancel"
+
+        asyncio.run(run())

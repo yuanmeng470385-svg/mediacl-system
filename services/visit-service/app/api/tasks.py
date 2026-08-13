@@ -38,6 +38,10 @@ async def list_tasks(
     db: Session = Depends(get_db),
 ):
     """我的任务列表"""
+    # B3（2026-08-13）：status 白名单（与 update 同一 TASK_STATUSES）——
+    # 非法值直接 400，不再静默忽略返回全量
+    if status is not None and status not in TASK_STATUSES:
+        raise ParamError(f"status 必须是 {'/'.join(sorted(TASK_STATUSES))}")
     p = PaginationParams(page=page, page_size=page_size)
     items, total = TaskRepo.list_by_user(
         db, current_user["id"], status=status, page=p.page, page_size=p.page_size,

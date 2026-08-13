@@ -9,7 +9,8 @@
 
 降级策略（"遇到阻塞先 mock，不等"）：
   - A 不可用/未配置专员 → 返回 degraded 结果，不阻塞拜访流程
-  - D 不可用 → 合规检查放行（客户端 fail-open）
+  - D 不可用 → 合规检查抛异常（fail-closed，拒绝处理；2026-08-12 B5 修复后
+    不再静默放行，调用方异常传播 → 5xx，内容不落库不生成）
   - 听悟不可用 → process_transcript 报错并给出明确提示，可改用 text 直传
 """
 import json
@@ -87,6 +88,32 @@ def _parse_json_content(content: str) -> Optional[dict]:
         return result if isinstance(result, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+def _dedupe_violations(violations: list) -> list:
+    """B2（2026-08-13）：合规违规条目按 (rule_code, matched_text) 去重
+
+    end_visit 占位串可重试：每次重试都重跑合规审核，同一违规条目会被重复
+    累加翻倍。缺 rule_code/matched_text 的旧形状条目保守不去重（原样保留）。
+    """
+    seen = set()
+    out = []
+    for v in violations:
+        if not isinstance(v, dict):
+            out.append(v)
+            continue
+        rc = v.get("rule_code")
+        mt = v.get("matched_text")
+        if rc is None and mt is None:
+            # 旧形状（如 {"rule", "reason"}）无去重键 → 保守保留，不去重
+            out.append(v)
+            continue
+        key = (rc, mt)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(v)
+    return out
 
 
 from app.db.repositories.task_repo import TaskRepo, CHANNEL_TYPE_MAP, infer_channel
@@ -839,7 +866,12 @@ class VisitManager:
             record.status = VISIT_STATUS_COMPLETED
         flags = record.compliance_flags or {}
         flags["blocked"] = compliance.get("blocked", False)
-        flags["violations"] = flags.get("violations", []) + compliance.get("violations", [])
+        # B2（2026-08-13）：violations 按 (rule_code, matched_text) 去重后合并 ——
+        # AI 失败写占位串可重试 end，每次重试都重跑一次合规审核，同一违规条目
+        # 会被重复累加翻倍；去重后重试不再膨胀
+        flags["violations"] = _dedupe_violations(
+            list(flags.get("violations") or []) + list(compliance.get("violations") or [])
+        )
         record.compliance_flags = flags
         db.commit()
 

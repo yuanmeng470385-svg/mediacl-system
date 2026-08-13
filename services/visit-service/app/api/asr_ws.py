@@ -122,6 +122,17 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         if record.user_id != user_id and role != "admin":
             await websocket.close(code=4403)  # 无权
             return
+        # B4（2026-08-13）：连接建立即查拜访状态 —— 已结束/已取消直接 error 帧 +
+        # 关闭，不开付费 NLS 会话（误连已封存证据的拜访既烧钱又无意义；与 F12
+        # 同口径：占位串不算已结束，可重试 end 的拜访仍允许连接）
+        if record.status == VISIT_STATUS_CANCELLED:
+            await websocket.send_json({"type": "error", "message": "拜访已取消，不能开始实时转写"})
+            await websocket.close(code=4404)
+            return
+        if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
+            await websocket.send_json({"type": "error", "message": "拜访已结束，不能开始实时转写"})
+            await websocket.close(code=4404)
+            return
         # 串行化该连接的所有 send：后台合规任务与主路径并发 send 会触发
         # websockets>=12 的 ConcurrencyError（事件被吞、合规拦截丢失）
         send_lock = asyncio.Lock()
@@ -251,15 +262,21 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             logger.info(f"客户端断开: visit_id={visit_id}")
         finally:
             await asr.close()
-            # 收尾兜底落库：on_sentence 缓冲的最后一句；会话已关闭则跳过并记日志
+            # 收尾兜底落库：on_sentence 缓冲的最后一句；会话已关闭则跳过并记日志。
+            # B1（2026-08-13）：兜底路径与主路径（F12）同守卫 —— 行锁 + 状态复查，
+            # 已取消/已结束的拜访不再追加（证据已封存，兜底不得绕过守卫）
             if last_final_text:
                 if getattr(db, "is_active", True):
                     try:
-                        rec = VisitRepo.get(db, visit_id)
-                        if rec:
+                        rec = VisitRepo.get(db, visit_id, for_update=True)
+                        if rec and rec.status == VISIT_STATUS_CANCELLED:
+                            logger.warning("拜访已取消，收尾兜底不追加最后一句: visit_id=%s", visit_id)
+                        elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
+                            logger.warning("拜访已结束，收尾兜底不追加最后一句: visit_id=%s", visit_id)
+                        elif rec:
                             rec.conversation_transcript = (rec.conversation_transcript or "") + last_final_text + "\n"
                             db.commit()
-                        logger.info("收尾兜底落库最后一句: visit_id=%s", visit_id)
+                            logger.info("收尾兜底落库最后一句: visit_id=%s", visit_id)
                     except Exception as exc:
                         logger.error("收尾兜底落库失败: %s", exc)
                 else:

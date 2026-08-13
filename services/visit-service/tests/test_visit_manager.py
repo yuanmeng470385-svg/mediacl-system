@@ -922,3 +922,39 @@ def test_process_transcript_non_duplicate_still_appends():
     assert result.get("duplicate") is None
     assert rec.conversation_transcript == "第一句转写\n第二句转写\n"
     assert len(spy_detector.calls) == 1  # 正常执行了异议检测
+
+
+# ---------- B2 回归（2026-08-13）：end_visit 重试 violations 按 (rule_code, matched_text) 去重 ----------
+
+def test_end_visit_retry_violations_deduped():
+    """B2：AI 失败占位串可重试 end，每次重试都重跑合规审核 ——
+    同一 (rule_code, matched_text) 违规只保留一条，不随重试翻倍；不同违规都保留"""
+    from app.core.visit_manager import VisitManager
+
+    async def _warn_on_ai_output(content, context=None):
+        if context and context.get("type") == "ai_output":
+            return {"blocked": False, "risk_level": "medium", "violations": [
+                {"rule_code": "R002", "severity": "warn", "matched_text": "占位"},
+                {"rule_code": "R003", "severity": "warn", "matched_text": "占位"},
+            ]}
+        return {"blocked": False, "violations": [], "risk_level": "none"}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFail())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
+
+    vm_module.check_compliance = _warn_on_ai_output
+    try:
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))  # AI 失败 → 占位串（可重试）
+        asyncio.run(mgr.end_visit(db, visit_id, user_id=1))  # 重试 → 再跑一次审核
+    finally:
+        vm_module.check_compliance = _fake_compliance_ok  # 恢复 setup 假实现
+
+    flags = FakeDb._records[visit_id].compliance_flags
+    assert flags is not None
+    # 两次审核各返回同两条违规 → 去重后仍 2 条（未去重会是 4 条翻倍）
+    assert len(flags["violations"]) == 2, f"重试后违规应去重不翻倍，实际 {flags['violations']}"
+    codes = sorted(v["rule_code"] for v in flags["violations"])
+    assert codes == ["R002", "R003"], "不同违规条目应都保留"
