@@ -3,13 +3,15 @@ import logging
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from shared.common.response import success, ParamError
+from shared.common.response import success, ParamError, BusinessError
 from shared.common.auth import get_current_user
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from app.models.visit_record import VisitRecord
 from app.db.repositories.visit_repo import VisitRepo
 from app.core.visit_manager import VisitManager
+from app.services.audit_client import write_audit_log
+from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED
 
 router = APIRouter(prefix="/api/v1/visits", tags=["visits"])
 logger = logging.getLogger(__name__)
@@ -31,6 +33,14 @@ def _to_int_param(value, field_name: str) -> int:
         return int(value)
     except (TypeError, ValueError):
         raise ParamError(f"{field_name} 必须是整数")
+
+
+def _body_as_dict(payload, endpoint: str) -> dict:
+    """请求体必须是 JSON 对象（B15：FastAPI 的 dict 注解不强制类型 ——
+    传数组/字符串/数字会 500，显式校验返回 400）"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    return payload
 
 
 def _attach_hcp_name(db: Session, record: dict) -> dict:
@@ -86,6 +96,7 @@ async def pre_visit(
 
     Request: {"hcp_id": 1, "product_id": 1}
     """
+    request = _body_as_dict(request, "pre-visit")
     hcp_id = request.get("hcp_id")
     product_id = request.get("product_id")
     if not hcp_id:
@@ -112,6 +123,7 @@ async def start_visit(
 
     Request: {"hcp_id": 1, "product_id": 1}
     """
+    request = _body_as_dict(request, "start")
     hcp_id = request.get("hcp_id")
     product_id = request.get("product_id")
     if not hcp_id:
@@ -137,8 +149,13 @@ async def process_transcript(
     Request: {"audio_url": "https://oss/audio.wav"} 或 {"text": "直接文本内容"}
     """
     _assert_visit_owner(db, visit_id, current_user)
+    request = _body_as_dict(request, "transcript")
     audio_url = request.get("audio_url")
     text_content = request.get("text")
+    if audio_url is not None and not isinstance(audio_url, str):
+        raise ParamError("audio_url 必须是字符串")
+    if text_content is not None and not isinstance(text_content, str):
+        raise ParamError("text 必须是字符串")
     if not audio_url and not text_content:
         raise ParamError("audio_url 和 text 至少提供一个")
     result = await _visit_manager.process_transcript(
@@ -165,6 +182,8 @@ async def end_visit(
     校验层拒绝，full_transcript 本身就是可选契约，body 不应是必填）。
     """
     _assert_visit_owner(db, visit_id, current_user)
+    if request is not None and not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
     result = await _visit_manager.end_visit(
         db, visit_id, current_user["id"],
         full_transcript=(request or {}).get("full_transcript"),
@@ -185,6 +204,39 @@ async def follow_up(
     result = await _visit_manager.follow_up(
         db, visit_id, current_user["id"], auth_token=_auth_token(raw_request)
     )
+    return success(result)
+
+
+@router.post("/{visit_id}/cancel")
+async def cancel_visit(
+    visit_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """取消拜访（B3 修复）：仅进行中的拜访可取消 —— 移动端误开/拜访未进行的
+    显式出口，不再只能等 end。证据安全：取消后不能再追加转写 / 结束 / 跟进
+    （visit_manager 与 asr_ws 均检查 status），取消本身留审计日志。
+    """
+    _assert_visit_owner(db, visit_id, current_user)
+    # 行锁复查：owner 检查（无锁读）与加锁之间状态可能已变（并发 end），
+    # 锁内二次校验保证"进行中 → 取消"判定与 end/transcript 串行化
+    record = VisitRepo.get(db, visit_id, for_update=True)
+    if not record:
+        raise HTTPException(status_code=404, detail="拜访记录不存在")
+    if record.status == VISIT_STATUS_CANCELLED:
+        raise BusinessError("拜访已取消，无需重复取消")
+    if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
+        raise BusinessError("拜访已结束，不能取消")
+
+    record.status = VISIT_STATUS_CANCELLED
+    db.commit()
+    logger.info("拜访取消: visit_id=%s user_id=%s", visit_id, current_user["id"])
+    await write_audit_log(
+        user_id=current_user["id"], action="visit_cancel",
+        resource_type="visit", resource_id=str(visit_id),
+    )
+    result = record.to_dict()
+    result["visit_id"] = record.id  # 移动端契约：读取 visit_id
     return success(result)
 
 
@@ -240,6 +292,7 @@ async def update_visit(
 ):
     """编辑拜访记录（仅更新白名单内的业务字段）"""
     record = _assert_visit_owner(db, visit_id, current_user)
+    request = _body_as_dict(request, "update")
     # 字段白名单（S4）：AI 生成/合规证据/归属字段一律拒绝 —— 不再任意 setattr
     allowed = {k: v for k, v in request.items() if k in ALLOWED_UPDATE_FIELDS and v is not None}
     record = VisitRepo.update(db, record, allowed)

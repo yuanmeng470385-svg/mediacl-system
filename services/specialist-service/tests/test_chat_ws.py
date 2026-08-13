@@ -73,10 +73,11 @@ def _fake_specialist(specialist_id: int) -> Specialist:
 
 
 def test_ws_无token关4401():
-    """无 token：握手成功（101）后立即以 4401 关闭 —— 先 accept 再 close，
+    """无 token：握手成功（101）后收到空 auth 帧 → 立即 4401 关闭 —— 先 accept 再 close，
     关闭码可达客户端；旧实现未 accept 时 close 被吞成握手 403，网关兜底 4500。"""
     with TestClient(app) as client:
         with client.websocket_connect("/ws/specialists/1/chat") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": ""}))
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_json()
             assert exc.value.code == 4401
@@ -87,7 +88,8 @@ def test_ws_停用账号旧token关4401(fake_user_db):
     fake_user_db["status"] = "disabled"
     token = create_token(user_id=1, username="tester", role="rep")
     with TestClient(app) as client:
-        with client.websocket_connect(f"/ws/specialists/1/chat?token={token}") as ws:
+        with client.websocket_connect("/ws/specialists/1/chat") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_json()
             assert exc.value.code == 4401
@@ -101,7 +103,8 @@ def test_ws_专员不存在关4404(monkeypatch):
     )
     token = create_token(user_id=1, username="tester", role="rep")
     with TestClient(app) as client:
-        with client.websocket_connect(f"/ws/specialists/999/chat?token={token}") as ws:
+        with client.websocket_connect("/ws/specialists/999/chat") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
             with pytest.raises(WebSocketDisconnect) as exc:
                 ws.receive_json()
             assert exc.value.code == 4404

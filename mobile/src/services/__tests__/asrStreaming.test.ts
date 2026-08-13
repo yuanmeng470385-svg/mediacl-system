@@ -93,7 +93,9 @@ describe('connectAsrStreaming', () => {
     const { ws } = openSession();
     await settle();
     expect(ws.sent.filter((s) => s instanceof ArrayBuffer).length).toBe(1);
-    const chunk = new Uint8Array(ws.sent[0]);
+    // sent[0] 是 auth 帧（B5 首帧鉴权），音频分片从 sent[1] 起
+    expect(ws.sent[0]).toBe(JSON.stringify({ type: 'auth', token: 't' }));
+    const chunk = new Uint8Array(ws.sent[1]);
     expect(Array.from(chunk)).toEqual(Array.from(pcmBuffer));
   });
 
@@ -128,11 +130,12 @@ describe('connectAsrStreaming', () => {
     });
     session.stop();
     await settle();
-    // 帧顺序：剩余 PCM 二进制分片在前，stop 帧在后
+    // 帧顺序：auth 帧（B5 首帧鉴权）→ 初始 PCM → 剩余 PCM → stop
     const frames = ws.sent;
-    expect(frames.length).toBe(3); // 初始分片 + 剩余分片 + stop 帧
-    expect(Array.from(new Uint8Array(frames[1]))).toEqual(Array.from(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20])));
-    expect(frames[2]).toBe(JSON.stringify({ type: 'stop' }));
+    expect(frames.length).toBe(4); // auth + 初始分片 + 剩余分片 + stop 帧
+    expect(frames[0]).toBe(JSON.stringify({ type: 'auth', token: 't' }));
+    expect(Array.from(new Uint8Array(frames[2]))).toEqual(Array.from(new Uint8Array([11, 12, 13, 14, 15, 16, 17, 18, 19, 20])));
+    expect(frames[3]).toBe(JSON.stringify({ type: 'stop' }));
   });
 
   test('stop 早于 WS open：不发送任何帧，open 后补 flush + stop 帧（防按钮卡死与服务端孤儿）', async () => {
@@ -152,13 +155,15 @@ describe('connectAsrStreaming', () => {
     // offset 也不能被白白推进 → 挂起，此时必须零发送
     session.stop();
     expect(ws.sent.length).toBe(0);
-    // WS 打开 → onReady → 挂起的收尾执行：flush 全部已录 PCM（offset 从头算）→ stop 帧
+    // WS 打开 → onReady → 挂起的收尾执行：auth 帧（B5 首帧鉴权）→ flush 全部已录
+    // PCM（offset 从头算）→ stop 帧
     ws.open();
     await settle();
     const frames = ws.sent;
-    expect(frames.length).toBe(2); // flush 分片 + stop 帧
-    expect(Array.from(new Uint8Array(frames[0]))).toEqual(Array.from(pcmBuffer));
-    expect(frames[1]).toBe(JSON.stringify({ type: 'stop' }));
+    expect(frames.length).toBe(3); // auth + flush 分片 + stop 帧
+    expect(frames[0]).toBe(JSON.stringify({ type: 'auth', token: 't' }));
+    expect(Array.from(new Uint8Array(frames[1]))).toEqual(Array.from(pcmBuffer));
+    expect(frames[2]).toBe(JSON.stringify({ type: 'stop' }));
   });
 
   test('Android：录音中增量读源为 temp.pcm（裸 PCM 无头），temp 删除后切回 wav(+44)', async () => {

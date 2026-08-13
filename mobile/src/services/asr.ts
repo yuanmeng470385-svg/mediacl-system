@@ -25,14 +25,19 @@ export interface AsrSession {
 }
 
 export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): AsrSession {
-  const ws = new WebSocket(`ws://${ASR_HOST}:8002/ws/visits/${visitId}/asr?token=${encodeURIComponent(token)}`);
+  // B5 修复（2026-08-12）：token 不再放 query string（会进网关/服务访问日志）——
+  // 连接建立后首帧发 {"type":"auth","token"}，服务端据此鉴权；旧服务端兼容 query 兜底
+  const ws = new WebSocket(`ws://${ASR_HOST}:8002/ws/visits/${visitId}/asr`);
   let finalText = '';
   // 最后一次 sentence 帧的说话人标签（visit-service 新字段，缺省 rep）
   let lastSpeaker: string | undefined;
   // 会话已按协议终止（completed / error 帧，或已报 onerror）则不再把 onclose 当故障上报
   let done = false;
 
-  ws.onopen = () => cbs.onReady();
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'auth', token }));
+    cbs.onReady();
+  };
   ws.onmessage = (e) => {
     try {
       const frame = JSON.parse(e.data as string);

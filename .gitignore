@@ -68,3 +68,9 @@ eval_report.json
 
 # --- 数据库备份产物（.env 由 BACKUP_DIR 指定，默认 ./backups）---
 backups/
+
+# --- 联调/验证截图与诊断临时产物（B6 修复 2026-08-12：曾含敏感凭据文件未跟踪）---
+t8-screenshots/
+t9-blueprint-screenshots/
+t10-office3d/
+t11-office3d/

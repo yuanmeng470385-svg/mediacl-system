@@ -56,7 +56,20 @@ async def chat_ws(
     # 握手失败（表现为 403），4401/4404 关闭码永远到不了客户端，网关会兜底
     # 4500。先 accept 后 close，客户端能收到真实业务关闭码。
     await websocket.accept()
+
+    # B5 首帧鉴权（2026-08-12）：token 不再放 query string（会进网关/反代访问日志）。
+    # 新协议：连接后第一帧 {"type":"auth","token":"..."}；旧客户端（query token）兼容：
+    # 首帧不是 auth 帧时回退 query token，并把该帧按原协议继续处理（question/stop）。
     token = websocket.query_params.get("token", "")
+    first_frame = None
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        first_frame = json.loads(raw)
+        if first_frame.get("type") == "auth" and first_frame.get("token"):
+            token = str(first_frame["token"])
+    except (WebSocketDisconnect, Exception):
+        await websocket.close(code=4401)
+        return
     try:
         payload = verify_token(token)
     except HTTPException:
@@ -81,12 +94,16 @@ async def chat_ws(
         async with send_lock:
             await websocket.send_text(json_dumps(frame))
 
-    # 读客户端首帧 question（60s 内未发则关 4500）
+    # 读客户端首帧 question（60s 内未发则关 4500）。首帧若是 auth 帧 → 再等一帧；
+    # 首帧即是协议帧（旧客户端）→ 直接处理
     question = None
     session_id = None
     try:
-        raw = await asyncio.wait_for(websocket.receive_text(), timeout=60)
-        msg = json.loads(raw)
+        if first_frame is not None and first_frame.get("type") == "auth":
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            msg = json.loads(raw)
+        else:
+            msg = first_frame if isinstance(first_frame, dict) else {}
         if msg.get("type") == "question":
             question = (msg.get("text") or "").strip()
             session_id = msg.get("session_id")

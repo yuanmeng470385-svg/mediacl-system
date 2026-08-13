@@ -153,6 +153,10 @@ async def update_user(
         raise PermissionError("仅 admin 可变更用户角色")
     if "role" in changed and changed["role"] not in VALID_ROLES:
         raise ParamError(f"role 不合法，可选：{'/'.join(sorted(VALID_ROLES))}")
+    # 手机号变更仅限 admin（H2 手机号接管：manager 改他人手机号 = 用验证码登录接管其账号，
+    # 密码登录不受影响但 SMS 通道会被劫持）—— manager 改自己的手机号同样拒绝（同角色自改限制）
+    if "phone" in changed and actor.role != "admin":
+        raise PermissionError("仅 admin 可变更用户手机号")
     # status 只接受枚举值，拒绝垃圾状态
     if "status" in changed and changed["status"] not in VALID_STATUSES:
         raise ParamError(f"status 不合法，可选：{'/'.join(sorted(VALID_STATUSES))}")

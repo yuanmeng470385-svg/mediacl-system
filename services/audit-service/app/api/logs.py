@@ -8,7 +8,7 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func as sqlfunc, desc
+from sqlalchemy import func as sqlfunc, desc, or_, String
 import openpyxl
 
 from shared.common.response import success, ParamError
@@ -101,6 +101,21 @@ async def search_logs(
         query = query.filter(AuditLog.timestamp >= start_time)
     if end_time:
         query = query.filter(AuditLog.timestamp <= end_time)
+    if keyword:
+        # B5 修复（2026-08-12）：keyword 参数此前被忽略（前端传了不生效）。
+        # 匹配操作/服务/资源/请求ID + 三个 JSONB 取证的文本内容
+        # （变更前后值/合规结果里搜违规规则码等）
+        like = f"%{keyword.strip()}%"
+        query = query.filter(or_(
+            AuditLog.action.ilike(like),
+            AuditLog.service_name.ilike(like),
+            AuditLog.resource_type.ilike(like),
+            AuditLog.resource_id.ilike(like),
+            AuditLog.request_id.ilike(like),
+            AuditLog.before_value.cast(String).ilike(like),
+            AuditLog.after_value.cast(String).ilike(like),
+            AuditLog.compliance_result.cast(String).ilike(like),
+        ))
 
     total = query.count()
     items = query.order_by(desc(AuditLog.timestamp)).offset(

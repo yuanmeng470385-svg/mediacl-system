@@ -4,7 +4,7 @@
  */
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal,
   Alert, ActivityIndicator, PermissionsAndroid, Platform,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -44,6 +44,9 @@ export default function VisitInProgressScreen() {
   const [showRedLine, setShowRedLine] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [textModalVisible, setTextModalVisible] = useState(false);  // 手动输入对话 modal
+  const [manualText, setManualText] = useState('');
+  const [manualSpeaker, setManualSpeaker] = useState<'rep' | 'hcp'>('rep');
   const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
   // ASR 帧的说话人标签（visit-service 新字段 'rep'/'doctor'，缺省 undefined → 按代表处理）
   const [liveSpeaker, setLiveSpeaker] = useState<string | undefined>(undefined);
@@ -98,24 +101,25 @@ export default function VisitInProgressScreen() {
     }
   }, []);
 
-  // 只调一次 end：结果放进 navigation params 传给 VisitEndScreen，避免第二次 end 触发后端"已结束"锁
+  // 只调一次 end：结果放进 navigation params 传给 VisitEndScreen，避免第二次 end 触发后端"已结束"锁。
+  // 只成功才导航；失败弹错误提示（不静默吞错）。"已结束"（后端幂等锁拒绝重复 end）→
+  // 直接进总结页 —— VisitEndScreen 用 getById fallback 拉取已生成的总结
   const handleEndVisit = () => {
     Alert.alert('结束拜访', '确认结束本次拜访并生成总结？', [
       { text: '取消', style: 'cancel' },
       { text: '确认结束', onPress: async () => {
-        let summary: VisitSummary | undefined;
-        try { summary = await visitAPI.endVisit(visitId); } catch {}
-        navigation.replace('VisitEnd', { visitId, summary });
+        try {
+          const summary = await visitAPI.endVisit(visitId);
+          navigation.replace('VisitEnd', { visitId, summary });
+        } catch (e: any) {
+          if (String(e?.message || '').includes('已结束')) {
+            navigation.replace('VisitEnd', { visitId });
+          } else {
+            Alert.alert('结束拜访失败', e?.message || '请稍后重试');
+          }
+        }
       }},
     ]);
-  };
-
-  const simulateInput = (speaker: 'rep' | 'hcp') => {
-    const samples: Record<string, string[]> = {
-      rep: ['主任，关于这个产品最新的临床数据您关注过吗？', '我们的产品在这一适应症上有很好的疗效数据支持。', '您觉得患者对这类治疗方案接受度怎么样？'],
-      hcp: ['这个数据和国际指南一致吗？', '我对这个方案的安全性还有些顾虑。', '价格方面对患者来说还是比较大的负担。'],
-    };
-    addTranscript(samples[speaker][Math.floor(Math.random() * 3)], speaker);
   };
 
   // 真实录音 → 流式推流 ASR 转写（录音 start 即建立会话，asr.ts 轮询读 WAV 增量持续推流；
@@ -403,19 +407,74 @@ export default function VisitInProgressScreen() {
           <Icon name={recording ? 'stop-circle' : 'microphone'} size={16} color={Colors.textWhite} />
           <Text style={styles.simBtnText}>{recording ? '停止录音' : '录音'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.simBtn} onPress={() => simulateInput('rep')} disabled={sending}>
-          <Icon name="account-voice" size={16} color={Colors.textWhite} />
-          <Text style={styles.simBtnText}>代表说</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.simBtn, styles.simBtnHcp]} onPress={() => simulateInput('hcp')} disabled={sending}>
-          <Icon name="doctor" size={16} color={Colors.primary} />
-          <Text style={styles.simBtnTextHcp}>医生说</Text>
+        <TouchableOpacity
+          style={styles.simBtn}
+          onPress={() => { setManualText(''); setManualSpeaker('rep'); setTextModalVisible(true); }}
+          disabled={sending || transcribing}
+        >
+          <Icon name="keyboard-outline" size={16} color={Colors.textWhite} />
+          <Text style={styles.simBtnText}>输入文字</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing}>
           <Icon name="stop-circle-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.endBtnText}>结束</Text>
         </TouchableOpacity>
       </View>
+
+      {/* 手动输入对话 modal：作为转写记录提交（异议/合规检测 + 落库），不注入假数据 */}
+      <Modal
+        visible={textModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTextModalVisible(false)}
+      >
+        <View style={styles.textModalOverlay}>
+          <View style={styles.textModalBox}>
+            <Text style={styles.textModalTitle}>输入对话内容</Text>
+            <View style={styles.speakerChips}>
+              {[{ k: 'rep' as const, label: '代表发言' }, { k: 'hcp' as const, label: `${hcpName}发言` }].map((s) => (
+                <TouchableOpacity
+                  key={s.k}
+                  style={[styles.speakerChip, manualSpeaker === s.k && styles.speakerChipActive]}
+                  onPress={() => setManualSpeaker(s.k)}
+                >
+                  <Text style={[styles.speakerChipText, manualSpeaker === s.k && styles.speakerChipTextActive]}>
+                    {s.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={styles.textModalInput}
+              value={manualText}
+              onChangeText={setManualText}
+              placeholder="输入对话内容，将作为转写记录提交并检测异议/合规"
+              placeholderTextColor={Colors.textHint}
+              multiline
+              maxLength={500}
+              autoFocus
+            />
+            <View style={styles.textModalBtns}>
+              <TouchableOpacity style={styles.textModalCancel} onPress={() => setTextModalVisible(false)}>
+                <Text style={styles.textModalCancelText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.textModalSend, (!manualText.trim() || sending) && styles.textModalSendDisabled]}
+                disabled={!manualText.trim() || sending}
+                onPress={async () => {
+                  const text = manualText.trim();
+                  if (!text) return;
+                  setTextModalVisible(false);
+                  setManualText('');
+                  await addTranscript(text, manualSpeaker);
+                }}
+              >
+                <Text style={styles.textModalSendText}>发送</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -510,9 +569,47 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.lg, paddingVertical: 14,
     alignItems: 'center', justifyContent: 'center', gap: Spacing.sm,
   },
-  simBtnHcp: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.primary },
   simBtnText: { color: Colors.textWhite, fontSize: FontSize.sm, fontWeight: '600' },
-  simBtnTextHcp: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '600' },
+  // 手动输入 modal
+  textModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', padding: Spacing.xxl,
+  },
+  textModalBox: {
+    backgroundColor: Colors.white, borderRadius: BorderRadius.xl,
+    padding: Spacing.xl,
+  },
+  textModalTitle: {
+    fontSize: FontSize.lg, fontWeight: '700', color: Colors.textPrimary,
+    textAlign: 'center', marginBottom: Spacing.lg,
+  },
+  speakerChips: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
+  speakerChip: {
+    flex: 1, paddingVertical: Spacing.sm, borderRadius: BorderRadius.full,
+    backgroundColor: Colors.background, alignItems: 'center',
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  speakerChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  speakerChipText: { fontSize: FontSize.sm, color: Colors.textSecondary },
+  speakerChipTextActive: { color: Colors.textWhite, fontWeight: '600' },
+  textModalInput: {
+    minHeight: 96, maxHeight: 180,
+    backgroundColor: Colors.background, borderRadius: BorderRadius.md,
+    padding: Spacing.md, fontSize: FontSize.md, color: Colors.textPrimary,
+    textAlignVertical: 'top',
+  },
+  textModalBtns: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.lg },
+  textModalCancel: {
+    flex: 1, paddingVertical: 12, borderRadius: BorderRadius.lg,
+    alignItems: 'center', borderWidth: 1, borderColor: Colors.border,
+  },
+  textModalCancelText: { fontSize: FontSize.md, color: Colors.textSecondary },
+  textModalSend: {
+    flex: 2, paddingVertical: 12, borderRadius: BorderRadius.lg,
+    alignItems: 'center', backgroundColor: Colors.primary,
+  },
+  textModalSendDisabled: { backgroundColor: Colors.border },
+  textModalSendText: { fontSize: FontSize.md, color: Colors.textWhite, fontWeight: '600' },
   endBtn: {
     flexDirection: 'row', backgroundColor: Colors.danger,
     borderRadius: BorderRadius.lg, paddingVertical: 14, paddingHorizontal: Spacing.xl,

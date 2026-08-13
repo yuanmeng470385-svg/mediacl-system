@@ -97,14 +97,27 @@ def test_oversized_request_id_is_regenerated(monkeypatch):
 
 
 def test_preflight_passes_through():
-    """OPTIONS 预检：CORS 短路返回，不触发链路/转发逻辑"""
+    """OPTIONS 预检：白名单内 Origin 的 CORS 预检短路返回（B5：CORS 改 env 白名单后，
+    非白名单 Origin 的预检被拒 —— 任意站点带凭据跨域不再可能）"""
     resp = client.options(
         "/api/v1/visits/x",
         headers={
-            "Origin": "http://example.com",
+            "Origin": "http://localhost:5173",  # 默认 CORS_ALLOW_ORIGINS 白名单内
             "Access-Control-Request-Method": "POST",
             "X-Request-ID": "A" * 200,  # 预检即使带恶意头也不落任何逻辑
         },
     )
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin")
+
+
+def test_preflight_rejects_non_allowlisted_origin():
+    """B5：白名单外的 Origin（任意站点）→ 预检被拒（400），不允许跨域"""
+    resp = client.options(
+        "/api/v1/visits/x",
+        headers={
+            "Origin": "http://evil.example.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert resp.status_code == 400

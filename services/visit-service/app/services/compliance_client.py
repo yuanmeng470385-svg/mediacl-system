@@ -36,6 +36,9 @@ async def check_compliance(content: str, context: dict = None,
             resp.raise_for_status()
             return resp.json()["data"]
     except Exception as e:
-        logger.error(f"合规检查失败: {e}")
-        # 合规服务不可用时的安全策略：放行（避免阻塞业务）
-        return {"blocked": False, "violations": [], "risk_level": "none", "error": str(e)}
+        # B5 修复（2026-08-12）：合规服务不可用 → 抛异常（fail-closed），绝不静默放行。
+        # 调用方语义：
+        #   - process_transcript / end_visit → 异常传播 → 5xx，内容不落库不生成；
+        #   - asr_ws 实时告警（_check_later）→ 已有 except 捕获记日志，跳过推送。
+        logger.error(f"合规检查失败（fail-closed，拒绝处理）: {e}")
+        raise

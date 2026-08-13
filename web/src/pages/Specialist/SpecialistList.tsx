@@ -5,12 +5,12 @@ import { ProTable, ModalForm } from '@ant-design/pro-components';
 
 dayjs.extend(utc);
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin, Segmented } from 'antd';
+import { Button, Tag, Space, Row, Col, App, Drawer, Descriptions, Empty, Spin, Segmented, List, Typography } from 'antd';
 import { PlusOutlined, BarChartOutlined } from '@ant-design/icons';
 import StatCard from '../../components/StatCard';
 import SpecialistForm from './SpecialistForm';
 import SpecialistOffice from './SpecialistOffice';
-import { specialistAPI } from '../../services/specialist';
+import { specialistAPI, type SpecialistFeedback } from '../../services/specialist';
 import { STATUS_MAP } from '../../constants/specialist';
 import type { Specialist, SpecialistStats } from '../../types';
 
@@ -30,32 +30,38 @@ function toPayload(values: Record<string, unknown>): Record<string, unknown> {
   return payload;
 }
 
-/** 专员数据抽屉：使用量 + 满意度（需求 2.2.1 专员数据看板） */
+/** 专员数据抽屉：使用量 + 满意度 + 反馈明细（需求 2.2.1 专员数据看板） */
 function SpecialistDataDrawer({ specialist, onClose }: { specialist: Specialist | null; onClose: () => void }) {
   const [stats, setStats] = useState<SpecialistStats | null>(null);
+  const [feedback, setFeedback] = useState<SpecialistFeedback[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!specialist) return;
     setLoading(true);
     setStats(null);
+    setFeedback([]);
     specialistAPI.stats(specialist.id)
       .then((res) => setStats(res.data.data))
-      .catch(() => setStats(null))
+      .catch(() => setStats(null));
+    // 反馈明细（后端 GET /specialists/{id}/feedback，2026-08-12 新增）
+    specialistAPI.feedbackList(specialist.id, { page: 1, page_size: 50 })
+      .then((res) => setFeedback(res.data.data.items ?? []))
+      .catch(() => setFeedback([]))
       .finally(() => setLoading(false));
   }, [specialist]);
 
   return (
     <Drawer
       title={specialist ? `数据看板：${specialist.name}` : '数据看板'}
-      width={520}
+      width={560}
       open={!!specialist}
       onClose={onClose}
     >
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
       ) : stats ? (
-        <Descriptions column={1} bordered size="small">
+        <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
           <Descriptions.Item label="总对话数">{stats.total_conversations}</Descriptions.Item>
           <Descriptions.Item label="反馈总数">{stats.total_feedback}</Descriptions.Item>
           <Descriptions.Item label="满意度">
@@ -63,12 +69,47 @@ function SpecialistDataDrawer({ specialist, onClose }: { specialist: Specialist 
           </Descriptions.Item>
         </Descriptions>
       ) : (
-        <Empty description="统计加载失败" />
+        <Empty description="统计加载失败" style={{ marginBottom: 16 }} />
       )}
-      <div style={{ marginTop: 16, color: '#8c8c8c', fontSize: 12, lineHeight: 1.8 }}>
-        注：后端暂未提供专员反馈列表接口（GET /feedback 或 GET /conversations?specialist_id= 均不存在），
-        此处仅展示聚合统计（GET /specialists/&#123;id&#125;/stats，满意度为 0-100 百分数）；反馈明细列表待后端补接口后接入。
-      </div>
+
+      <Typography.Title level={5} style={{ marginTop: 8 }}>
+        反馈明细（{feedback.length} 条）
+      </Typography.Title>
+      {feedback.length === 0 ? (
+        <Empty description="暂无反馈记录" style={{ padding: 30 }} />
+      ) : (
+        <List
+          size="small"
+          dataSource={feedback}
+          renderItem={(item) => (
+            <List.Item style={{ alignItems: 'flex-start', padding: '12px 0' }}>
+              <List.Item.Meta
+                title={
+                  <Space>
+                    <Tag color={item.rating === 1 ? 'green' : 'red'}>
+                      {item.rating === 1 ? '👍 点赞' : '👎 点踩'}
+                    </Tag>
+                    <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+                      {item.created_at ? dayjs.utc(item.created_at).local().format('YYYY-MM-DD HH:mm') : '—'}
+                    </span>
+                  </Space>
+                }
+                description={
+                  <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+                    {item.question ? (
+                      <div style={{ color: '#595959' }}>问：{item.question}</div>
+                    ) : null}
+                    {item.answer ? (
+                      <div style={{ color: '#8c8c8c' }}>答：{item.answer.slice(0, 200)}{item.answer.length > 200 ? '…' : ''}</div>
+                    ) : null}
+                    {item.comment ? <div style={{ color: '#1677ff' }}>评论：{item.comment}</div> : null}
+                  </div>
+                }
+              />
+            </List.Item>
+          )}
+        />
+      )}
     </Drawer>
   );
 }

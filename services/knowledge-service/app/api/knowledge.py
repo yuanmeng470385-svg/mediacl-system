@@ -79,9 +79,19 @@ async def search_knowledge(
     db: Session = Depends(get_db),
 ):
     data = validate_search_request(request)
+    # B5 修复（2026-08-12）：body 里的 product_id 未校验类型 —— 传字符串会在
+    # ES/DashVector 的 int() 转换处 500；显式校验返回 400
+    raw_product_id = request.get("product_id")
+    if raw_product_id is not None:
+        try:
+            product_id = int(raw_product_id)
+        except (TypeError, ValueError):
+            raise ParamError("product_id 必须是整数")
+    else:
+        product_id = None
     results, source = _manager(db).search(
         query=data["query"],
-        product_id=request.get("product_id"),
+        product_id=product_id,
         doc_type=request.get("doc_type"),
         top_k=data["top_k"],
     )

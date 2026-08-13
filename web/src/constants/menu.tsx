@@ -8,12 +8,14 @@ import {
   UserOutlined,
   TeamOutlined,
   SettingOutlined,
+  CalendarOutlined,
 } from '@ant-design/icons';
 import type { MenuDataItem } from '@ant-design/pro-components';
 
 export const menuConfig: MenuDataItem[] = [
   { path: '/dashboard', name: '仪表盘', icon: <DashboardOutlined /> },
   { path: '/specialist/list', name: '数字专员', icon: <RobotOutlined /> },
+  { path: '/visit/list', name: '拜访管理', icon: <CalendarOutlined /> },
   { path: '/knowledge/list', name: '知识库', icon: <BookOutlined /> },
   { path: '/compliance/list', name: '合规规则', icon: <SafetyOutlined /> },
   { path: '/compliance/blocks', name: '拦截记录', icon: <StopOutlined /> },

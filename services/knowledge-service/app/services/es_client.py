@@ -40,6 +40,10 @@ class EsClient:
             {"multi_match": {"query": query, "fields": ["title^3", "content"]}},
         ]}}
         filters = []
+        # B5 修复（2026-08-12）：只检索已上架（ready）文档 —— 驳回/下架走
+        # _cleanup_indexes 删除索引，但删除失败（降级路径）会残留未上架文档；
+        # 检索侧按 status 过滤兜底，防止 rejected/archived 内容被搜到
+        filters.append({"term": {"status": "ready"}})
         if product_id is not None:
             filters.append({"term": {"product_id": int(product_id)}})
         if doc_type:

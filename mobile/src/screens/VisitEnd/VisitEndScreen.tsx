@@ -47,6 +47,13 @@ export default function VisitEndScreen() {
 
   const loadSummary = async () => {
     try {
+      // getById fallback：拜访已在别处结束（重复进入本页 / 断线后重进）→ 直接展示已有总结，
+      // 不再调 endVisit —— 后端对已结束拜访拒绝重复 end（证据保护），重复调用只会报错
+      const detail = await visitAPI.getById(visitId);
+      if (detail?.ai_summary) {
+        setSummary(detail.ai_summary);
+        return;
+      }
       const result = await visitAPI.endVisit(visitId);
       setSummary(result);
     } catch (e: any) {

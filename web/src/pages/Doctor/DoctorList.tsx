@@ -24,10 +24,8 @@ export default function DoctorList() {
     { title: '职称', dataIndex: 'title', width: 100 },
     { title: '标签', dataIndex: 'tags', width: 200,
       render: (_, r) => <Space wrap>{(r.tags ?? []).map((t) => <Tag key={t}>{t}</Tag>)}</Space> },
-    { title: '拜访次数', dataIndex: 'visit_count', width: 100,
-      render: (_, r) => (r.visit_count != null ? r.visit_count : '--') },
-    { title: '满意度', dataIndex: 'satisfaction', width: 100,
-      render: (_, r) => (r.satisfaction != null ? `${r.satisfaction}%` : '--') },
+    // 拜访次数/满意度：后端 hcps 表无此字段（幻影列恒 '--'）→ 已删除；数据在医生详情页的
+    // 互动记录/AI 画像中展示（hcp-service 有 interaction 列表）
     { title: '操作', width: 100,
       render: (_, r) => <a onClick={() => navigate(`/doctor/${r.id}`)}>查看详情</a> },
   ];

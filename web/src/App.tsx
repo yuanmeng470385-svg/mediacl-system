@@ -9,7 +9,7 @@ import { AuthProvider } from './context/AuthContext';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const SpecialistList = lazy(() => import('./pages/Specialist/SpecialistList'));
-const SpecialistForm = lazy(() => import('./pages/Specialist/SpecialistForm'));
+const VisitList = lazy(() => import('./pages/Visit/VisitList'));
 const KnowledgeList = lazy(() => import('./pages/Knowledge/KnowledgeList'));
 const ComplianceList = lazy(() => import('./pages/Compliance/ComplianceList'));
 const ComplianceBlocks = lazy(() => import('./pages/Compliance/Blocks'));
@@ -52,7 +52,8 @@ export default function App() {
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
                   <Route path="specialist/list" element={<SpecialistList />} />
-                  <Route path="specialist/create" element={<SpecialistForm />} />
+                  {/* /specialist/create 已删除：新增/编辑专员均在列表页 Modal 内完成（SpecialistList 内置表单） */}
+                  <Route path="visit/list" element={<VisitList />} />
                   <Route path="knowledge/list" element={<KnowledgeList />} />
                   <Route path="compliance/list" element={<ComplianceList />} />
                   <Route path="compliance/blocks" element={<ComplianceBlocks />} />

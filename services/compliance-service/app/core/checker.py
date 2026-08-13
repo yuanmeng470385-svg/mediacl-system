@@ -347,9 +347,19 @@ class ComplianceChecker:
                 "reason": "语义审核无有效输出或输出无法解析，按违规拦截",
             }]
         except Exception as e:
-            # 网络/API 错误 → 维持降级策略 fail-open，避免阻塞业务
-            logger.error(f"LLM 语义审核失败: {e}")
-            return []
+            # B5 修复（2026-08-12）：网络/API 错误 → fail-closed 按拦截处理。
+            # 旧实现返回 [] 放行 —— 语义层是内容审核的兜底关卡，运行时故障时
+            # 放行 = 违规内容整体绕过语义审核（与 S7 fail-closed 冲突）。
+            # 未配置 DASHSCOPE_API_KEY 的显式降级路径（上方早退）不受影响。
+            logger.error(f"LLM 语义审核失败（fail-closed，按违规拦截）: {e}")
+            return [{
+                "rule_code": "R999",
+                "rule_name": "AI 审核异常",
+                "severity": "high",
+                "action": "reject",
+                "matched_text": "",
+                "reason": "语义审核失败（网络/API 异常），按违规拦截",
+            }]
 
     # ==================== 辅助方法 ====================
 

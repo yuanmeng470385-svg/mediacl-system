@@ -20,6 +20,7 @@ const severityConfig: Record<string, { color: string; bg: string; icon: string }
 
 const filterTabs = ['全部', '高', '中', '低'];
 const TYPE_LABELS: Record<string, string> = { keyword: '关键词', regex: '正则', semantic: 'AI语义' };
+const severityLabel: Record<string, string> = { high: '高', medium: '中', low: '低' };
 
 export default function ComplianceScreen() {
   const [rules, setRules] = useState<ComplianceRule[]>([]);
@@ -63,7 +64,7 @@ export default function ComplianceScreen() {
             <View style={[styles.severityBadge, { backgroundColor: sev.bg }]}>
               <Icon name={sev.icon} size={12} color={sev.color} />
               <Text style={[styles.severityText, { color: sev.color }]}>
-                {filterTabs.find(t => t !== '全部' && severityConfig[item.severity]?.color === (t === '高' ? Colors.danger : Colors.warning) ) || ''}
+                {severityLabel[item.severity] || '低'}
               </Text>
             </View>
           </View>

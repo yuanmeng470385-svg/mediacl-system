@@ -2,9 +2,10 @@
  * 拜访详情页 - 查看已完成的拜访记录
  */
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import { visitAPI } from '../../api/visit';
@@ -12,6 +13,7 @@ import type { VisitRecord } from '../../types';
 import type { RootStackParamList } from '../../navigation/types';
 
 type RouteType = RouteProp<RootStackParamList, 'VisitDetail'>;
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 /** 拜访时长：两时间都在则算分钟数；只有开始时间则视为进行中/已结束；都缺显示 -- */
 function formatDuration(start?: string, end?: string): string {
@@ -28,7 +30,7 @@ function formatDuration(start?: string, end?: string): string {
 
 export default function VisitDetailScreen() {
   const route = useRoute<RouteType>();
-  const navigation = useNavigation();
+  const navigation = useNavigation<Nav>();
   const { visitId } = route.params;
   const [record, setRecord] = useState<VisitRecord | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,6 +83,35 @@ export default function VisitDetailScreen() {
   const interests = summary?.interests ?? [];
   const objections = summary?.objections ?? [];
 
+  // 进行中的拜访：恢复继续（回拜访中页，转写/录音继续追加）+ 显式取消（后端 POST /cancel，
+  // 已结束/已取消会被拒绝）
+  const handleResume = () => {
+    navigation.navigate('VisitInProgress', { visitId, hcpName: record?.hcp_name || '' });
+  };
+  const handleCancel = () => {
+    Alert.alert('取消拜访', '确认取消本次拜访？取消后转写将停止接收，无法恢复。', [
+      { text: '再想想', style: 'cancel' },
+      {
+        text: '确认取消',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await visitAPI.cancelVisit(visitId);
+            Alert.alert('已取消', '本次拜访已取消');
+            setReloadKey((k) => k + 1);
+          } catch (e: any) {
+            Alert.alert('取消失败', e?.message || '请稍后重试');
+          }
+        },
+      },
+    ]);
+  };
+
+  const statusLabel =
+    record?.status === 'completed' ? '拜访已完成'
+      : record?.status === 'cancelled' ? '已取消'
+      : '进行中';
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -112,10 +143,24 @@ export default function VisitDetailScreen() {
           <View style={styles.infoRow}>
             <Icon name="hospital-building" size={18} color={Colors.textSecondary} />
             <Text style={styles.infoText}>
-              状态：{record?.status === 'completed' ? '拜访已完成' : record?.status}
+              状态：{statusLabel}
             </Text>
           </View>
         </View>
+
+        {/* 进行中操作：恢复拜访 / 取消拜访 */}
+        {record?.status === 'in_progress' && (
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={[styles.actionBtn, styles.resumeBtn]} onPress={handleResume} activeOpacity={0.8}>
+              <Icon name="play-circle" size={18} color={Colors.textWhite} />
+              <Text style={styles.resumeText}>继续拜访</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionBtn, styles.cancelBtn]} onPress={handleCancel} activeOpacity={0.8}>
+              <Icon name="close-circle" size={18} color={Colors.danger} />
+              <Text style={styles.cancelText}>取消拜访</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* AI 总结 */}
         <View style={[styles.card, Shadow.card]}>
@@ -224,4 +269,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
   },
   retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  actionsRow: {
+    flexDirection: 'row', gap: Spacing.md, marginBottom: Spacing.md,
+  },
+  actionBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: Spacing.sm, paddingVertical: 14, borderRadius: BorderRadius.xl,
+  },
+  resumeBtn: { backgroundColor: Colors.primary },
+  cancelBtn: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.danger },
+  resumeText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  cancelText: { color: Colors.danger, fontSize: FontSize.md, fontWeight: '600' },
 });

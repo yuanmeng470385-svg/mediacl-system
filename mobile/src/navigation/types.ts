@@ -27,13 +27,14 @@ export type RootStackParamList = {
   VisitDetail: { visitId: number };
   // 医生
   HCPDetail: { hcpId: number };
-  HCPProfile: { hcpId: number };
   // 学术
   Content: undefined;
   ContentDetail: { contentId: number };
   // 合规
   ComplianceManual: undefined;
-  ComplianceRuleDetail: { ruleCode: string };
+  // 任务 & 收藏
+  TaskList: undefined;
+  Favorites: undefined;
   // 设置
   Settings: undefined;
   NotificationSettings: undefined;

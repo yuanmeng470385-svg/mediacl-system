@@ -41,6 +41,8 @@ async def check_compliance(content: str, context: dict = None, fast: bool = Fals
             resp.raise_for_status()
             return resp.json()["data"]
     except Exception as e:
-        logger.error(f"合规检查失败: {e}")
-        # 合规服务不可用时的安全策略：放行（避免阻塞业务）
-        return {"blocked": False, "violations": [], "risk_level": "none", "error": str(e)}
+        # B5 修复（2026-08-12）：合规服务不可用 → 抛异常（fail-closed），绝不静默放行。
+        # 调用方（answer_generator 提问预检 / 答案审核 / 流式逐帧门禁）异常传播 →
+        # 对话失败 5xx —— 内容在合规不可用时不会被生成/透出。
+        logger.error(f"合规检查失败（fail-closed，拒绝处理）: {e}")
+        raise

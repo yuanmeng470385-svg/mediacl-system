@@ -10,10 +10,39 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://medagent:medagent123@localhost:5432/medagent"
-)
+# 守卫需要读 .env 的 dev 标志 —— 本模块可能先于各服务 config.py 被 import
+# （模型链 shared.models.* → db_session），主动向上查找仓库根 .env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:  # pragma: no cover
+    pass
+
+DEFAULT_DB_URL = "postgresql://medagent:medagent123@localhost:5432/medagent"
+DEFAULT_DB_PASSWORD = "medagent123"
+
+
+def _resolve_db_url() -> str:
+    """读 DATABASE_URL，生产环境对默认数据库凭据 fail-fast（B5 修复 2026-08-12）。
+
+    默认密码 medagent123 意味着任何能触达 DB 端口的攻击者可直接登录 ——
+    仅当显式 dev 标志（DEV_MODE / AUTH_DEV_MODE 任一为 true）时才豁免
+    （本地开发/测试用默认本地库）。
+    """
+    url = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
+    is_dev = (
+        os.getenv("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+        or os.getenv("AUTH_DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+    )
+    if not is_dev and DEFAULT_DB_PASSWORD in url:
+        raise RuntimeError(
+            "生产环境禁止使用默认数据库密码 medagent123，请在 .env 配置 DATABASE_URL"
+            "（本地开发设置 DEV_MODE=true 豁免）"
+        )
+    return url
+
+
+DATABASE_URL = _resolve_db_url()
 
 # 连接池配置
 engine = create_engine(

@@ -60,10 +60,38 @@ def load_config() -> dict:
 
 
 def pg_password(cfg: dict) -> str:
-    """从 .env 的 DATABASE_URL 解析密码（缺省 dev compose 的 medagent123）。"""
+    """备份口令：优先显式 DB_PASSWORD（独立账号环境），否则从 DATABASE_URL 解析。
+
+    B6 修复（2026-08-12）：解析失败或仍回退默认值 medagent123 → fail（不再静默回退）。
+    备份是 ECS cron 定时任务，静默用公开默认密码会掩盖凭据漏配（且默认密码本身是
+    安全隐患）；本地开发豁免（AUTH_DEV_MODE/DEV_MODE=true，dev 库就是默认密码）。
+    """
+    explicit = cfg.get("DB_PASSWORD", "")
+    if explicit:
+        return explicit
     url = cfg.get("DATABASE_URL", "postgresql://medagent:medagent123@localhost:5432/medagent")
     m = re.search(r"postgres(?:ql)?://([^:]+):([^@]+)@", url)
-    return m.group(2) if m else "medagent123"
+    password = m.group(2) if m else ""
+    if not password:
+        raise RuntimeError(
+            "DATABASE_URL 格式无法解析（应为 postgresql://user:pass@host:port/db）。"
+            "请配置 DB_USER/DB_PASSWORD 或正确的 DATABASE_URL"
+        )
+    is_dev = (
+        os.getenv("DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+        or os.getenv("AUTH_DEV_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+    )
+    if password == "medagent123" and not is_dev:
+        raise RuntimeError(
+            "DATABASE_URL 仍是默认密码 medagent123 —— 备份链路过期/漏配会被静默掩盖。"
+            "请配置真实数据库凭据（DB_USER/DB_PASSWORD 或 DATABASE_URL）"
+        )
+    return password
+
+
+def pg_user(cfg: dict) -> str:
+    """备份/校验用的数据库用户：DB_USER 优先，缺省 medagent（与 pg_password 配套）。"""
+    return cfg.get("DB_USER", "") or "medagent"
 
 
 def log(msg: str, cfg: dict) -> None:
@@ -105,7 +133,7 @@ def cleanup_local(cfg: dict) -> int:
     """删除 BACKUP_DIR 中超过 BACKUP_RETENTION_LOCAL_DAYS 天的备份，返回删除数。"""
     days = int(cfg["BACKUP_RETENTION_LOCAL_DAYS"])
     cutoff = datetime.datetime.now() - datetime.timedelta(days=days)
-    pattern = re.compile(r"^medagent-(\d{8})-\d{4}\.dump$")
+    pattern = re.compile(r"^medagent-(\d{8})-\d{6}\.dump$")  # 秒级时间戳（B6 修复同步）
     removed = 0
     for p in Path(cfg["BACKUP_DIR"]).glob("medagent-*.dump"):
         m = pattern.match(p.name)
@@ -149,12 +177,13 @@ def run_pg_dump(cfg: dict) -> Path:
     """docker exec pg_dump -Fc 全量备份到 BACKUP_DIR。返回 dump 文件路径。"""
     dump_dir = Path(cfg["BACKUP_DIR"])
     dump_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    # B6 修复（2026-08-12）：秒级时间戳 —— 分钟粒度下同分钟重跑会覆盖前一个 dump
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     dump_path = dump_dir / f"medagent-{stamp}.dump"
     # 二进制输出直写文件（不用 shell 重定向，防 Windows CRLF 破坏 custom 格式）
     with open(dump_path, "wb") as out:
         cmd = ["docker", "exec", "-e", f"PGPASSWORD={pg_password(cfg)}", cfg["BACKUP_PG_CONTAINER"],
-               "pg_dump", "-U", "medagent", "-Fc", "medagent"]
+               "pg_dump", "-U", pg_user(cfg), "-Fc", "medagent"]
         proc = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE)
     if proc.returncode != 0:
         dump_path.unlink(missing_ok=True)

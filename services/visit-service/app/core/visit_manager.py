@@ -32,16 +32,18 @@ from app.services.specialist_client import chat_with_specialist
 from app.services.audit_client import write_audit_log
 from app.core.objection_detector import ObjectionDetector
 from app.services.qwen_client import QwenClient
+from app.constants import (
+    AI_SUMMARY_PLACEHOLDER,
+    AI_SUMMARY_BLOCKED,
+    VISIT_STATUS_CANCELLED,
+    VISIT_STATUS_COMPLETED,
+    VISIT_STATUS_IN_PROGRESS,
+)
 
 logger = logging.getLogger(__name__)
 
-# AI 总结失败时的占位串：记录 ai_summary = 占位串 不等于"已结束"，
-# end_visit 可再次调用重试（重试成功覆盖占位串），避免记录永久锁死
-AI_SUMMARY_PLACEHOLDER = "（AI 总结生成失败，拜访尚未结束，可重试结束拜访）"
-
-# 合规拦截话术（转写内容预检 / AI 总结审核任一拦截时使用）：记录 ai_summary = 拦截话术
-# 视为"已结束"（内容本身有问题，重试无意义，人工复核后另行处理）
-AI_SUMMARY_BLOCKED = "该拜访总结因合规问题被拦截，请联系医学顾问复核。"
+# 占位串 / 拦截话术定义在 app.constants（visit_record/visit_repo 共用），
+# 此处直接 import 使 visit_manager.AI_SUMMARY_PLACEHOLDER 兼容旧调用路径
 
 # 同库直读 hcps / digital_specialists（数据属于 hcp-service / specialist-service，此处只读）
 _HCP_SQL = text("""
@@ -391,6 +393,7 @@ class VisitManager:
             "user_id": user_id,
             "product_id": product_id,
             "visit_time": datetime.now(),
+            "status": VISIT_STATUS_IN_PROGRESS,
         })
         await write_audit_log(
             user_id=user_id, action="visit_start",
@@ -418,6 +421,12 @@ class VisitManager:
         record = VisitRepo.get(db, visit_id)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+        # F12：已结束/已取消的拜访拒绝追加转写 —— 证据已封存，后续内容
+        # 不再入档（可重试的占位串不算已结束，仍允许追加后重试 end）
+        if record.status == VISIT_STATUS_CANCELLED:
+            raise BusinessError(f"拜访已取消，不能追加转写: visit_id={visit_id}")
+        if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
+            raise BusinessError(f"拜访已结束，不能追加转写: visit_id={visit_id}")
 
         if not text_content:
             if not audio_url:
@@ -438,8 +447,19 @@ class VisitManager:
             text_content,
             {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
         )
-        # 异议识别（规则 + 语义，语义不可用自动降级）
-        objection_result = self.detector.detect(text_content)
+        # 异议识别（规则 + 语义，语义不可用自动降级）。B6：detect 内部是同步千问
+        # 调用，包到线程池执行，防阻塞事件循环（与 end_visit 直调同模式）
+        objection_result = await asyncio.to_thread(self.detector.detect, text_content)
+
+        # F7：锁内追加 —— 并发 process_transcript / end_visit 的读改写窗口串行化，
+        # 不互相覆盖；锁内复查状态（拿到锁前对方可能已 end / 取消）
+        record = VisitRepo.get(db, visit_id, for_update=True)
+        if not record:
+            raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+        if record.status == VISIT_STATUS_CANCELLED:
+            raise BusinessError(f"拜访已取消，不能追加转写: visit_id={visit_id}")
+        if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
+            raise BusinessError(f"拜访已结束，不能追加转写: visit_id={visit_id}")
 
         # 追加转写 + 累积合规标记（不整句覆盖，保留全部违规证据）
         record.conversation_transcript = (record.conversation_transcript or "") + text_content + "\n"
@@ -662,9 +682,14 @@ class VisitManager:
 
         auth_token 保留参数（旧专员链路透传 JWT，直调后不再使用，接口签名兼容）
         """
-        record = VisitRepo.get(db, visit_id)
+        # 行锁读：并发双 end / end+cancel / end+transcript 的读改写窗口串行化 ——
+        # 只有第一个拿到锁的请求能看到"未结束"状态，其余在锁上等，复查时拒绝
+        record = VisitRepo.get(db, visit_id, for_update=True)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+
+        if record.status == VISIT_STATUS_CANCELLED:
+            raise BusinessError(f"拜访已取消，不能结束: visit_id={visit_id}")
 
         # 状态锁（S4）：已结束的拜访不能重复 end —— 防止覆盖已生成的结构化记录/证据。
         # AI 失败时写入的是占位串（AI_SUMMARY_PLACEHOLDER），不算已结束，允许重试覆盖
@@ -767,6 +792,9 @@ class VisitManager:
         record.sentiment = sentiment
         record.next_visit_plan = next_plan
         record.duration_minutes = duration
+        # 占位串（AI 失败可重试）不算已结束，status 保持 in_progress；真实总结/拦截话术 → completed
+        if ai_summary != AI_SUMMARY_PLACEHOLDER:
+            record.status = VISIT_STATUS_COMPLETED
         flags = record.compliance_flags or {}
         flags["blocked"] = compliance.get("blocked", False)
         flags["violations"] = flags.get("violations", []) + compliance.get("violations", [])
@@ -801,10 +829,20 @@ class VisitManager:
         self, db: Session, visit_id: int, user_id: int,
         auth_token: Optional[str] = None,
     ) -> Dict:
-        """生成跟进建议：基于拜访记录 + 医生信息 → 调 A"""
-        record = VisitRepo.get(db, visit_id)
+        """生成跟进建议：基于拜访记录 + 医生信息 → 直调千问（不再经专员链路）
+
+        B2 修复（2026-08-12）：旧实现走 chat_with_specialist —— 产品未配置数字专员时
+        永久 degraded（answer="" → parsed 回退 {"content": ""}，follow_up_items 恒空，
+        跟进建议功能形同虚设且任务永不创建）。直调 qwen-max 一次 ~3s 稳定产出，
+        与 end_visit 同一模式（JSON 契约 + to_thread）。
+        auth_token 保留参数（旧专员链路透传 JWT，直调后不再使用，接口签名兼容）
+        """
+        # 行锁：与 end/cancel 的读写串行化；取消的拜访不再生成跟进
+        record = VisitRepo.get(db, visit_id, for_update=True)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+        if record.status == VISIT_STATUS_CANCELLED:
+            raise BusinessError(f"拜访已取消，无法生成跟进建议: visit_id={visit_id}")
 
         hcp = self._get_hcp(db, record.hcp_id) or {}
         prompt = f"""为医药代表生成拜访后的跟进建议。
@@ -823,9 +861,21 @@ class VisitManager:
   "reminders": ["下次拜访需要带的材料/注意点"]
 }}"""
 
-        specialist_id = self._resolve_specialist(db, record.product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
-        parsed = _parse_json_content(result.get("answer", "")) or {"content": result.get("answer", "")}
+        try:
+            resp = await asyncio.to_thread(
+                self.qwen.chat,
+                [
+                    {"role": "system", "content": "只输出 JSON，不要任何额外文字或 markdown 代码块。"},
+                    {"role": "user", "content": prompt},
+                ],
+                model="qwen-max", temperature=0.1, max_tokens=2000,
+            )
+            parsed = _parse_json_content(resp.get("content", "")) or {}
+            degraded = False
+        except Exception as exc:
+            logger.warning("follow_up qwen 生成失败（降级返回空建议）: %s", exc)
+            parsed = {}
+            degraded = True
 
         # 自动创建后续任务（必做项）：AI 建议逐条落库，失败不影响主流程；
         # 按 visit_id 幂等（end_visit 已自动建过则跳过，避免重复任务）
@@ -838,10 +888,10 @@ class VisitManager:
         await write_audit_log(
             user_id=user_id, action="visit_follow_up",
             resource_type="visit", resource_id=str(visit_id),
-            ai_involved=True, ai_model="qwen-max",
+            ai_involved=not degraded, ai_model="qwen-max" if not degraded else None,
         )
         return {
             "visit_id": visit_id,
             "follow_up": parsed,
-            "degraded": result.get("degraded", False) or bool(result.get("error")),
+            "degraded": degraded,
         }

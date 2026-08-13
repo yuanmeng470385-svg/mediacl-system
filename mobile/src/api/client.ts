@@ -20,9 +20,16 @@ interface RequestOptions {
 class APIClient {
   private baseURL: string;
   private token: string | null = null;
+  /** 401 通知回调（AuthContext 注册：token 失效 → 全局登出）。多个并发 401 会触发多次，回调需幂等 */
+  private onUnauthorized: (() => void) | null = null;
 
   constructor(baseURL: string = API_BASE_URL) {
     this.baseURL = baseURL;
+  }
+
+  /** 注册 token 失效回调（任意请求 401 时触发；client 层已清 token，回调只负责 UI 状态） */
+  setOnUnauthorized(cb: (() => void) | null): void {
+    this.onUnauthorized = cb;
   }
 
   async setToken(token: string): Promise<void> {
@@ -99,7 +106,17 @@ class APIClient {
       return result.data as T;
     } catch (error: any) {
       clearTimeout(timeoutId);
-      if (error instanceof APIError) throw error;
+      if (error instanceof APIError) {
+        // token 失效（HTTP 401 或 JWT 错误码 2000-2003）：清除本地凭证 + 通知上层登出。
+        // 网络错误（status 为空）不触发 —— 一次网络抖动不能把已登录用户踢出
+        const tokenInvalid =
+          error.status === 401 || [2000, 2001, 2002, 2003].includes(error.code);
+        if (tokenInvalid) {
+          await this.clearToken();
+          this.onUnauthorized?.();
+        }
+        throw error;
+      }
       if (error.name === 'AbortError') {
         throw new APIError('请求超时，请检查网络连接', -1);
       }

@@ -30,6 +30,8 @@ import SettingsScreen from '../screens/Settings/SettingsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
+import TaskListScreen from '../screens/TaskList/TaskListScreen';
+import FavoritesScreen from '../screens/Favorites/FavoritesScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -174,6 +176,9 @@ export default function AppNavigator() {
               component={ComplianceScreen}
               options={{ animation: 'slide_from_right' }}
             />
+            {/* 任务 & 收藏 */}
+            <Stack.Screen name="TaskList" component={TaskListScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="Favorites" component={FavoritesScreen} options={{ animation: 'slide_from_right' }} />
             {/* 辅助页面 */}
             <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />

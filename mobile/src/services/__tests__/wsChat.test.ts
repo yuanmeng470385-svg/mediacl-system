@@ -44,41 +44,43 @@ beforeEach(() => {
 const noopCbs = { onStart: () => {}, onDelta: () => {}, onDone: () => {}, onError: () => {} };
 
 describe('wsChat 客户端', () => {
-  it('URL 走网关并带 token 与 specialistId', () => {
+  it('URL 走网关且不含 token（B5：token 移出 query，改首帧 auth）', () => {
     const ws = openChatWs(3, 'tok-1', noopCbs);
     const inst = MockWebSocket.instances[0];
     expect(inst.url).toContain(':8000/api/v1/specialists/3/chat/ws');
-    expect(inst.url).toContain('token=tok-1');
+    expect(inst.url).not.toContain('token=');
     ws.close();
   });
 
-  it('sendQuestion 发 question 帧（open 后）', () => {
+  it('onopen 首帧发 auth 帧，再发 question 帧（open 后）', () => {
     const ws = openChatWs(3, 'tok', noopCbs);
     const inst = MockWebSocket.instances[0];
     inst.triggerOpen();
     ws.sendQuestion('你好', 'sess-1');
-    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
+    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'auth', token: 'tok' }));
+    expect(inst.sent[1]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
     ws.close();
   });
 
-  it('open 前 sendQuestion 先缓冲，open 后补发 question 帧', () => {
+  it('open 前 sendQuestion 先缓冲，open 后 auth 帧 + question 帧顺序补发', () => {
     const ws = openChatWs(3, 'tok', noopCbs);
     const inst = MockWebSocket.instances[0];
     expect(inst.readyState).toBe(0);                 // 真实时序：构造后仍是 CONNECTING
     ws.sendQuestion('你好', 'sess-1');
     expect(inst.sent).toHaveLength(0);               // 未 open 不发送
     inst.triggerOpen();
-    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
+    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'auth', token: 'tok' }));
+    expect(inst.sent[1]).toBe(JSON.stringify({ type: 'question', text: '你好', session_id: 'sess-1' }));
     ws.close();
   });
 
-  it('open 前 close 丢弃缓冲的 question，不再补发', () => {
+  it('open 前 close 丢弃缓冲的 question，不再补发（auth 帧仍由 onopen 发）', () => {
     const ws = openChatWs(3, 'tok', noopCbs);
     const inst = MockWebSocket.instances[0];
     ws.sendQuestion('你好');
     ws.close();
     inst.triggerOpen();
-    expect(inst.sent).toHaveLength(0);
+    expect(inst.sent).toEqual([JSON.stringify({ type: 'auth', token: 'tok' })]);
   });
 
   it('start/delta/done 帧触发回调，done 带 conversationId', () => {

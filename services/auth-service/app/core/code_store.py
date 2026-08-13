@@ -60,6 +60,29 @@ def _cooldown_key(phone: str) -> str:
     return f"authcode:cd:{phone}"
 
 
+# 原子消耗验证码尝试次数（B5 修复 2026-08-12）：
+#   GET → 递增 attempts → 超限 DEL / 未超限 SETEX（保留剩余 TTL）
+#   返回值 {state, code}：state 0=无验证码 / 1=可校验 / 2=已用尽（验证码已作废）
+_TAKE_ATTEMPT_LUA = """
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return {0, ''}
+end
+local data = cjson.decode(raw)
+data.attempts = data.attempts + 1
+if data.attempts > tonumber(ARGV[1]) then
+  redis.call('DEL', KEYS[1])
+  return {2, data.code}
+end
+local remaining = redis.call('TTL', KEYS[1])
+if remaining < 1 then
+  remaining = 1
+end
+redis.call('SETEX', KEYS[1], remaining, cjson.encode(data))
+return {1, data.code}
+"""
+
+
 class RedisCodeStore(CodeStore):
     """Redis 实现"""
 
@@ -91,20 +114,19 @@ class RedisCodeStore(CodeStore):
 
     def take_attempt(self, phone: str, max_attempts: int) -> Tuple[Optional[str], bool]:
         try:
-            raw = self._redis.get(_key(phone))
-            if not raw:
+            # 原子消耗（B5 修复 2026-08-12）：旧实现 GET→修改→SETEX 非原子 ——
+            # 并发登录请求同时读到同一 attempts 值，验证码可被并发重放。
+            # Lua 单脚本内完成 读→递增→超限作废/回写，Redis 单线程保证串行。
+            # 返回 {state, code}：state 0=无验证码 / 1=可校验 / 2=已用尽（验证码已作废）
+            state, code = self._redis.eval(
+                _TAKE_ATTEMPT_LUA, 1, _key(phone), str(int(max_attempts))
+            )
+            state = int(state)
+            if state == 2:
+                return code or None, True
+            if state == 0:
                 return None, False
-            data = json.loads(raw)
-            data["attempts"] = int(data.get("attempts", 0)) + 1
-            if data["attempts"] > max_attempts:
-                # 已超过上限：作废验证码，本次调用起报告 exhausted
-                self._redis.delete(_key(phone))
-                return data.get("code"), True
-            # 第 max_attempts 次（最后一次机会）仍允许校验，下次调用才作废
-            # 保留剩余 TTL，不因为一次失败而延长有效期
-            remaining = self._redis.ttl(_key(phone))
-            self._redis.setex(_key(phone), max(remaining, 1), json.dumps(data))
-            return data.get("code"), False
+            return code or None, False
         except CodeStoreError:
             raise
         except Exception as exc:

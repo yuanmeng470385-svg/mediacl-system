@@ -99,10 +99,21 @@ class AliyunSmsSender(SmsSender):
 
 
 def get_sms_sender(provider: str) -> SmsSender:
-    """按配置返回发送器"""
+    """按配置返回发送器
+
+    B5 修复（2026-08-12）：生产环境禁止 console 通道 —— ConsoleSender 会把验证码
+    明文写进服务日志，是可被日志采集链路泄露的敏感信息。非 DEV_MODE 下
+    provider 不是 aliyun 一律 fail-fast（请求 5xx，绝不静默放行）。
+    """
+    from app.config import settings
     normalized = (provider or "console").strip().lower()
     if normalized == "aliyun":
         return AliyunSmsSender()
+    if not settings.DEV_MODE:
+        raise SmsSendError(
+            "生产环境禁止 console 短信通道（验证码会写入服务日志）。"
+            "请配置 AUTH_SMS_PROVIDER=aliyun 及 AUTH_SMS_SIGN_NAME/AUTH_SMS_TEMPLATE_CODE"
+        )
     if normalized != "console":
         logger.warning("未知的 AUTH_SMS_PROVIDER=%s，回退到 console", provider)
     return ConsoleSender()

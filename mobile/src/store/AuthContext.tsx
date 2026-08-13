@@ -10,7 +10,7 @@ import React, {
   type ReactNode,
 } from 'react';
 import { authAPI } from '../api/auth';
-import { APIError } from '../api/client';
+import { apiClient, APIError } from '../api/client';
 import type { User } from '../types';
 
 interface AuthState {
@@ -34,6 +34,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 启动时检查登录态
   useEffect(() => {
     checkAuth();
+  }, []);
+
+  // token 失效（任意请求 401）：client 层已清 token，这里同步清 UI 状态。
+  // authAPI.logout 只清本地存储不发请求 → 不会递归触发 401
+  useEffect(() => {
+    apiClient.setOnUnauthorized(() => {
+      authAPI.logout().then(() => {
+        setUser(null);
+        setToken(null);
+      });
+    });
+    return () => apiClient.setOnUnauthorized(null);
   }, []);
 
   const checkAuth = async () => {

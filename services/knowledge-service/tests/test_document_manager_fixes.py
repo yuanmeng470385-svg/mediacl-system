@@ -411,7 +411,10 @@ def test_search_prefers_es_when_configured(monkeypatch):
     assert source == "es"
     assert results[0]["doc_id"] == 5
     assert calls[0][1] == 5  # top_k
+    # B5 修复（2026-08-12）：检索侧恒带 status=ready 过滤（驳回/下架清理失败的
+    # 残留文档不进入检索结果）—— 位于 filter 首位
     assert calls[0][2]["bool"]["filter"] == [
+        {"term": {"status": "ready"}},
         {"term": {"product_id": 2}},
         {"term": {"doc_type": "guideline"}},
     ]

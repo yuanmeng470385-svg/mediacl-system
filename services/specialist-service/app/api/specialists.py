@@ -75,6 +75,10 @@ async def get_live_status(
     ).group_by(Conversation.specialist_id).all()
     last_active = {sid: ts for sid, ts in active_rows}
 
+    # B5 修复（2026-08-12）：question_snippet 是别的用户正在问的问题内容 ——
+    # 仅 admin/manager 可见（数据看板视角），普通角色（rep 等）剥离，防跨用户泄露
+    can_see_snippet = current_user.get("role") in ("admin", "manager")
+
     items = []
     summary = {"working": 0, "idle": 0, "offline": 0}
     for s in specialists:
@@ -98,7 +102,7 @@ async def get_live_status(
             "phase": phase,
             "phase_text": PHASE_TEXT.get(phase) if phase else None,
             "phase_since": snap.phase_since.isoformat() if snap else None,
-            "question_snippet": snap.question_snippet if snap else None,
+            "question_snippet": snap.question_snippet if (snap and can_see_snippet) else None,
             "today_conversations": today_count.get(s.id, 0),
             # 规格：注册表 phase_since 或最近对话时间 —— 首次对话中（对话行未落库）注册表存在时展示阶段开始时刻
             "last_active_at": (
@@ -276,6 +280,56 @@ async def get_specialist_stats(
         ConversationFeedback.rating == -1,
     ).scalar()
     return success({"total_conversations": total or 0, **compute_satisfaction(positive or 0, negative or 0)})
+
+
+@router.get("/{specialist_id}/feedback")
+async def get_specialist_feedback(
+    specialist_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """专员反馈明细（B4 修复 2026-08-12：web 数据抽屉此前只有聚合统计，无明细接口）。
+
+    返回该专员每条反馈（点赞/点踩）对应的问答快照：
+      {id, conversation_id, rating(1/-1), comment, question, answer, citations, created_at}
+    question = 同一会话（session_id）中排在锚点（反馈对应的 assistant 行）之前的最后一条 user 消息，
+    与 toggle_favorite 的收藏快照取同轮逻辑一致。
+    """
+    from app.models.feedback import ConversationFeedback
+    from app.models.conversation import Conversation
+
+    specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not specialist:
+        raise HTTPException(status_code=404, detail="专员不存在")
+    p = PaginationParams(page=page, page_size=page_size)
+    q = db.query(ConversationFeedback).filter(ConversationFeedback.specialist_id == specialist_id)
+    total = q.count()
+    items = q.order_by(ConversationFeedback.id.desc()).offset(p.offset).limit(p.limit).all()
+
+    rows = []
+    for fb in items:
+        conv = db.query(Conversation).filter(Conversation.id == fb.conversation_id).first()
+        question = None
+        if conv:
+            prev_user = db.query(Conversation).filter(
+                Conversation.session_id == conv.session_id,
+                Conversation.role == "user",
+                Conversation.id <= fb.conversation_id,
+            ).order_by(Conversation.id.desc()).first()
+            question = prev_user.content if prev_user else None
+        rows.append({
+            "id": fb.id,
+            "conversation_id": fb.conversation_id,
+            "rating": fb.rating,
+            "comment": fb.comment,
+            "question": question,
+            "answer": conv.content if conv else None,
+            "citations": conv.citations if conv else [],
+            "created_at": fb.created_at.isoformat() if fb.created_at else None,
+        })
+    return success(paginate(rows, total=total, page=p.page, page_size=p.page_size))
 
 
 SPECIALIST_UPDATE_FIELDS = {

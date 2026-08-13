@@ -10,6 +10,8 @@ import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../store/AuthContext';
 import { visitAPI } from '../../api/visit';
+import { taskAPI } from '../../api/tasks';
+import { specialistAPI } from '../../api/specialist';
 import Icon from '../../components/Icon';
 import {
   Colors, FontSize, Spacing, BorderRadius, Shadow,
@@ -20,7 +22,8 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const menuItems = [
   { icon: 'account-outline', label: '个人资料', route: 'Settings' as const },
-  { icon: 'account-group-outline', label: '我的团队', route: 'Settings' as const },
+  { icon: 'clipboard-check-outline', label: '我的任务', route: 'TaskList' as const },
+  { icon: 'star-outline', label: '我的收藏', route: 'Favorites' as const },
   { icon: 'chart-box-outline', label: '我的统计', route: 'Settings' as const },
   { icon: 'bell-outline', label: '通知设置', route: 'NotificationSettings' as const },
   { icon: 'shield-check-outline', label: '合规手册', route: 'ComplianceManual' as const },
@@ -32,11 +35,20 @@ export default function ProfileScreen() {
   const navigation = useNavigation<Nav>();
   const { user, logout } = useAuth();
   const [visitCount, setVisitCount] = useState<string>('--');
+  const [taskCount, setTaskCount] = useState<string>('--');
+  const [favoriteCount, setFavoriteCount] = useState<string>('--');
 
   useEffect(() => {
     let cancelled = false;
+    // 三项统计均为真实接口计数（page_size=1 只取 total，不拉全量）
     visitAPI.list({ page: 1, page_size: 1 })
       .then((res) => { if (!cancelled) setVisitCount(String(res.total)); })
+      .catch(() => { /* 保持 '--' */ });
+    taskAPI.list({ page: 1, page_size: 1, status: 'open' })
+      .then((res) => { if (!cancelled) setTaskCount(String(res.total)); })
+      .catch(() => { /* 保持 '--' */ });
+    specialistAPI.listFavorites({ page: 1, page_size: 1 })
+      .then((res) => { if (!cancelled) setFavoriteCount(String(res.total)); })
       .catch(() => { /* 保持 '--' */ });
     return () => { cancelled = true; };
   }, []);
@@ -74,12 +86,12 @@ export default function ProfileScreen() {
           <Icon name="chevron-right" size={24} color={Colors.textHint} />
         </TouchableOpacity>
 
-        {/* 数据统计 */}
+        {/* 数据统计（均为真实接口计数；无后端聚合的"本月对话"已移除，不展示假数据） */}
         <View style={[styles.statsCard, Shadow.card]}>
           {[
-            { num: '--', label: '本月对话' },
+            { num: taskCount, label: '进行中任务' },
             { num: visitCount, label: '拜访总数' },
-            { num: '--', label: '收藏' },
+            { num: favoriteCount, label: '收藏' },
           ].map((s, i) => (
             <React.Fragment key={s.label}>
               {i > 0 && <View style={styles.statDivider} />}

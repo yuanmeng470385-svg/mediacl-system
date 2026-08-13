@@ -56,15 +56,15 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-12 全量 397 passed）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-12 全量修复批后 404 passed）
 cd services/auth-service && python -m pytest tests/ -v        # 50 用例（含 test_jwt_failfast.py）
-cd services/specialist-service && python -m pytest tests/ -v  # 74
+cd services/specialist-service && python -m pytest tests/ -v  # 74（含反馈明细/WS 首帧鉴权）
 cd services/hcp-service && python -m pytest tests/ -v         # 38
-cd services/visit-service && python -m pytest tests/ -v       # 68
-cd services/compliance-service && python -m pytest tests/ -v  # 59
-cd services/knowledge-service && python -m pytest tests/ -v   # 51
+cd services/visit-service && python -m pytest tests/ -v       # 73（含取消/结束态拦截/直调 qwen）
+cd services/compliance-service && python -m pytest tests/ -v  # 59（语义网络错误 fail-closed）
+cd services/knowledge-service && python -m pytest tests/ -v   # 51（ES 检索 status 过滤）
 cd services/audit-service && python -m pytest tests/ -v       # 19
-cd services/gateway && python -m pytest tests/ -v             # 38
+cd services/gateway && python -m pytest tests/ -v             # 40（CORS 白名单/WS 首帧鉴权）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -393,7 +393,8 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - ~~NLS message_id 非 UUID~~（真实联调发现 task_id-N 被网关 40000002 MESSAGE_INVALID 拒绝 → 32 位 hex UUID）
 - ~~Android 录音静默失败~~（Android 13+ 麦克风运行时权限请求）+ ~~异议列表 key 冲突~~（全局唯一 key）
 - ~~录音双按双会话泄漏~~（press 入口同步防重入）；~~TTS 合成无超时~~（30s 超时 + 播放初始化错误透传底层信息）；~~asr 流式推流三处竞态~~（轮询重入门禁 / 空块自旋终止 / flush 串行链）
-- 测试基线（2026-08-12 最新）：audit 19 / auth 50 / compliance 59 / gateway 38 / hcp 38 / knowledge 51 / specialist 74 / visit 68 = **397 passed**；mobile jest 70（6 套件）；web build PASS
+- 测试基线（2026-08-12 全量修复批后）：audit 19 / auth 50 / compliance 59 / gateway 40 / hcp 38 / knowledge 51 / specialist 74 / visit 73 = **404 passed**；mobile jest 70（6 套件）；web build PASS
+- 已修（2026-08-12 全量修复批，B1-B7，本地未提交）：~~拜访无显式取消~~（POST /visits/{id}/cancel + visit_records.status 列，迁移 008 待实跑）、~~end_visit 重复结束报错~~（行锁 + 移动端 getById fallback）、~~follow_up 依赖专员链路常 degraded~~（直调 qwen）、~~模拟输入注入假转写~~（删 simulateInput 改真实文本输入）、~~拜访任务/收藏无移动端页面~~（TaskList/Favorites 新页 + Profile 真实计数）、~~web 无拜访管理页~~（VisitList + 任务展示）、~~专员数据抽屉无反馈明细~~（新接口 GET /specialists/{id}/feedback）、~~manager 可改他人手机号接管账号~~（仅 admin）、~~合规检查 fail-open~~（两处 client 抛异常 + 语义层网络错误 R999 拦截）、~~验证码并发可重放~~（Redis Lua 原子消耗）、~~生产可用 console 短信打印验证码~~（非 dev 禁 console 通道）、~~网关 CORS 全放行~~（env 白名单）、~~网关 WS 零鉴权 + token 明文 query~~（网关验 token + 首帧 auth 帧协议，保留 query 兜底）、~~XFF 伪造透传~~（网关覆盖为真实对端）、~~默认 DB 密码生产可用~~（shared/db_session 启动守卫）、~~审计 keyword 参数被忽略~~（ILIKE 多字段搜索）、~~HCP 标签仅 admin/manager~~（放开任意登录用户）、~~live-status 泄露他人问题内容~~（非 admin 剥离 snippet）、~~ES 检索含未上架文档~~（status=ready 过滤）、~~knowledge search product_id 非 int 500~~（显式校验）、~~备份静默回退默认密码~~（DB_USER/DB_PASSWORD + fail-fast + 秒级时间戳）、~~pg_restore 部分失败假成功~~（--exit-on-error）、~~docker-verify 构建失败被 tail 掩盖~~（pipefail）、~~通知页 4 个死开关~~（改"即将上线"）
 
 **仍为假数据/未实现（勿误以为已做，2026-08-06 第四批后更新）**：
 - 需求级缺口（用户暂缓）：飞书导入/双向同步、知识库内容库（`knowledge-base/` 空目录，方案要求 100-300 篇文献）、ES 真实实例（ES_URL 配置才启用，索引接线已做；ES_URL 未进 .env.example）、表格/图片 OCR 自动解析（依赖百炼云）、web 检索测试页

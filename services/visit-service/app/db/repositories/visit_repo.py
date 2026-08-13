@@ -3,10 +3,11 @@ import logging
 from typing import List, Optional, Tuple, Dict, Iterable
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import text, bindparam
+from sqlalchemy import text, bindparam, or_
 from sqlalchemy.exc import IntegrityError
 from shared.common.response import ParamError
 from app.models.visit_record import VisitRecord
+from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED, VISIT_STATUS_IN_PROGRESS
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,9 @@ class VisitRepo:
     ) -> Tuple[List[VisitRecord], int]:
         """分页列表 + 筛选
 
-        status: in_progress（未生成总结）/ completed（已结束）
+        status: in_progress（未生成总结或占位串可重试）/ completed（已结束）/
+                cancelled（已取消）。口径与 visit_record.to_dict 一致（B14）：
+                占位串不算已结束；取消的记录不进 in_progress/completed。
         """
         query = db.query(VisitRecord)
         if user_id:
@@ -50,10 +53,19 @@ class VisitRepo:
             query = query.filter(VisitRecord.hcp_id == hcp_id)
         if product_id:
             query = query.filter(VisitRecord.product_id == product_id)
-        if status == "in_progress":
-            query = query.filter(VisitRecord.ai_summary.is_(None))
+        if status == VISIT_STATUS_IN_PROGRESS:
+            query = query.filter(
+                VisitRecord.status != VISIT_STATUS_CANCELLED,
+                or_(VisitRecord.ai_summary.is_(None), VisitRecord.ai_summary == AI_SUMMARY_PLACEHOLDER),
+            )
         elif status == "completed":
-            query = query.filter(VisitRecord.ai_summary.isnot(None))
+            query = query.filter(
+                VisitRecord.status != VISIT_STATUS_CANCELLED,
+                VisitRecord.ai_summary.isnot(None),
+                VisitRecord.ai_summary != AI_SUMMARY_PLACEHOLDER,
+            )
+        elif status == VISIT_STATUS_CANCELLED:
+            query = query.filter(VisitRecord.status == VISIT_STATUS_CANCELLED)
         if date_from:
             try:
                 date_from_dt = datetime.fromisoformat(date_from)

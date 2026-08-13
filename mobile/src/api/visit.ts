@@ -448,4 +448,13 @@ export const visitAPI = {
     );
     return mapFollowUpResult(raw);
   },
+
+  /** 取消拜访（仅进行中可取消；已结束/已取消会被后端拒绝） */
+  async cancelVisit(visitId: number): Promise<VisitRecord> {
+    const raw = await apiClient.request<any>(
+      'POST',
+      `/api/v1/visits/${visitId}/cancel`
+    );
+    return mapVisitRecord(raw);
+  },
 };

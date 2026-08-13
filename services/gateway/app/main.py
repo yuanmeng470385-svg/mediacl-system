@@ -21,9 +21,11 @@ from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import httpx
+import json
 import logging
 import time
 import os as _os
+import jwt
 
 from app.config import settings
 from app.core.auth_middleware import AuthMiddleware
@@ -62,10 +64,17 @@ app.add_middleware(
 # 2. JWT 认证
 app.add_middleware(AuthMiddleware)
 
-# 3. CORS（跨域预检先过）
+# 3. CORS（跨域预检先过）。B5 修复（2026-08-12）：allow_origins=["*"] + credentials
+# 是危险组合（任意站点可带凭据跨域），改 env 白名单 CORS_ALLOW_ORIGINS（逗号分隔），
+# 默认放行本地开发端口；生产在 .env 配置真实前端域名。
+_cors_origins = [
+    o.strip() for o in _os.getenv(
+        "CORS_ALLOW_ORIGINS", "http://localhost:3000,http://localhost:5173"
+    ).split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -258,8 +267,11 @@ async def proxy(request: Request, path: str):
     target_url = f"{backend_url}/{path}"
 
     # 知识审核链路（百炼导入 ~30s + 向量化）对 30s 默认超时太紧，
-    # 网关先超时导致"业务完成但客户端看到 504"（合规硬伤回归见 M48）
-    if path.startswith("knowledge/"):
+    # 网关先超时导致"业务完成但客户端看到 504"（合规硬伤回归见 M48）。
+    # B5 修复（2026-08-12）：旧判断 `path.startswith("knowledge/")` 永不命中 ——
+    # path 形如 "api/v1/knowledge/list"（无前导斜杠且带 /api/v1 前缀），
+    # 120s 超时从未生效。修正前缀后知识库导入不再被 30s 掐断。
+    if path.startswith("api/v1/knowledge/"):
         proxy_timeout = 120.0
     else:
         proxy_timeout = 30.0
@@ -270,6 +282,13 @@ async def proxy(request: Request, path: str):
             headers = dict(request.headers)
             headers.pop("host", None)
             headers.pop("content-length", None)
+            # B5 修复（2026-08-12）：客户端伪造的 X-Forwarded-For 不透传上游 ——
+            # 审计 IP / 限流按"真实对端地址"计（反代场景由部署层处理 X-Real-IP，
+            # 网关层不信任任意客户端自报 IP）
+            real_ip = request.client.host if request.client else None
+            if real_ip:
+                headers["x-forwarded-for"] = real_ip
+                headers["x-real-ip"] = real_ip
             # X-Request-ID：以 RequestIDMiddleware 校验后的 scope 值为准覆盖
             # （客户端原始超长/恶意值不透传上游），保证全链路同一 ID
             rid = request.scope.get("x-request-id")
@@ -362,10 +381,38 @@ async def _upstream_recv(upstream):
 
 @app.websocket("/api/v1/specialists/{specialist_id}/chat/ws")
 async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
+    # B5 修复（2026-08-12）：WS 升级请求不经过 AuthMiddleware（BaseHTTPMiddleware 只
+    # 拦 HTTP）→ 此前网关对 WS 零鉴权，token 仅透传上游。先 accept 再验（accept 前
+    # close 的 4401 到不了客户端），无效 token 关 4401 与上游语义一致。
     token = websocket.query_params.get("token", "")
     await websocket.accept()
+    # 首帧鉴权：新协议首帧 {"type":"auth","token"}（token 不进 query/访问日志）；
+    # 旧客户端（query token）首帧即 question 帧 → 回退 query，缓存该帧透传上游
+    first_frame = None
+    try:
+        raw_first = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        try:
+            first_msg = json.loads(raw_first)
+        except json.JSONDecodeError:
+            first_msg = {}
+        if first_msg.get("type") == "auth" and first_msg.get("token"):
+            token = str(first_msg["token"])
+            first_frame = raw_first  # auth 帧也要透传上游（上游同样按首帧鉴权）
+        else:
+            first_frame = raw_first  # 旧客户端 question 帧
+    except Exception as exc:
+        logger.error("gateway ws 首帧读取失败: %r", exc)
+        await websocket.close(code=4401)
+        return
+    try:
+        jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except Exception as exc:
+        logger.error("gateway ws token 校验失败: %r", exc)
+        await websocket.close(code=4401)
+        return
 
-    # 上游连接 specialist-service 的 WS 端点，token 原样透传（鉴权在 specialist 侧）
+    # 上游连接 specialist-service 的 WS 端点，query token 原样透传（旧客户端兜底；
+    # 新客户端 token 在 auth 帧，上游按首帧鉴权）
     ws_scheme = "wss" if settings.SPECIALIST_SERVICE_URL.startswith("https") else "ws"
     upstream_url = (
         f"{ws_scheme}://{settings.SPECIALIST_SERVICE_URL.split('://')[1]}"
@@ -386,6 +433,9 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
 
     async def client_to_upstream():
         try:
+            # 首帧缓存（auth 帧或旧客户端 question 帧）先于循环转发
+            if first_frame is not None:
+                await _upstream_send(upstream, first_frame)
             while True:
                 msg = await websocket.receive()
                 if msg["type"] == "websocket.receive":

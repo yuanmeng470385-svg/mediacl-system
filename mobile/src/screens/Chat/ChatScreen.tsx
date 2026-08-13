@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import EvidenceBadge from '../../components/EvidenceBadge';
 import Icon from '../../components/Icon';
 import { ActionIcons } from '../../components/Icon';
@@ -27,6 +28,10 @@ import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants
 import type { ChatScreenParams } from '../../navigation/types';
 
 type RouteType = RouteProp<{ Chat: ChatScreenParams }, 'Chat'>;
+
+// 会话持久化：App 重启/重进聊天页后恢复历史（后端 GET /specialists/conversations/{session_id}，
+// 归属校验不过（换账号）→ 忽略并全新会话）
+const SESSION_KEY = (specialistId: number) => `chat_session_${specialistId}`;
 
 interface Message {
   id: string;
@@ -59,6 +64,43 @@ export default function ChatScreen() {
   const wsRef = useRef<ReturnType<typeof openChatWs> | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
+  // 会话 ID 持久化（每次多轮续传都更新存储）
+  const persistSession = useCallback((sid: string) => {
+    setSessionId(sid);
+    AsyncStorage.setItem(SESSION_KEY(specialistId), sid).catch(() => {});
+  }, [specialistId]);
+
+  // 重进聊天页恢复历史：上次会话的消息 + 继续用同一 session 多轮对话。
+  // 归属校验不过（换账号）/网络失败 → 静默全新会话（历史读取失败不阻塞聊天）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(SESSION_KEY(specialistId));
+        if (!saved || cancelled) return;
+        const history = await specialistAPI.getConversationHistory(saved);
+        if (!cancelled && Array.isArray(history) && history.length) {
+          setSessionId(saved);
+          setMessages((prev) => [
+            ...prev,
+            ...history.map((h) => ({
+              id: h.id,
+              role: h.role === 'user' ? ('user' as const) : ('assistant' as const),
+              content: h.content,
+              citations: h.citations,
+              evidenceLevel: h.evidence_level,
+              // 历史行只有快照（无会话内主键）→ 反馈/收藏按钮不显示
+              conversationId: null,
+            })),
+          ]);
+        }
+      } catch {
+        // 会话失效（如已换账号）或网络失败 → 全新会话
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [specialistId]);
+
   // 流式生成中卸载页面（返回/切走）→ 关闭 WS，避免孤儿会话与连接泄漏
   useEffect(() => () => {
     wsRef.current?.close();
@@ -79,6 +121,7 @@ export default function ChatScreen() {
       // 结果已定（done/error/8s 超时降级）后，迟到的帧一律忽略：
       // 防止降级 REST 后 onStart 重建“正在思考...”气泡、onDone 重复入列
       let settled = false;
+      let retried = false;                               // 已重连一次（未开始断线仅重试一次）
       const timer = setTimeout(() => {                   // 8s 未收到 start → 降级
         if (!started) { cleanup(); resolve(false); }
       }, 8000);
@@ -87,59 +130,70 @@ export default function ChatScreen() {
         clearTimeout(timer);
         if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
       };
-      const ws = openChatWs(specialistId, token, {
-        onStart: () => {
-          if (settled) return;
-          started = true; setStreaming(true); setStreamText('');
-        },
-        onDelta: (t) => {
-          if (settled) return;
-          setStreamText(t);
-        },
-        onDone: (d) => {
-          if (settled) return;
-          settled = true;
-          started = true;
-          clearTimeout(timer);
-          setStreamText('');
-          setStreaming(false);
-          // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细），blocked/evidenceLevel 一并透传
-          const violationText = ((d.violations ?? []) as { description?: string }[])
-            .map((v) => v.description)
-            .filter(Boolean)
-            .join('；');
-          const content = d.blocked
-            ? [d.text, violationText && `（${violationText}）`]
-                .filter(Boolean)
-                .join('')
-            : d.text;
-          const aiMsg: Message = {
-            id: `a_${Date.now()}`,
-            role: 'assistant',
-            content,
-            citations: (d.citations ?? []) as Message['citations'],
-            blocked: d.blocked ?? false,
-            evidenceLevel: d.evidenceLevel ?? null,
-            conversationId: d.conversationId ?? null,
-          };
-          setMessages((prev) => [...prev, aiMsg]);
-          if (d.sessionId) setSessionId(d.sessionId);
-          wsRef.current = null;
-          resolve(true);
-        },
-        onError: (m) => {
-          if (settled) return;
-          settled = true;
-          started = true;
-          clearTimeout(timer);
-          setStreaming(false);
-          setStreamText('');
-          wsRef.current = null;
-          resolve(false);                                // 降级 REST
-        },
-      });
-      wsRef.current = ws;
-      ws.sendQuestion(text, session ?? undefined);
+      const open = () => {
+        const ws = openChatWs(specialistId, token, {
+          onStart: () => {
+            if (settled) return;
+            started = true; setStreaming(true); setStreamText('');
+          },
+          onDelta: (t) => {
+            if (settled) return;
+            setStreamText(t);
+          },
+          onDone: (d) => {
+            if (settled) return;
+            settled = true;
+            started = true;
+            clearTimeout(timer);
+            setStreamText('');
+            setStreaming(false);
+            // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细），blocked/evidenceLevel 一并透传
+            const violationText = ((d.violations ?? []) as { description?: string }[])
+              .map((v) => v.description)
+              .filter(Boolean)
+              .join('；');
+            const content = d.blocked
+              ? [d.text, violationText && `（${violationText}）`]
+                  .filter(Boolean)
+                  .join('')
+              : d.text;
+            const aiMsg: Message = {
+              id: `a_${Date.now()}`,
+              role: 'assistant',
+              content,
+              citations: (d.citations ?? []) as Message['citations'],
+              blocked: d.blocked ?? false,
+              evidenceLevel: d.evidenceLevel ?? null,
+              conversationId: d.conversationId ?? null,
+            };
+            setMessages((prev) => [...prev, aiMsg]);
+            if (d.sessionId) persistSession(d.sessionId);
+            wsRef.current = null;
+            resolve(true);
+          },
+          onError: (m) => {
+            if (settled) return;
+            // 尚未收到 start 帧就断开（网络瞬断/服务端拒连前的链路失败）→ 重连一次再试。
+            // 已开始生成后断开 → 直接 REST 降级（避免生成一半的数据错乱）
+            if (!started && !retried) {
+              retried = true;
+              wsRef.current = null;
+              open();
+              return;
+            }
+            settled = true;
+            started = true;
+            clearTimeout(timer);
+            setStreaming(false);
+            setStreamText('');
+            wsRef.current = null;
+            resolve(false);                              // 降级 REST
+          },
+        });
+        wsRef.current = ws;
+        ws.sendQuestion(text, session ?? undefined);
+      };
+      open();
     });
   };
 
@@ -165,7 +219,7 @@ export default function ChatScreen() {
         session_id: sessionId || undefined,
       });
 
-      if (!sessionId && response.session_id) setSessionId(response.session_id);
+      if (response.session_id) persistSession(response.session_id);
 
       // blocked 时展示后端给出的真实原因与违规明细，不再写死话术
       const violationText = (response.violations ?? [])
@@ -211,11 +265,6 @@ export default function ChatScreen() {
       .then((r) => Alert.alert('提示', r.is_favorite ? '已收藏' : '已取消收藏'))
       .catch((e) => Alert.alert('提示', e.message || '操作失败'));
   };
-
-  // 语音转写绑定真实 visit_id（ASR WS 校验归属），聊天页无拜访上下文 → 仅提示入口
-  const handleVoice = useCallback(() => {
-    Alert.alert('语音转写', '语音转写需在拜访流程中使用，请在拜访中页点击录音按钮。', [{ text: '知道了' }]);
-  }, []);
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isUser = item.role === 'user';
@@ -310,9 +359,6 @@ export default function ChatScreen() {
       />
 
       <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.voiceBtn} onPress={handleVoice}>
-          <Icon name={ActionIcons.mic} size={22} color={Colors.textSecondary} />
-        </TouchableOpacity>
         <TextInput
           style={styles.input}
           value={input}
@@ -412,11 +458,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-end',
     padding: Spacing.sm, backgroundColor: Colors.white,
     borderTopWidth: 1, borderTopColor: Colors.divider, gap: Spacing.sm,
-  },
-  voiceBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: Colors.background,
-    alignItems: 'center', justifyContent: 'center',
   },
   input: {
     flex: 1, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,

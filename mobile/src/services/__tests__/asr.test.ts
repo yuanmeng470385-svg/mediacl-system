@@ -42,12 +42,15 @@ beforeEach(() => {
 });
 
 describe('asr 客户端', () => {
-  it('连接 URL 带 token 与 visitId', async () => {
+  it('连接 URL 不含 token，onopen 首帧发 auth 帧（B5）', async () => {
     const ws = connectAsr(5, 'jwt-token-abc', { onReady: () => {}, onSentence: () => {}, onCompliance: () => {}, onError: () => {}, onCompleted: () => {} });
     await new Promise((r) => setTimeout(r, 0));
     const inst = MockWebSocket.instances[0];
     expect(inst.url).toContain('/ws/visits/5/asr');
-    expect(inst.url).toContain('token=jwt-token-abc');
+    expect(inst.url).not.toContain('token=');
+    // onopen 触发：首帧必须是 auth 帧（token 不进 query/访问日志）
+    inst.onopen?.();
+    expect(inst.sent[0]).toBe(JSON.stringify({ type: 'auth', token: 'jwt-token-abc' }));
     ws.close();
   });
 

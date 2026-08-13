@@ -145,7 +145,7 @@ export default function Dashboard() {
       })
       .catch(() => {});
 
-    // 合规拦截 Top（compliance_blocks，当前无写入方 → 空态；有数据后自动展示）
+    // 合规拦截 Top（compliance_blocks：流式答案门禁 full 复核 / 实时转写拦截时写入）
     complianceAPI.blocks({ page: 1, page_size: 100 })
       .then((r) => {
         setBlocksLoaded(true);
@@ -278,7 +278,7 @@ export default function Dashboard() {
               </Tooltip>
             ) : null}
           >
-            {heatmapChart ?? <Empty description="暂无拦截数据（compliance_blocks 尚未有写入方）" style={{ padding: 60 }} />}
+            {heatmapChart ?? <Empty description="暂无拦截数据" style={{ padding: 60 }} />}
           </Card>
         </Col>
         <Col xs={24} lg={10}>
@@ -305,7 +305,7 @@ export default function Dashboard() {
         <Col xs={24} md={14}>
           <Card title="合规拦截 Top 5" variant="borderless">
             {blocksLoaded && topViolations.length === 0 ? (
-              <Empty description="暂无拦截记录（compliance_blocks 尚未有写入方）" style={{ padding: 40 }} />
+              <Empty description="暂无拦截记录" style={{ padding: 40 }} />
             ) : (
               topViolations.map((v, i) => (
                 <div key={v.rule} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>

@@ -230,6 +230,23 @@ class _FakeQwenFail:
         raise Exception("qwen 不可用")
 
 
+class _FakeQwenFollowUp:
+    """千问桩：follow-up 专用 —— 返回带 follow_up_items 的跟进建议
+
+    follow_up 直调千问后（B2 修复 2026-08-12），旧 _fake_specialist_followup
+    （专员链路桩）不再被调用，此桩直接喂给 mgr.qwen。
+    """
+
+    def chat(self, messages, **kwargs):
+        return {"content": json.dumps({
+            "follow_up_items": [
+                {"action": "微信发送文献包", "due": "2026-08-12", "channel": "微信"},
+                {"action": "预约下次拜访", "due": "2026-09-01", "channel": "下次拜访"},
+            ],
+            "reminders": ["带 III 期文献"],
+        }, ensure_ascii=False)}
+
+
 class _FakeQwenEmptySummary:
     """千问桩：返回合法 JSON 但 summary 为空 —— 回归真机联调 visit 50 场景
     （qwen-max 对空转写偶发输出 {"summary": "", ...}，旧代码会写出空总结并让
@@ -252,17 +269,6 @@ async def _fake_compliance_block_summary(content, context=None):
     if context and context.get("type") == "ai_output":
         return {"blocked": True, "violations": [{"rule": "R001", "reason": "test"}], "risk_level": "high"}
     return {"blocked": False, "violations": [], "risk_level": "none"}
-
-async def _fake_specialist_followup(specialist_id, question, user_id, session_id=None, auth_token=None):
-    """follow-up 专用：返回带 follow_up_items 的跟进建议"""
-    return {"answer": json.dumps({
-        "follow_up_items": [
-            {"action": "微信发送文献包", "due": "2026-08-12", "channel": "微信"},
-            {"action": "预约下次拜访", "due": "2026-09-01", "channel": "下次拜访"},
-        ],
-        "reminders": ["带 III 期文献"],
-    }), "blocked": False, "session_id": "test-session"}
-
 
 async def _fake_compliance_blocked(content, context=None):
     return {"blocked": True, "violations": [{"rule": "R001", "reason": "test"}], "risk_level": "high"}
@@ -289,7 +295,7 @@ def setup_module():
 
 def teardown_module():
     vm_module.chat_with_specialist = ORIG_CHAT
-    vm_module.check_compliance = ORIG_COMP
+    vm_module.check_compliance = _fake_compliance_ok  # 恢复为 setup 假实现
     vm_module.write_audit_log = ORIG_AUDIT
 
 
@@ -358,15 +364,18 @@ def test_end_visit_blocked_summary():
     from app.core.visit_manager import VisitManager
     vm_module.check_compliance = _fake_compliance_block_summary
 
-    db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
-    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
-    visit_id = start["id"]
-    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="test"))
-    result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
-    assert "拦截" in result["ai_summary"]
-
-    vm_module.check_compliance = ORIG_COMP  # 恢复
+    try:
+        db = FakeDb()
+        mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+        start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+        visit_id = start["id"]
+        asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="test"))
+        result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+        assert "拦截" in result["ai_summary"]
+    finally:
+        # 恢复为 setup_module 的假实现（不是 ORIG_COMP 真实实现 —— 恢复成真实实现
+        # 会让后续测试走到真实合规检查，compliance fail-closed 后 ConnectError）
+        vm_module.check_compliance = _fake_compliance_ok
 
 
 def test_follow_up():
@@ -552,7 +561,7 @@ def test_end_visit_transcript_precheck_blocked():
         # qwen 已成功产出结构化结果，但预检拦截 → 丢弃，不建任务
         assert TaskRepo.list_by_visit(db, visit_id) == []
     finally:
-        vm_module.check_compliance = ORIG_COMP
+        vm_module.check_compliance = _fake_compliance_ok  # 恢复为 setup 假实现
 
 
 def test_end_visit_no_duplicate_after_success():
@@ -672,7 +681,7 @@ def test_end_visit_compliance_blocked_creates_no_tasks():
         asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
         assert TaskRepo.list_by_visit(db, visit_id) == [], "合规拦截路径不应建任务"
     finally:
-        vm_module.check_compliance = ORIG_COMP
+        vm_module.check_compliance = _fake_compliance_ok  # 恢复为 setup 假实现
 
 
 def test_follow_up_does_not_duplicate_tasks_after_end_visit():
@@ -680,6 +689,8 @@ def test_follow_up_does_not_duplicate_tasks_after_end_visit():
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
+    # end_visit 与 follow_up 都要真实产出：先 Ok 桩（总结成功建任务），follow_up 前换
+    # FollowUp 桩（返回 follow_up_items）—— 两个桩同喂一个 mgr 会互相干扰
     mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
@@ -688,11 +699,8 @@ def test_follow_up_does_not_duplicate_tasks_after_end_visit():
     before = len(TaskRepo.list_by_visit(db, visit_id))
     assert before > 0
 
-    vm_module.chat_with_specialist = _fake_specialist_followup
-    try:
-        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
-    finally:
-        vm_module.chat_with_specialist = _fake_specialist_ok
+    mgr.qwen = _FakeQwenFollowUp()
+    asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
     assert len(TaskRepo.list_by_visit(db, visit_id)) == before, "end_visit 建过任务后 follow-up 不应再建"
 
 
@@ -701,22 +709,93 @@ def test_follow_up_idempotent_on_repeat_calls():
     from app.core.visit_manager import VisitManager
     from app.db.repositories.task_repo import TaskRepo
     db = FakeDb()
-    mgr = VisitManager(tingwu=FakeTingwu())
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFollowUp())
     start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
     visit_id = start["id"]
 
-    vm_module.chat_with_specialist = _fake_specialist_followup
-    try:
-        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
-        first = TaskRepo.list_by_visit(db, visit_id)
-        assert len(first) == 2, f"首次 follow-up 应建 2 条，实际 {[t.title for t in first]}"
-        assert first[0].task_type == "send_material"   # 微信 → send_material
-        assert first[1].task_type == "book_appointment"
+    asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
+    first = TaskRepo.list_by_visit(db, visit_id)
+    assert len(first) == 2, f"首次 follow-up 应建 2 条，实际 {[t.title for t in first]}"
+    assert first[0].task_type == "send_material"   # 微信 → send_material
+    assert first[1].task_type == "book_appointment"
 
-        asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
-        assert len(TaskRepo.list_by_visit(db, visit_id)) == 2, "重复 follow-up 不应重复建任务"
-    finally:
-        vm_module.chat_with_specialist = _fake_specialist_ok
+    asyncio.run(mgr.follow_up(db, visit_id, user_id=1))
+    assert len(TaskRepo.list_by_visit(db, visit_id)) == 2, "重复 follow-up 不应重复建任务"
+
+
+# ---------- B1 修复：结束态/取消态拦截（F12）+ 取消路径 ----------
+
+def test_process_transcript_rejected_after_visit_ended():
+    """F12：已结束（真实总结）的拜访再追加转写 → 拒绝（证据已封存）"""
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="第一段"))
+    asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    try:
+        asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="结束后追加"))
+        assert False, "应抛 BusinessError"
+    except Exception as e:
+        assert "已结束" in str(e)
+
+
+def test_process_transcript_rejected_after_cancel():
+    """F12：已取消的拜访再追加转写 → 拒绝"""
+    from app.core.visit_manager import VisitManager
+    from app.constants import VISIT_STATUS_CANCELLED
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    FakeDb._records[start["id"]].status = VISIT_STATUS_CANCELLED
+    try:
+        asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="取消后追加"))
+        assert False, "应抛 BusinessError"
+    except Exception as e:
+        assert "取消" in str(e)
+
+
+def test_end_visit_rejected_after_cancel():
+    """取消后 end → 拒绝（取消的拜访不能再结束出总结）"""
+    from app.core.visit_manager import VisitManager
+    from app.constants import VISIT_STATUS_CANCELLED
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    FakeDb._records[start["id"]].status = VISIT_STATUS_CANCELLED
+    try:
+        asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+        assert False, "应抛 BusinessError"
+    except Exception as e:
+        assert "取消" in str(e)
+
+
+def test_follow_up_rejected_after_cancel():
+    """取消后 follow_up → 拒绝"""
+    from app.core.visit_manager import VisitManager
+    from app.constants import VISIT_STATUS_CANCELLED
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenFollowUp())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    FakeDb._records[start["id"]].status = VISIT_STATUS_CANCELLED
+    try:
+        asyncio.run(mgr.follow_up(db, start["id"], user_id=1))
+        assert False, "应抛 BusinessError"
+    except Exception as e:
+        assert "取消" in str(e)
+
+
+def test_cancel_via_status_derivation():
+    """status=cancelled 的记录 to_dict 状态为 cancelled（B14 口径）"""
+    from app.constants import VISIT_STATUS_CANCELLED
+    db = FakeDb()
+    from app.core.visit_manager import VisitManager
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    assert start["status"] == "in_progress"
+    FakeDb._records[start["id"]].status = VISIT_STATUS_CANCELLED
+    assert FakeDb._records[start["id"]].to_dict()["status"] == "cancelled"
 
 
 def test_parse_end_visit_tasks():

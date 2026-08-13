@@ -61,20 +61,40 @@ def reset_factory():
 
 
 def test_ws_proxy_双向透传():
+    """B5 首帧鉴权：客户端首帧发 auth 帧（真 token）→ 网关验过后透传；后续帧正常转发"""
+    import os
+    from shared.common.auth import create_token
     fake = FakeUpstream()
     set_upstream_factory(lambda url: fake)
+    token = create_token(user_id=1, username="rep1", role="rep")
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/v1/specialists/1/chat/ws?token=abc") as ws:
-            # 客户端 → 上游
+        with client.websocket_connect("/api/v1/specialists/1/chat/ws") as ws:
+            # 客户端 → 上游：auth 帧（网关验证 + 透传）+ question 帧
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
             ws.send_text(json.dumps({"type": "question", "text": "你好"}))
             assert fake.received_event.wait(2.0), "代理未把客户端消息转发给上游"
-            assert json.loads(fake.received.pop(0))["type"] == "question"
+            frames = [json.loads(x) for x in fake.received if isinstance(x, str)]
+            assert frames[0]["type"] == "auth"
+            assert frames[1]["type"] == "question"
             # 上游 → 客户端（测试直接向队列投递，模拟上游主动下发）
             fake.to_client.put(("text", json.dumps({"type": "delta", "text": "你"})))
             assert json.loads(ws.receive_text())["type"] == "delta"
             fake.to_client.put(("text", json.dumps({"type": "done", "text": "你好", "conversation_id": 1})))
             assert json.loads(ws.receive_text())["type"] == "done"
+
+
+def test_ws_proxy_rejects_invalid_token():
+    """B5：网关对 WS 零鉴权修复 —— 无效 token 首帧 → 4401 拒绝（不再透传上游）"""
+    fake = FakeUpstream()
+    set_upstream_factory(lambda url: fake)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/v1/specialists/1/chat/ws") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": "not-a-real-token"}))
+            msg = ws.receive()
+            assert msg["type"] == "websocket.close"
+            assert msg["code"] == 4401
 
 
 class FakeUpstreamClosing(FakeUpstream):
@@ -95,11 +115,15 @@ class FakeUpstreamClosing(FakeUpstream):
 @pytest.mark.parametrize("close_code", [4401, 4404, 4500])
 def test_ws_proxy_透传上游关闭码(close_code):
     """M46：上游 4401/4404/4500 关闭码原样透传给下游，不再被吞成 1000"""
+    import os
+    from shared.common.auth import create_token
     fake = FakeUpstreamClosing(close_code)
     set_upstream_factory(lambda url: fake)
+    token = create_token(user_id=1, username="rep1", role="rep")
 
     with TestClient(app) as client:
-        with client.websocket_connect("/api/v1/specialists/1/chat/ws?token=abc") as ws:
+        with client.websocket_connect("/api/v1/specialists/1/chat/ws") as ws:
+            ws.send_text(json.dumps({"type": "auth", "token": token}))
             msg = ws.receive()
             assert msg["type"] == "websocket.close"
             assert msg["code"] == close_code

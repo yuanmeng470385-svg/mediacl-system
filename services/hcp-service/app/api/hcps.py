@@ -234,10 +234,15 @@ async def batch_import_hcps(
 async def add_hcp_tags(
     hcp_id: int,
     request: dict,
-    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """添加标签 {"tags": ["KOL", "学术型"]}"""
+    """添加标签 {"tags": ["KOL", "学术型"]}
+
+    B5 修复（2026-08-12）：原仅 admin/manager —— 拜访后给医生打标签是
+    代表的日常工作（兴趣点落标签），放开为任意登录用户；标签是协作性元数据，
+    非敏感档案字段（画像/互动详情仍受角色限制）。
+    """
     tags = request.get("tags", [])
     if not tags:
         raise ParamError("tags 不能为空")
@@ -251,10 +256,10 @@ async def add_hcp_tags(
 async def remove_hcp_tags(
     hcp_id: int,
     request: dict,
-    current_user: dict = Depends(require_roles(*HCP_ADMIN_ROLES)),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """删除标签 {"tags": ["KOL"]}"""
+    """删除标签 {"tags": ["KOL"]}（与 add 同口径：任意登录用户，B5 放开）"""
     tags = request.get("tags", [])
     if not tags:
         raise ParamError("tags 不能为空")

@@ -154,7 +154,11 @@ export default function HomeScreen() {
             <VisitCard
               key={visit.id}
               visit={visit}
-              onPress={() => navigation.navigate('VisitDetail', { visitId: visit.id })}
+              onPress={() =>
+                visit.status === 'in_progress'
+                  ? navigation.navigate('VisitInProgress', { visitId: visit.id, hcpName: visit.hcp_name })
+                  : navigation.navigate('VisitDetail', { visitId: visit.id })
+              }
             />
           ))
         )}

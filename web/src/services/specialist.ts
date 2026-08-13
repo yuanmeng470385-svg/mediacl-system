@@ -26,6 +26,24 @@ export const specialistAPI = {
   stats: (id: number) =>
     client.get<ApiResponse<SpecialistStats>>(`/specialists/${id}/stats`),
 
+  feedbackList: (id: number, params?: { page?: number; page_size?: number }) =>
+    client.get<PaginatedResponse<SpecialistFeedback>>(
+      `/specialists/${id}/feedback`,
+      { params },
+    ),
+
   liveStatus: () =>
     client.get<ApiResponse<LiveStatus>>('/specialists/live-status'),
 };
+
+/** 专员反馈明细（后端 GET /specialists/{id}/feedback 列表项） */
+export interface SpecialistFeedback {
+  id: number;
+  conversation_id: number;
+  rating: 1 | -1;
+  comment?: string | null;
+  question?: string | null;
+  answer?: string | null;
+  citations?: unknown[];
+  created_at?: string | null;
+}

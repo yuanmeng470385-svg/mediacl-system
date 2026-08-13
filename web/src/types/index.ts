@@ -186,6 +186,8 @@ export interface AuditLog {
 }
 
 // ========== 医生 ==========
+// 注：visit_count/satisfaction 后端 hcps 表无此字段（2026-08-12 已从列表页删除幻影列），
+// 互动/画像数据在 DoctorDetail 展示
 export interface Doctor {
   id: string;
   name: string;
@@ -194,8 +196,6 @@ export interface Doctor {
   title: string;
   phone: string;
   tags: string[];
-  visit_count: number;
-  satisfaction: number;
   specialty?: string;
   email?: string;
   region?: string;

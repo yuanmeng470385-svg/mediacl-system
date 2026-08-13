@@ -53,7 +53,7 @@ def pick_dump(cfg: dict, source: str, dump_arg: str | None) -> Path:
         raise RuntimeError("oss2 未安装，请执行: pip install oss2")
     bucket = _oss_bucket(cfg)
     prefix = cfg["BACKUP_OSS_PREFIX"]
-    pattern = re.compile(rf"^{re.escape(prefix)}medagent-(\d{{8}})-\d{{4}}\.dump$")
+    pattern = re.compile(rf"^{re.escape(prefix)}medagent-(\d{{8}})-\d{{6}}\.dump$")  # 秒级时间戳（B6 同步）
     objs = [o for o in oss2.ObjectIterator(bucket, prefix=prefix) if pattern.match(o.key)]
     if not objs:
         raise RuntimeError("OSS 上没有备份对象")
@@ -86,10 +86,15 @@ def ensure_target_db(cfg: dict, target_db: str, yes: bool) -> None:
 
 
 def restore_dump(cfg: dict, dump_path: Path, target_db: str) -> None:
-    """pg_restore --no-owner --no-privileges 灌入目标库（stdin 喂 dump 字节）。"""
+    """pg_restore --no-owner --no-privileges 灌入目标库（stdin 喂 dump 字节）。
+
+    B6 修复（2026-08-12）：加 --exit-on-error —— pg_restore 默认遇到错误只告警
+    继续，部分恢复失败也会返回 0，让"恢复完成"变成假成功（后续行数校验才暴露）。
+    """
     with open(dump_path, "rb") as f:
         cmd = ["docker", "exec", "-i", "-e", f"PGPASSWORD={pg_password(cfg)}", cfg["BACKUP_PG_CONTAINER"],
-               "pg_restore", "--no-owner", "--no-privileges", "-U", "medagent", "-d", target_db]
+               "pg_restore", "--no-owner", "--no-privileges", "--exit-on-error",
+               "-U", "medagent", "-d", target_db]
         proc = subprocess.run(cmd, stdin=f, capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(f"pg_restore 失败: {proc.stderr.decode('utf-8', 'replace')[:500]}")

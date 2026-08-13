@@ -193,12 +193,18 @@ class TestSemanticCheck:
         assert result["blocked"] is False
         assert result["violations"] == []
 
-    def test_semantic_network_error_fails_open(self):
-        """网络/API 错误（httpx 连接异常）→ 维持 fail-open 降级，不阻塞业务"""
+    def test_semantic_network_error_fails_closed(self):
+        """B5 修复（2026-08-12）：网络/API 错误 → fail-closed 按 R999 拦截。
+
+        旧实现返回 [] 放行 —— 语义层是内容审核兜底关卡，运行时故障放行 =
+        违规内容整体绕过语义审核（与 S7 fail-closed 冲突）；未配置
+        DASHSCOPE_API_KEY 的显式降级路径不受影响。
+        """
         self.checker.qwen_client = self._fake_qwen_network_error()
         result = self.checker.check(self.safe_content, {"type": "chat"})
-        assert result["blocked"] is False
-        assert result["violations"] == []
+        codes = [v["rule_code"] for v in result["violations"]]
+        assert "R999" in codes
+        assert result["blocked"] is True
 
 
 class TestFastMode:

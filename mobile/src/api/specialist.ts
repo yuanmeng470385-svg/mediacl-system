@@ -7,7 +7,19 @@ import type {
   ChatRequest,
   ChatResponse,
   ConversationMessage,
+  PaginatedResponse,
 } from '../types';
+
+/** 收藏条目（后端 /api/v1/favorites 列表项：conversation 快照 + 收藏元数据） */
+export interface FavoriteItem {
+  id: number;
+  conversation_id: number;
+  specialist_id: number;
+  question: string;
+  answer: string;
+  citations?: { title: string; url?: string }[];
+  created_at?: string;
+}
 
 export const specialistAPI = {
   /** 获取专员列表（后端返回 paginate 分页对象，解出 items 数组） */
@@ -92,6 +104,44 @@ export const specialistAPI = {
     return apiClient.request(
       'POST',
       `/api/v1/conversations/${conversationId}/favorite`
+    );
+  },
+
+  /** 我的收藏列表（后端 /api/v1/favorites 分页对象，解出 items） */
+  async listFavorites(params?: {
+    page?: number;
+    page_size?: number;
+  }): Promise<PaginatedResponse<FavoriteItem>> {
+    const raw = await apiClient.request<any>(
+      'GET',
+      '/api/v1/favorites',
+      params
+    );
+    const items = Array.isArray(raw?.items) ? raw.items : [];
+    const pagination = raw?.pagination ?? {};
+    return {
+      items: items.map((f: any) => ({
+        id: f?.id ?? 0,
+        conversation_id: f?.conversation_id ?? 0,
+        specialist_id: f?.specialist_id ?? 0,
+        question: String(f?.question ?? ''),
+        answer: String(f?.answer ?? ''),
+        citations: Array.isArray(f?.citations)
+          ? f.citations.map((c: any) => ({ title: String(c?.title ?? ''), url: c?.url }))
+          : [],
+        created_at: f?.created_at ?? undefined,
+      })),
+      total: raw?.total ?? pagination?.total ?? items.length,
+      page: raw?.page ?? pagination?.page ?? 1,
+      page_size: raw?.page_size ?? pagination?.page_size ?? items.length,
+    };
+  },
+
+  /** 取消收藏（后端 DELETE /api/v1/favorites/{id}） */
+  async removeFavorite(favoriteId: number): Promise<void> {
+    await apiClient.request<any>(
+      'DELETE',
+      `/api/v1/favorites/${favoriteId}`
     );
   },
 };

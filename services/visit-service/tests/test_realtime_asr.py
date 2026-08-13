@@ -73,13 +73,16 @@ class TestRealtimeAsrClient:
 
 class TestAsrWebSocket:
     def test_ws_rejects_without_token(self):
-        """WS 端点：无 token 拒绝连接（握手阶段拒绝）"""
+        """WS 端点：query 与首帧 auth 都没有 token → 4401 关闭（B5 首帧鉴权协议）"""
         with TestClient(app) as client:
             try:
-                with client.websocket_connect("/ws/visits/1/asr"):
+                with client.websocket_connect("/ws/visits/1/asr") as ws:
+                    # 新协议：连接后先发 auth 帧（token 为空 → 服务端关 4401）
+                    ws.send_text(json.dumps({"type": "auth", "token": ""}))
+                    ws.receive_json()  # 服务端 close(4401) → 这里抛 WebSocketDisconnect
                     assert False, "无 token 不应连接成功"
             except Exception:
-                pass  # 握手被拒绝（WebSocketDisconnect / 403），符合预期
+                pass  # 连接被关闭（4401），符合预期
 
 
 class TestSpeakerSeparation:
@@ -204,7 +207,9 @@ class TestAsrWebSocketFlow:
 
         token = create_token(7, "rep1", "rep")
         with TestClient(app) as client:
-            with client.websocket_connect(f"/ws/visits/1/asr?token={token}") as ws:
+            # B5 首帧鉴权：token 走首帧 auth（不再放 query）
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
                 ready = ws.receive_json()
                 assert ready["type"] == "ready" and ready["visit_id"] == 1
                 ws.send_bytes(b"\x00" * 3200)
@@ -237,7 +242,8 @@ class TestAsrWebSocketFlow:
 
         token = create_token(7, "rep1", "rep")
         with TestClient(app) as client:
-            with client.websocket_connect(f"/ws/visits/1/asr?token={token}") as ws:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
                 ws.receive_json()  # ready
                 ws.send_bytes(b"\x00" * 3200)
                 ws.receive_json()  # 中间结果

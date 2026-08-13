@@ -32,6 +32,7 @@ from shared.models.user import User
 from app.db.repositories.visit_repo import VisitRepo
 from app.services.compliance_client import check_compliance
 from app.services.realtime_asr import MockRealtimeAsrClient, RealtimeAsrClient
+from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED
 
 router = APIRouter(tags=["asr"])
 logger = logging.getLogger(__name__)
@@ -70,8 +71,32 @@ def _get_asr_client():
 
 @router.websocket("/ws/visits/{visit_id}/asr")
 async def ws_visit_asr(websocket: WebSocket, visit_id: int):
-    # ---- 鉴权：query 带 JWT ----
+    # ---- 鉴权：先 accept（accept 前 close 的 4401/4403/4404 到不了客户端），
+    #      再收首帧 —— B5 首帧鉴权（2026-08-12）：首帧 {"type":"auth","token"} 优先；
+    #      旧客户端（query token）首帧即音频/stop → 回退 query，缓存该帧继续处理 ----
     token = websocket.query_params.get("token", "")
+    await websocket.accept()
+    first_frame = None
+    try:
+        raw_first = await asyncio.wait_for(websocket.receive(), timeout=10)
+        if raw_first.get("type") == "websocket.disconnect":
+            await websocket.close(code=4401)
+            return
+        if raw_first.get("text"):
+            try:
+                first_msg = json.loads(raw_first["text"])
+            except json.JSONDecodeError:
+                first_msg = {}
+            if first_msg.get("type") == "auth" and first_msg.get("token"):
+                token = str(first_msg["token"])
+            else:
+                first_frame = raw_first  # 旧客户端：首帧即协议帧（stop/其他），缓存
+        else:
+            first_frame = raw_first  # 旧客户端：首帧即 PCM 音频分片
+    except Exception:
+        await websocket.close(code=4401)
+        return
+
     try:
         payload = verify_token(token)
     except HTTPException:
@@ -97,8 +122,6 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         if record.user_id != user_id and role != "admin":
             await websocket.close(code=4403)  # 无权
             return
-
-        await websocket.accept()
         # 串行化该连接的所有 send：后台合规任务与主路径并发 send 会触发
         # websockets>=12 的 ConcurrencyError（事件被吞、合规拦截丢失）
         send_lock = asyncio.Lock()
@@ -119,12 +142,17 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
 
         async def on_sentence(text: str, index: int, is_final: bool, speaker=None):
             nonlocal last_final_text
-            # 回推增量/断句给 App（统一携带 speaker 字段：双方分离，缺省 rep）
-            async with send_lock:
-                await websocket.send_json({
-                    "type": "sentence", "index": index, "text": text, "final": is_final,
-                    "speaker": _map_speaker(speaker),
-                })
+            # 回推增量/断句给 App（统一携带 speaker 字段：双方分离，缺省 rep）。
+            # send 失败（客户端断开/发送竞争/连接关闭后 starlette send 抛 RuntimeError）
+            # 不中断转写处理 —— 与 _check_later 同一容错模式，失败仅跳过推送
+            try:
+                async with send_lock:
+                    await websocket.send_json({
+                        "type": "sentence", "index": index, "text": text, "final": is_final,
+                        "speaker": _map_speaker(speaker),
+                    })
+            except (ConcurrencyError, ConnectionClosed, RuntimeError):
+                logger.info("客户端已断开或发送竞争，跳过断句推送")
             # 断句完成：追加到拜访记录 + 实时合规检查
             if is_final:
                 # fail-closed：Mock 会话的文本绝不落库（防止假转写污染证据库）
@@ -132,11 +160,17 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
                     logger.warning("Mock 转写文本不落库: %s", text[:50])
                 else:
                     try:
-                        rec = VisitRepo.get(db, visit_id)
-                        if rec:
+                        # 行锁 + 状态复查（F7/F12 与 REST 追加同口径）：已结束/已取消的
+                        # 拜访不再追加转写（证据已封存）；并发追加串行化不互相覆盖
+                        rec = VisitRepo.get(db, visit_id, for_update=True)
+                        if rec and rec.status == VISIT_STATUS_CANCELLED:
+                            logger.warning("拜访已取消，WS 转写不追加: visit_id=%s", visit_id)
+                        elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
+                            logger.warning("拜访已结束，WS 转写不追加: visit_id=%s", visit_id)
+                        elif rec:
                             rec.conversation_transcript = (rec.conversation_transcript or "") + text + "\n"
                             db.commit()
-                        last_final_text = None  # 落库成功，清空缓冲
+                        last_final_text = None  # 落库成功（或明确跳过），清空缓冲
                     except Exception as exc:
                         # 落库失败（如 db 已关闭的竞态）→ 缓冲该句，会话收尾兜底
                         logger.error("断句落库失败，留待会话收尾兜底: visit_id=%s err=%s", visit_id, exc)
@@ -164,9 +198,11 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
 
         await asr.start(on_sentence=on_sentence)
 
+        # 首帧缓存（旧客户端首帧即音频/stop，已在鉴权段接收）先于循环消费
+        pending_frames = [first_frame] if first_frame is not None else []
         try:
             while True:
-                frame = await websocket.receive()
+                frame = pending_frames.pop(0) if pending_frames else await websocket.receive()
                 if frame.get("type") == "websocket.disconnect":
                     break
                 data = frame.get("bytes") or frame.get("text")
