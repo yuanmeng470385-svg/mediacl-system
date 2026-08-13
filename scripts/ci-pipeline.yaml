@@ -1,178 +1,379 @@
 # ==============================================
 # MedAgent CI/CD 流水线配置
-# 平台：阿里云云效 (Flow)
-# ==============================================
+# 平台：阿里云云效 (Flow) —— Pipeline as Code（YAML 流水线）
+# 语法版本：version: v1.0
+#
+# 说明（2026-08-13 重写）：
+# 1. 本文件原先为 GitLab CI/Jenkins 混合语法（stages 列表式 / runs-on / triggers /
+#    dependsOn / when / services），云效 Flow 无法解析，从未成功运行过。
+#    现按云效 Flow YAML 流水线官方语法重写：
+#    参考 https://help.aliyun.com/zh/yunxiao/user-guide/yaml-preliminary-experience/
+# 2. 结构：stages（阶段，默认串行）→ jobs（任务，阶段内默认并行，
+#    可用 needs 指定依赖，支持跨阶段）→ steps（步骤，串行）。
+#    needs 参考 https://help.aliyun.com/zh/yunxiao/user-guide/use-the-needs-syntax-to-control-task-dependencies/
+# 3. 步骤统一使用官方内置步骤 step: Command + with.run: |。
+# 4. 所有检查真实生效 —— 禁止用 `|| true` 掩盖失败，任何失败即流水线红。
+# 5. 单测不依赖真实 PostgreSQL/Redis（单测内建 SQLite/fake），无需 services 容器。
+# 6. 在云效创建 YAML 流水线时，代码源可在 UI 中配置；sources 段中 <...> 占位符
+#    请替换为实际值，或以云效导出的流水线 YAML 覆盖 sources 段。
+
+version: v1.0
 
 # 流水线名称
 name: MedAgent-CI-CD
 
-# 触发条件
-triggers:
-  push:
-    branches:
-      - master
-      - develop
-      - feature/*
-  pull_request:
-    branches:
-      - master
-      - develop
+# ========== 流水线源 ==========
+# 触发意图（对应原 triggers）：push 触发 master/develop/feature/*，
+# 合并请求事件（原 pull_request）触发 master/develop。
+sources:
+  medagent_repo:
+    type: codeup                          # 代码源类型：云效 Codeup
+    name: MedAgent 代码源
+    endpoint: <CODEUP_REPOSITORY_URL>     # 替换为实际仓库地址，如 https://codeup.aliyun.com/<组织>/medagent.git
+    branch: develop                       # 默认分支（仅作为手动/定时触发时的默认运行分支，不是触发过滤条件）
+    triggerEvents:                        # 代码源监听事件（不配置则只能手动触发）
+      - push                              # 代码推送
+      - mergeRequestOpenedOrUpdate        # 合并请求新建/更新（原 pull_request 意图）
+      - mergeRequestMerged                # 合并请求完成
+    branchesFilter: '^(master|develop|feature/.*)$'   # 分支过滤（正则）
+    # 认证信息：在云效「服务连接」创建 Codeup 服务连接后填入：
+    # certificate:
+    #   type: serviceConnection
+    #   serviceConnection: <CODEUP_SERVICE_CONNECTION_ID>
 
-# 环境变量
-env:
-  DOCKER_REGISTRY: registry.cn-hangzhou.aliyuncs.com
-  DOCKER_NAMESPACE: medagent
-  # 以下变量在云效「变量和缓存」中配置
-  # DOCKER_USERNAME
-  # DOCKER_PASSWORD
-  # ALIYUN_ACCESS_KEY_ID
-  # ALIYUN_ACCESS_KEY_SECRET
+# 默认工作区：步骤默认在该代码源的检出目录（仓库根）下执行
+defaultWorkspace: medagent_repo
 
 # ========== 阶段定义 ==========
+# 阶段之间默认串行：lint → test → build → deploy → notify
 stages:
   # ---- Stage 1: 代码检查 ----
-  - name: lint
-    label: 代码检查
+  lint:
+    name: 代码检查
     jobs:
-      - name: python-lint
-        runs-on: linux
-        image: python:3.11-slim
+      # 后端代码检查（ruff + mypy，真实失败即红）
+      python_lint:
+        name: Python 代码检查
+        runsOn:
+          group: public/cn-beijing
+          container: python:3.11-slim
         steps:
-          - name: 安装依赖
-            run: |
-              pip install ruff mypy --quiet
-          - name: Ruff 代码风格检查
-            run: |
-              ruff check services/ shared/ --select E,F,W --ignore E501
-          - name: Mypy 类型检查
-            run: |
-              mypy services/ shared/ --ignore-missing-imports --no-strict-optional || true
+          install_tools:
+            name: 安装检查工具
+            step: Command
+            with:
+              run: |
+                pip install ruff mypy --quiet
+          ruff_check:
+            name: Ruff 代码风格检查
+            step: Command
+            with:
+              run: |
+                ruff check services/ shared/ --select E,F,W --ignore E501
+          mypy_check:
+            name: Mypy 类型检查
+            # 不得加 || true —— 类型错误必须让流水线红
+            step: Command
+            with:
+              run: |
+                mypy services/ shared/ --ignore-missing-imports --no-strict-optional
 
-      - name: mobile-lint
-        runs-on: linux
-        image: node:20-slim
+      # 移动端类型检查（tsc --noEmit，真实失败即红）
+      mobile_lint:
+        name: 移动端代码检查
+        runsOn:
+          group: public/cn-beijing
+          container: node:20
         steps:
-          - name: 安装依赖
-            run: |
-              cd mobile && npm ci --quiet 2>/dev/null || npm install --quiet
-          - name: ESLint 检查
-            run: |
-              cd mobile && npx eslint src/ --ext .ts,.tsx || true
-          - name: TypeScript 编译检查
-            run: |
-              cd mobile && npx tsc --noEmit || true
+          npm_ci:
+            name: 安装依赖
+            step: Command
+            with:
+              run: |
+                cd mobile && npm ci --quiet
+          # 仓库暂未配置 ESLint（无 .eslintrc / eslint.config 文件），
+          # 直接跑 eslint 会因找不到配置而必然失败；待补充 ESLint 配置后启用下方步骤
+          # （启用时注意：不得用 || true 掩盖失败）：
+          # eslint_check:
+          #   name: ESLint 检查
+          #   step: Command
+          #   with:
+          #     run: |
+          #       cd mobile && npx eslint src/ --ext .ts,.tsx
+          tsc_check:
+            name: TypeScript 编译检查
+            step: Command
+            with:
+              run: |
+                cd mobile && npx tsc --noEmit
 
-  # ---- Stage 2: 测试 ----
-  - name: test
-    label: 单元测试
-    dependsOn: lint
+  # ---- Stage 2: 单元测试 ----
+  test:
+    name: 单元测试
     jobs:
-      - name: backend-tests
-        runs-on: linux
-        image: python:3.11-slim
-        services:
-          - postgres:15
-          - redis:7
+      # 8 个服务 + shared 公共模块的 pytest
+      backend_tests:
+        name: 后端单元测试（8 服务 + shared）
+        runsOn:
+          group: public/cn-beijing
+          container: python:3.11-slim
         steps:
-          - name: 安装依赖
-            run: |
-              pip install -r services/auth-service/requirements.txt
-              pip install -r services/compliance-service/requirements.txt
-              pip install -r services/audit-service/requirements.txt
-              pip install -r services/specialist-service/requirements.txt
-              pip install -r services/knowledge-service/requirements.txt
-              pip install -r services/visit-service/requirements.txt
-              pip install -r services/hcp-service/requirements.txt
-              pip install pytest httpx
-          - name: 初始化数据库
-            run: |
-              export DATABASE_URL=postgresql://medagent:medagent123@localhost:5432/medagent
-              # Base 在 shared.models.base，不在 db_session —— 从 db_session 导会 ImportError
-              python -c "
-              from shared.common.db_session import engine
-              from shared.models.base import Base
-              import shared.models.user, shared.models.product, shared.models.compliance, shared.models.audit_log
-              Base.metadata.create_all(engine)
-              "
-          - name: 运行测试
-            # 不要加 || true —— 测试失败必须让流水线红
-            run: |
-              cd services/auth-service       && python -m pytest tests/ -v && cd ../..
-              cd services/compliance-service && python -m pytest tests/ -v && cd ../..
-              cd services/audit-service      && python -m pytest tests/ -v && cd ../..
-              cd services/hcp-service        && python -m pytest tests/ -v && cd ../..
-              cd services/visit-service      && python -m pytest tests/ -v && cd ../..
+          install_deps:
+            name: 安装依赖
+            step: Command
+            with:
+              run: |
+                pip install -r services/auth-service/requirements.txt \
+                  -r services/specialist-service/requirements.txt \
+                  -r services/visit-service/requirements.txt \
+                  -r services/knowledge-service/requirements.txt \
+                  -r services/compliance-service/requirements.txt \
+                  -r services/audit-service/requirements.txt \
+                  -r services/hcp-service/requirements.txt \
+                  -r services/gateway/requirements.txt \
+                  pytest pytest-asyncio httpx --quiet
+          run_pytest:
+            name: 运行 pytest
+            # 必须从各服务目录运行（测试 sys.path 依赖 cwd，conftest 亦按相对路径上溯仓库根）
+            # 单测使用内建 SQLite/fake，无需真实 PostgreSQL/Redis
+            # 不要加 || true —— 任一服务测试失败必须让流水线红
+            step: Command
+            with:
+              run: |
+                (cd services/auth-service       && python -m pytest tests/ -v)
+                (cd services/specialist-service && python -m pytest tests/ -v)
+                (cd services/visit-service      && python -m pytest tests/ -v)
+                (cd services/knowledge-service  && python -m pytest tests/ -v)
+                (cd services/compliance-service && python -m pytest tests/ -v)
+                (cd services/audit-service      && python -m pytest tests/ -v)
+                (cd services/hcp-service        && python -m pytest tests/ -v)
+                (cd services/gateway            && python -m pytest tests/ -v)
+                # shared 公共模块
+                (cd shared && python -m pytest common/tests/ -v)
+
+      # Web 前端构建（tsc -b + vite build）
+      web_build:
+        name: Web 前端构建
+        runsOn:
+          group: public/cn-beijing
+          container: node:20
+        steps:
+          npm_ci:
+            name: 安装依赖
+            step: Command
+            with:
+              run: |
+                cd web && npm ci --quiet
+          npm_build:
+            name: 构建（tsc -b && vite build）
+            step: Command
+            with:
+              run: |
+                cd web && npm run build
+
+      # 移动端 Jest 测试
+      mobile_test:
+        name: 移动端 Jest 测试
+        runsOn:
+          group: public/cn-beijing
+          container: node:20
+        steps:
+          npm_ci:
+            name: 安装依赖
+            step: Command
+            with:
+              run: |
+                cd mobile && npm ci --quiet
+          jest_test:
+            name: Jest 单元测试
+            step: Command
+            with:
+              run: |
+                cd mobile && npx jest
 
   # ---- Stage 3: 构建镜像 ----
-  - name: build
-    label: 构建 Docker 镜像
-    dependsOn: test
+  build:
+    name: 构建 Docker 镜像
     jobs:
-      - name: build-and-push
-        runs-on: linux
-        image: docker:24
+      build_and_push:
+        name: 构建并推送 8 个服务镜像
+        # 跨阶段任务依赖（官方支持，填 job_id 即可）：三个测试任务全部成功后才构建
+        needs:
+          - backend_tests
+          - web_build
+          - mobile_test
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
         steps:
-          - name: 登录阿里云容器镜像服务
-            run: |
-              echo "${DOCKER_PASSWORD}" | docker login \
-                --username="${DOCKER_USERNAME}" \
-                --password-stdin \
-                registry.cn-hangzhou.aliyuncs.com
-
-          - name: 构建 & 推送 8 个服务
-            run: |
-              SERVICES=(gateway auth-service specialist-service visit-service knowledge-service compliance-service audit-service hcp-service)
-              TAG=${CI_COMMIT_SHA:-latest}
-              for svc in "${SERVICES[@]}"; do
-                echo "Building ${svc}..."
-                # build context 必须是仓库根目录 —— 镜像需要 COPY shared/
-                docker build -f services/${svc}/Dockerfile \
-                  -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} .
-                docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG}
-                # 同时打 latest 标签
-                docker tag ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:${TAG} \
-                           ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:latest
-                docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${svc}:latest
-              done
+          # 使用云效官方「镜像构建并推送至阿里云镜像仓库」步骤（ACRDockerBuild），
+          # 参考 https://help.aliyun.com/zh/yunxiao/user-guide/build-and-push-custom-image-repositories/
+          # - 首次使用需在云效「服务连接」创建 ACR（容器镜像服务）连接，替换 serviceConnection；
+          # - 目标镜像仓库 namespace（medagent/<service>）需先在 ACR 中创建（替代原 DOCKER_REGISTRY/DOCKER_NAMESPACE 变量）；
+          # - 构建上下文为仓库根目录 —— 各服务 Dockerfile 需要 COPY shared/，
+          #   与 scripts/docker-verify.sh 的 compose 构建一致（本地可先跑该脚本验证构建）。
+          build_gateway:
+            step: ACRDockerBuild
+            name: 构建并推送 gateway
+            with:
+              artifact: gateway
+              dockerfilePath: services/gateway/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/gateway
+              dockerTag: '${DATETIME}'      # 动态标签（构建时间戳，官方支持）
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_auth_service:
+            step: ACRDockerBuild
+            name: 构建并推送 auth-service
+            with:
+              artifact: auth_service
+              dockerfilePath: services/auth-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/auth-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_specialist_service:
+            step: ACRDockerBuild
+            name: 构建并推送 specialist-service
+            with:
+              artifact: specialist_service
+              dockerfilePath: services/specialist-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/specialist-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_visit_service:
+            step: ACRDockerBuild
+            name: 构建并推送 visit-service
+            with:
+              artifact: visit_service
+              dockerfilePath: services/visit-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/visit-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_knowledge_service:
+            step: ACRDockerBuild
+            name: 构建并推送 knowledge-service
+            with:
+              artifact: knowledge_service
+              dockerfilePath: services/knowledge-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/knowledge-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_compliance_service:
+            step: ACRDockerBuild
+            name: 构建并推送 compliance-service
+            with:
+              artifact: compliance_service
+              dockerfilePath: services/compliance-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/compliance-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_audit_service:
+            step: ACRDockerBuild
+            name: 构建并推送 audit-service
+            with:
+              artifact: audit_service
+              dockerfilePath: services/audit-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/audit-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
+          build_hcp_service:
+            step: ACRDockerBuild
+            name: 构建并推送 hcp-service
+            with:
+              artifact: hcp_service
+              dockerfilePath: services/hcp-service/Dockerfile
+              dockerRegistry: registry.cn-hangzhou.aliyuncs.com/medagent/hcp-service
+              dockerTag: '${DATETIME}'
+              extraTags:
+                - latest
+              region: cn-hangzhou
+              serviceConnection: <ACR_SERVICE_CONNECTION_ID>
 
   # ---- Stage 4: 部署 ----
-  - name: deploy
-    label: 部署
-    dependsOn: build
-    # 仅 master 分支自动部署
-    when: branch == 'master'
+  deploy:
+    name: 部署
     jobs:
-      - name: deploy-staging
-        label: 部署到预发布环境
-        runs-on: linux
+      deploy_staging:
+        name: 部署到预发布环境
+        needs: build_and_push
+        # 仅 master 分支自动部署（CI_COMMIT_REF_NAME 为云效内置环境变量：代码源分支名，
+        # 参考 https://help.aliyun.com/zh/yunxiao/user-guide/environment-variables/）
+        condition: '"${CI_COMMIT_REF_NAME}" == "master"'
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
         steps:
-          - name: 通过 SSH 部署
-            run: |
-              # 在云效中配置 STAGING_HOST 和 SSH 密钥
-              ssh -o StrictHostKeyChecking=no root@${STAGING_HOST} << 'EOF'
-                cd /opt/medagent
-                docker compose pull
-                docker compose up -d --remove-orphans
-                docker compose ps
-              EOF
+          ssh_deploy:
+            name: 通过 SSH 部署
+            step: Command
+            with:
+              run: |
+                # STAGING_HOST 与 SSH 密钥在云效「变量和缓存」中配置
+                ssh -o StrictHostKeyChecking=no root@${STAGING_HOST} << 'EOF'
+                  cd /opt/medagent
+                  docker compose pull
+                  docker compose up -d --remove-orphans
+                  docker compose ps
+                EOF
 
   # ---- Stage 5: 通知 ----
-  - name: notify
-    label: 通知
-    dependsOn: deploy
-    when: always()
+  notify:
+    name: 钉钉通知
     jobs:
-      - name: dingtalk-notify
-        runs-on: linux
+      # 部署失败通知：failed() 为云效官方任务状态函数（前序任务失败/取消时返回 true）
+      notify_failure:
+        name: 部署失败通知
+        needs: deploy_staging
+        condition: failed(deploy_staging)
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
         steps:
-          - name: 钉钉通知
-            run: |
-              STATUS="$([[ "${CI_JOB_STATUS}" == "success" ]] && echo '✅ 部署成功' || echo '❌ 部署失败')"
-              curl -X POST "${DINGTALK_WEBHOOK}" \
-                -H 'Content-Type: application/json' \
-                -d "{
-                  \"msgtype\": \"text\",
-                  \"text\": {
-                    \"content\": \"MedAgent ${CI_COMMIT_BRANCH} ${STATUS}\nCommit: ${CI_COMMIT_SHA:-unknown}\n时间: $(date '+%Y-%m-%d %H:%M:%S')\"
-                  }
-                }" 2>/dev/null || true
+          dingtalk_fail:
+            name: 发送钉钉通知
+            step: Command
+            with:
+              run: |
+                # DINGTALK_WEBHOOK 在云效「变量和缓存」中配置
+                payload="{\"msgtype\":\"text\",\"text\":{\"content\":\"MedAgent ${CI_COMMIT_REF_NAME} 部署失败 Commit: ${CI_COMMIT_SHA:-unknown} 时间: $(date '+%Y-%m-%d %H:%M:%S')\"}}"
+                curl -X POST "${DINGTALK_WEBHOOK}" -H 'Content-Type: application/json' -d "${payload}"
+
+      # 部署成功通知：succeed() 对「已成功」或「已跳过」返回 true，
+      # 非 master 分支部署任务被 condition 跳过也会进入此分支，故脚本内再判断分支
+      notify_success:
+        name: 部署成功通知
+        needs: deploy_staging
+        condition: succeed(deploy_staging)
+        runsOn:
+          group: public/cn-beijing
+          container: build-steps-public-registry.cn-beijing.cr.aliyuncs.com/build-steps/alinux3:latest
+        steps:
+          dingtalk_ok:
+            name: 发送钉钉通知
+            step: Command
+            with:
+              run: |
+                if [ "${CI_COMMIT_REF_NAME}" = "master" ]; then
+                  payload="{\"msgtype\":\"text\",\"text\":{\"content\":\"MedAgent ${CI_COMMIT_REF_NAME} 部署成功 Commit: ${CI_COMMIT_SHA:-unknown} 时间: $(date '+%Y-%m-%d %H:%M:%S')\"}}"
+                  curl -X POST "${DINGTALK_WEBHOOK}" -H 'Content-Type: application/json' -d "${payload}"
+                fi
