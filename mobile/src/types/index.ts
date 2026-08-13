@@ -59,6 +59,16 @@ export interface Citation {
   content?: string;
 }
 
+/** 违规明细 —— compliance checker violations 元素的真实形状（checker.py），没有 description 字段 */
+export interface ChatViolation {
+  rule_code: string;
+  rule_name?: string;
+  severity?: 'low' | 'medium' | 'high' | string;
+  action?: string;
+  matched_text?: string;
+  reason?: string;
+}
+
 export interface ChatResponse {
   answer: string;
   citations: Citation[];
@@ -70,7 +80,7 @@ export interface ChatResponse {
   /** 反馈/收藏的主键（assistant 行 id）。入库失败时为 null */
   conversation_id?: number | null;
   /** blocked 为 true 时的违规明细 */
-  violations?: { rule_code: string; description: string }[];
+  violations?: ChatViolation[];
 }
 
 export interface ConversationMessage {
@@ -110,6 +120,8 @@ export interface VisitRecord {
   ai_summary?: VisitSummary;
   compliance_issues?: ComplianceIssue[];
   follow_up_plan?: string;
+  /** true = 后端 AI 总结失败占位串：拜访尚未结束，可重试 endVisit（api 层识别，屏幕据此展示重试入口） */
+  retryable?: boolean;
 }
 
 export interface VisitSummary {

@@ -32,7 +32,13 @@ export default function VisitEndScreen() {
   const navigation = useNavigation<Nav>();
   const { visitId, summary: initialSummary } = route.params;
 
-  const [summary, setSummary] = useState<VisitSummary | null>(initialSummary ?? null);
+  // 导航参数已带 retryable（VisitInProgress 调 endVisit 拿到占位串）→ 直接进失败态；
+  // 该态不把占位串当总结展示，允许用户重新调 endVisit（后端对占位串不触发"已结束"锁）
+  const initialRetryable = Boolean(initialSummary?.retryable);
+  const [summary, setSummary] = useState<VisitSummary | null>(
+    initialSummary && !initialRetryable ? initialSummary : null
+  );
+  const [retryable, setRetryable] = useState(initialRetryable);
   const [loading, setLoading] = useState(!initialSummary);
   const [error, setError] = useState('');
   const [followUp, setFollowUp] = useState<{
@@ -54,9 +60,40 @@ export default function VisitEndScreen() {
         setSummary(detail.ai_summary);
         return;
       }
+      // 上次 end AI 生成失败（占位串）：拜访尚未结束 → 展示失败态 + 重试入口，不自动重试
+      if (detail?.retryable) {
+        setRetryable(true);
+        return;
+      }
       const result = await visitAPI.endVisit(visitId);
+      if (result.retryable) {
+        setRetryable(true);
+        return;
+      }
       setSummary(result);
     } catch (e: any) {
+      setError(e?.message || '生成拜访总结失败，请重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 占位串可重试场景：重新调 endVisit（此时后端无"已结束"行锁），成功后即刷新总结展示
+  const retryEnd = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await visitAPI.endVisit(visitId);
+      if (result.retryable) {
+        // 仍生成失败：保持失败态，可继续重试
+        setRetryable(true);
+        return;
+      }
+      setRetryable(false);
+      setSummary(result);
+    } catch (e: any) {
+      // 网络/服务异常：退出失败态，走通用错误展示（重试按钮会重新 loadSummary → getById 复核）
+      setRetryable(false);
       setError(e?.message || '生成拜访总结失败，请重试');
     } finally {
       setLoading(false);
@@ -127,6 +164,17 @@ export default function VisitEndScreen() {
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={Colors.primary} />
         <Text style={styles.loadingText}>AI 正在生成拜访总结...</Text>
+      </View>
+    );
+  }
+
+  if (retryable) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>总结生成失败，拜访尚未结束，可重试生成</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={retryEnd} activeOpacity={0.8}>
+          <Text style={styles.retryText}>重新生成总结</Text>
+        </TouchableOpacity>
       </View>
     );
   }

@@ -11,7 +11,6 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { visitAPI } from '../../api/visit';
-import { formatLocalDate } from '../../utils/date';
 import Icon from '../../components/Icon';
 import { ActionIcons, VisitIcons } from '../../components/Icon';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -64,11 +63,10 @@ export default function VisitPrepareScreen() {
 
   const handleStartVisit = async () => {
     try {
+      // 后端 start 只读 hcp_id/product_id（visits.py:116-137），planned_date/notes 无对应列
+      // 会被静默丢弃 → 不再发送；推荐话题保留为本页会话内状态，仅本次参考
       const result = await visitAPI.startVisit({
         hcp_id: hcpId, product_id: productId || 1,
-        // 本地日期（toISOString 是 UTC，东八区凌晨会取成昨天）
-        planned_date: formatLocalDate(),
-        notes: `推荐话题：${[...selectedTopics].join('、')}`,
       });
       navigation.replace('VisitInProgress', { visitId: result.visit_id, hcpName });
     } catch (e: any) {
@@ -135,7 +133,7 @@ export default function VisitPrepareScreen() {
             <Icon name="lightbulb-on-outline" size={22} color={Colors.warning} />
             <Text style={styles.sectionTitle}>推荐话题</Text>
           </View>
-          <Text style={styles.hintText}>勾选本次拜访准备讨论的话题</Text>
+          <Text style={styles.hintText}>勾选本次拜访准备讨论的话题（仅本次参考，不保存到拜访记录）</Text>
           {data?.recommendations?.suggested_topics?.map((topic, i) => (
             <TouchableOpacity key={i} style={styles.topicItem} onPress={() => toggleTopic(topic)} activeOpacity={0.7}>
               <View style={[styles.checkbox, selectedTopics.has(topic) && styles.checkboxChecked]}>

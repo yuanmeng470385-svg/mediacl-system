@@ -41,11 +41,13 @@ describe('visitAPI', () => {
     expect(c.body).not.toHaveProperty('hcpId');
   });
 
-  it('list 日期参数必须是 date_from / date_to', async () => {
-    await visitAPI.list({ page: 1, date_from: '2026-08-05', date_to: '2026-08-05' });
+  it('list 日期参数必须是 date_from / date_to（date_to 带 T23:59:59 覆盖全天，J1）', async () => {
+    // 后端 visit_repo 把 date_to 解析为当日 00:00:00 做 <= 过滤，纯日期会使今日拜访恒空；
+    // 移动端契约：date_to 必须是 `${date}T23:59:59`（URLSearchParams 编码冒号为 %3A）
+    await visitAPI.list({ page: 1, date_from: '2026-08-05', date_to: '2026-08-05T23:59:59' });
     const c = lastCall();
     expect(c.url).toContain('date_from=2026-08-05');
-    expect(c.url).toContain('date_to=2026-08-05');
+    expect(c.url).toContain('date_to=2026-08-05T23%3A59%3A59');
     expect(c.url).not.toContain('start_date');
   });
 
@@ -58,13 +60,22 @@ describe('visitAPI', () => {
 
   it('startVisit 取 visit_id，后端只有 id 时回退 id（C1：visitId 不能再是 undefined）', async () => {
     fetchMock.mockResolvedValueOnce(okResponse({ id: 55, status: 'in_progress', visit_time: '2026-08-06T10:00:00' }));
-    const result = await visitAPI.startVisit({ hcp_id: 1, product_id: 1, planned_date: '2026-08-06' });
+    const result = await visitAPI.startVisit({ hcp_id: 1, product_id: 1 });
     expect(result.visit_id).toBe(55);
 
     // 后端新契约 {id, visit_id, status, start_time}
     fetchMock.mockResolvedValueOnce(okResponse({ id: 55, visit_id: 88, status: 'in_progress', start_time: '2026-08-06T10:00:00' }));
-    const result2 = await visitAPI.startVisit({ hcp_id: 1, product_id: 1, planned_date: '2026-08-06' });
+    const result2 = await visitAPI.startVisit({ hcp_id: 1, product_id: 1 });
     expect(result2.visit_id).toBe(88);
+  });
+
+  it('startVisit 请求体只发 hcp_id/product_id，不发 planned_date/notes（J4：后端无对应列静默丢弃）', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({ id: 77, status: 'in_progress' }));
+    await visitAPI.startVisit({ hcp_id: 1, product_id: 2 });
+    const c = lastCall();
+    expect(c.body).toEqual({ hcp_id: 1, product_id: 2 });
+    expect(c.body).not.toHaveProperty('planned_date');
+    expect(c.body).not.toHaveProperty('notes');
   });
 
   it('sendTranscript 把 compliance.violations / objections.objections 映射为屏幕形状（C3）', async () => {
@@ -193,6 +204,28 @@ describe('visitAPI', () => {
     expect(r.hcp_name).toBe('医生 #3');
     expect(r.planned_date).toBe('2026-08-06');
     expect(r.ai_summary).toBeUndefined();
+  });
+
+  it('J3：AI 失败占位串不推 completed——status 保持 in_progress、ai_summary 为 undefined、retryable=true', async () => {
+    const placeholder = '（AI 总结生成失败，拜访尚未结束，可重试结束拜访）';
+    fetchMock.mockResolvedValueOnce(okResponse({
+      items: [
+        { id: 11, hcp_id: 3, hcp_name: '张主任', visit_time: '2026-08-06T09:30:00', status: 'in_progress', ai_summary: placeholder },
+      ],
+      pagination: { page: 1, page_size: 20, total: 1 },
+    }));
+    const r = await visitAPI.list({ page: 1 });
+    expect(r.items[0].status).toBe('in_progress');
+    expect(r.items[0].ai_summary).toBeUndefined();
+    expect(r.items[0].retryable).toBe(true);
+  });
+
+  it('J3：endVisit 返回占位串 → retryable=true 且 summary 为空（不把占位串当总结展示）', async () => {
+    const placeholder = '（AI 总结生成失败，拜访尚未结束，可重试结束拜访）';
+    fetchMock.mockResolvedValueOnce(okResponse({ id: 1, status: 'in_progress', ai_summary: placeholder }));
+    const r = await visitAPI.endVisit(1);
+    expect(r.retryable).toBe(true);
+    expect(r.summary).toBe('');
   });
 
   it('mapTranscriptResult 解析 LLM 推荐字段（key_nodes/ai_suggestion）', () => {

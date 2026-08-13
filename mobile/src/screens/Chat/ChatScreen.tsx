@@ -33,6 +33,20 @@ type RouteType = RouteProp<{ Chat: ChatScreenParams }, 'Chat'>;
 // 归属校验不过（换账号）→ 忽略并全新会话）
 const SESSION_KEY = (specialistId: number) => `chat_session_${specialistId}`;
 
+/**
+ * 违规明细文本：compliance checker 的 violations 元素是
+ * {rule_code, rule_name, severity, action, matched_text, reason}，没有 description。
+ * 优先取 matched_text（命中的原文），其次 reason（语义审核理由），最后 rule_name。
+ */
+function violationTextOf(violations: unknown): string {
+  const list = Array.isArray(violations) ? violations : [];
+  return list
+    .filter((v): v is Record<string, unknown> => !!v && typeof v === 'object')
+    .map((v) => String(v.matched_text || v.reason || v.rule_name || ''))
+    .filter(Boolean)
+    .join('；');
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -148,10 +162,7 @@ export default function ChatScreen() {
             setStreamText('');
             setStreaming(false);
             // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细），blocked/evidenceLevel 一并透传
-            const violationText = ((d.violations ?? []) as { description?: string }[])
-              .map((v) => v.description)
-              .filter(Boolean)
-              .join('；');
+            const violationText = violationTextOf(d.violations);
             const content = d.blocked
               ? [d.text, violationText && `（${violationText}）`]
                   .filter(Boolean)
@@ -222,10 +233,7 @@ export default function ChatScreen() {
       if (response.session_id) persistSession(response.session_id);
 
       // blocked 时展示后端给出的真实原因与违规明细，不再写死话术
-      const violationText = (response.violations ?? [])
-        .map((v) => v.description)
-        .filter(Boolean)
-        .join('；');
+      const violationText = violationTextOf(response.violations);
       const content = response.blocked
         ? [response.answer, violationText && `（${violationText}）`]
             .filter(Boolean)

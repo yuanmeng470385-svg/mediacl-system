@@ -37,11 +37,13 @@ export default function HomeScreen() {
 
   const loadVisits = useCallback(async () => {
     try {
-      // 本地日期（toISOString 是 UTC，东八区凌晨 0-8 点会取成昨天）
+      // 本地日期（toISOString 是 UTC，东八区凌晨 0-8 点会取成昨天）。
+      // date_to 必须带 T23:59:59：后端 visit_repo 把 date_to 解析为当日 00:00:00 做 <= 过滤，
+      // 传纯日期会让今日拜访恒为空
       const today = formatLocalDate();
       const result = await visitAPI.list({
         page: 1, page_size: 20,
-        date_from: today, date_to: today,
+        date_from: today, date_to: `${today}T23:59:59`,
       });
       setVisits(result.items || []);
     } catch {

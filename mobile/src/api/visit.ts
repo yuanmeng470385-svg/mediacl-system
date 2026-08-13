@@ -49,6 +49,14 @@ function tryParseJson(text: unknown): any | null {
 const VALID_SENTIMENTS = ['positive', 'neutral', 'negative'];
 
 /**
+ * 后端 visit-service/app/constants.py AI_SUMMARY_PLACEHOLDER 的逐字镜像：
+ * AI 总结失败时后端把 ai_summary 写成该占位串，语义是"拜访尚未结束、可重试 end_visit"
+ * （后端对占位串不触发"已结束"行锁）。移动端识别它：status 不推 completed、
+ * ai_summary 不映射为总结、附加 retryable 标记。必须与后端逐字一致，禁止改动。
+ */
+export const AI_SUMMARY_PLACEHOLDER = '（AI 总结生成失败，拜访尚未结束，可重试结束拜访）';
+
+/**
  * 把后端 to_dict 的 ai_summary（字符串）解析为 VisitSummary。
  * 结构化字段（key_points/hcp_interests/hcp_objections/next_visit_plan）优先读记录顶层
  * （后端 to_dict 独立列），其次读 ai_summary JSON 内部（兼容 JSON 字符串形态）。
@@ -57,6 +65,8 @@ const VALID_SENTIMENTS = ['positive', 'neutral', 'negative'];
 function parseVisitSummary(raw: any): VisitSummary | undefined {
   const aiSummary = raw?.ai_summary;
   if (aiSummary === undefined || aiSummary === null || aiSummary === '') return undefined;
+  // AI 失败占位串 ≠ 总结（合规拦截话术 AI_SUMMARY_BLOCKED 不是占位串，仍按总结展示）
+  if (aiSummary === AI_SUMMARY_PLACEHOLDER) return undefined;
 
   const parsed = typeof aiSummary === 'object' && aiSummary !== null
     ? aiSummary
@@ -117,12 +127,18 @@ function mapVisitRecord(raw: any): VisitRecord {
     }
   }
 
+  // AI 失败占位串：后端 to_dict 已派生出 in_progress，但 raw.ai_summary 非空会被
+  // 旧逻辑误推为 completed → 显式拦截，保持 in_progress（可重试 end）
+  const isPlaceholder =
+    typeof raw?.ai_summary === 'string' && raw.ai_summary === AI_SUMMARY_PLACEHOLDER;
   const status =
     raw?.status === 'pending' || raw?.status === 'cancelled'
       ? raw.status
-      : raw?.status === 'completed' || raw?.ai_summary
-        ? 'completed'
-        : 'in_progress';
+      : isPlaceholder
+        ? 'in_progress'
+        : raw?.status === 'completed' || raw?.ai_summary
+          ? 'completed'
+          : 'in_progress';
 
   const followUpPlan = Array.isArray(raw?.follow_up_suggestions)
     ? raw.follow_up_suggestions.filter((x: any) => typeof x === 'string').join('；')
@@ -145,6 +161,7 @@ function mapVisitRecord(raw: any): VisitRecord {
     transcript: raw?.conversation_transcript || undefined,
     ai_summary: parseVisitSummary(raw),
     follow_up_plan: followUpPlan,
+    retryable: isPlaceholder || undefined,
   };
 }
 
@@ -357,19 +374,19 @@ export const visitAPI = {
 
   /**
    * 开始拜访——创建拜访记录。
+   * 后端只读 hcp_id/product_id（visits.py:116-137 / visit_manager.py:385-405），
+   * planned_date/notes 无对应列会被静默丢弃 → 请求体不再发送这两个字段。
    * 后端返回 {id, visit_id, status, start_time}：取 visit_id，无则回退 id，
    * 保证 VisitInProgress 的 navigation 参数 visitId 不再是 undefined。
    */
   async startVisit(data: {
     hcp_id: number;
     product_id: number;
-    planned_date: string;
-    notes?: string;
   }): Promise<{ visit_id: number; status?: string; start_time?: string }> {
     const raw = await apiClient.request<any>(
       'POST',
       '/api/v1/visits/start',
-      data
+      { hcp_id: data.hcp_id, product_id: data.product_id },
     );
     const visitId = raw?.visit_id ?? raw?.id;
     if (typeof visitId !== 'number' || Number.isNaN(visitId)) {
@@ -398,12 +415,19 @@ export const visitAPI = {
     return mapTranscriptResult(raw);
   },
 
-  /** 结束拜访——生成总结（后端返回 record.to_dict()，映射为 VisitSummary） */
-  async endVisit(visitId: number): Promise<VisitSummary> {
+  /**
+   * 结束拜访——生成总结（后端返回 record.to_dict()，映射为 VisitSummary）。
+   * AI 生成失败时后端写入占位串（该态不算"已结束"，end_visit 可再次调用重试）→
+   * 映射为 retryable=true + 空总结，绝不让占位串冒充总结展示。
+   */
+  async endVisit(visitId: number): Promise<VisitSummary & { retryable?: boolean }> {
     const raw = await apiClient.request<any>(
       'POST',
       `/api/v1/visits/${visitId}/end`
     );
+    if (typeof raw?.ai_summary === 'string' && raw.ai_summary === AI_SUMMARY_PLACEHOLDER) {
+      return { ...mapEndResult(raw), retryable: true };
+    }
     return mapEndResult(raw);
   },
 

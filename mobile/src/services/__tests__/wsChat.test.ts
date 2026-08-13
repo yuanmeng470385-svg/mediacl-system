@@ -110,14 +110,20 @@ describe('wsChat 客户端', () => {
       text: '该问题涉及不合规内容',
       conversation_id: 7,
       blocked: true,
-      violations: [{ description: '违规一' }, { description: '违规二' }],
+      violations: [
+        { rule_code: 'R001', rule_name: '禁止承诺疗效', severity: 'high', action: 'reject', matched_text: '保证治愈', reason: '承诺疗效' },
+        { rule_code: 'R002', rule_name: '禁止绝对化用语', severity: 'medium', action: 'warn', matched_text: '', reason: '语义审核判定' },
+      ],
       evidence_level: 'D',
     }));
     expect(got).toMatchObject({
       text: '该问题涉及不合规内容',
       conversationId: 7,
       blocked: true,
-      violations: [{ description: '违规一' }, { description: '违规二' }],
+      violations: [
+        { rule_code: 'R001', rule_name: '禁止承诺疗效', severity: 'high', action: 'reject', matched_text: '保证治愈', reason: '承诺疗效' },
+        { rule_code: 'R002', rule_name: '禁止绝对化用语', severity: 'medium', action: 'warn', matched_text: '', reason: '语义审核判定' },
+      ],
       evidenceLevel: 'D',
     });
     ws.close();

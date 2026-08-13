@@ -60,8 +60,11 @@ export type VisitInProgressParams = {
 
 export type VisitEndParams = {
   visitId: number;
-  /** VisitInProgress 已在导航前调过 endVisit 时传入结果；缺省时 VisitEndScreen 自己调一次 */
-  summary?: VisitSummary;
+  /**
+   * VisitInProgress 已在导航前调过 endVisit 时传入结果；缺省时 VisitEndScreen 自己调一次。
+   * retryable=true 表示后端写入 AI 失败占位串（拜访尚未结束，可重试 end_visit）。
+   */
+  summary?: VisitSummary & { retryable?: boolean };
 };
 
 export type HCPDetailParams = {
