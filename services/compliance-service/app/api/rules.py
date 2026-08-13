@@ -285,6 +285,12 @@ async def update_rule(
         raise HTTPException(status_code=404, detail="规则不存在")
 
     # 按"编辑后的合并结果"整体校验：防止改类型/改 patterns 时留下非法规则
+    # 2026-08-13 D2：content 必须是 dict（与 create 同口径）——semantic 规则传字符串
+    # 能绕过 patterns 校验落库，checker 60s TTL 重载时 content.get() 崩溃，
+    # 单行坏数据毒化全部 DB 规则加载。update 不静默归一化（会清掉既有 patterns），
+    # 直接 400 让调用方修正。
+    if "content" in request and not isinstance(request.get("content"), dict):
+        raise ParamError("content 必须是 JSON 对象，不允许字符串等其他类型")
     _validate_rule_fields({**rule.to_dict(), **request}, partial=False)
 
     changed_fields = ["rule_name", "rule_type", "content", "severity", "action", "description", "enabled"]

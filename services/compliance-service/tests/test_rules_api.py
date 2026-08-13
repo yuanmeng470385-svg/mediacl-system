@@ -296,6 +296,20 @@ def test_update_rule_valid_success(client, monkeypatch):
     assert rule.version == 2
 
 
+def test_update_rule_content_non_dict_400(client, monkeypatch):
+    """D2：semantic 规则 content 传字符串 → 400 且不落库（否则字符串 content 落库后
+    checker 60s TTL 重载时 content.get() 崩溃，单行坏数据毒化全部 DB 规则加载）"""
+    fake = _FakeDb(rows=[_FakeRule(rule_code="R201", rule_type="semantic",
+                                   content={"description": "语义规则"})])
+    monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb())
+    app.dependency_overrides[get_db] = lambda: fake
+
+    resp = client.put("/api/v1/compliance/rules/1", json={"content": "非对象字符串"})
+    assert resp.status_code == 400
+    assert "content" in resp.json()["message"]
+    assert not fake.committed  # 校验失败不落库
+
+
 def test_update_rule_not_found_404(client):
     """编辑不存在的规则 → 404"""
     resp = client.put("/api/v1/compliance/rules/999", json={"severity": "low"})

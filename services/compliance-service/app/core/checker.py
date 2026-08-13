@@ -61,7 +61,9 @@ class ComplianceChecker:
         except Exception as exc:
             logger.error("数据库规则加载失败，仅用 YAML（危险：DB 规则不生效）: %s", exc)
 
-        # 3. 仅保留 enabled 的规则
+        # 3. 仅保留 enabled 的规则 —— 唯一的 enabled 过滤点（2026-08-13 D1）：
+        # DB 禁用行（enabled=False）必须能压掉 YAML 同 id 规则的 enabled: true，
+        # 所以过滤不能在 SQL 层做，统一在这里剔除 disabled，保持单次过滤语义。
         rules = [r for r in rules if r.get("enabled", True)]
         self.rules = rules
         self._compile_rules()
@@ -72,15 +74,27 @@ class ComplianceChecker:
         self._rules_loaded_at = time.time()
 
     def _load_db_rules(self) -> List[Dict]:
-        """从 compliance_rules 表加载启用的规则（引擎格式）"""
+        """从 compliance_rules 表加载全部规则行（含 enabled=False，引擎格式）
+
+        2026-08-13 D1：不再在 SQL 层过滤 enabled —— 禁用是运营动作，禁用行必须
+        能覆盖 YAML 同 id 规则；enabled 的统一过滤在 _reload_rules 第 3 步做。
+        2026-08-13 D2：content 非 dict 的坏行跳过 + warning —— 否则 content.get()
+        抛 AttributeError，被上层 except 吞掉后全部 DB 规则被整体丢弃。
+        """
         from shared.common.db_session import SessionLocal
         from shared.models.compliance import ComplianceRule
         db = SessionLocal()
         try:
-            rows = db.query(ComplianceRule).filter(ComplianceRule.enabled == True).all()  # noqa: E712
+            rows = db.query(ComplianceRule).all()
             out = []
             for r in rows:
                 content = r.content or {}
+                if not isinstance(content, dict):
+                    logger.warning(
+                        "规则 %s 的 content 不是对象（%s），跳过该行 —— 单行坏数据会毒化全部 DB 规则加载",
+                        r.rule_code, type(content).__name__,
+                    )
+                    continue
                 out.append({
                     "id": r.rule_code,
                     "name": r.rule_name,
@@ -97,7 +111,11 @@ class ComplianceChecker:
 
     @staticmethod
     def _merge_rules(yaml_rules: List[Dict], db_rules: List[Dict]) -> List[Dict]:
-        """DB 覆盖 YAML：同 id 以 DB 为准，YAML 独有的保留"""
+        """DB 覆盖 YAML：同 id 以 DB 为准（含 enabled=False 的禁用行 —— 禁用必须能
+        压掉 YAML 同 id 规则的 enabled: true），YAML 独有的保留。
+        2026-08-13 D1：_load_db_rules 已加载禁用行，setdefault 天然保留 DB 覆盖语义；
+        enabled 最终统一在 _reload_rules 第 3 步过滤，不在这里做。
+        """
         by_id = {r["id"]: r for r in db_rules}
         for r in yaml_rules:
             by_id.setdefault(r["id"], r)
