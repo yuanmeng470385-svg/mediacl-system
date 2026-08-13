@@ -14,6 +14,7 @@
 """
 
 import re
+import asyncio
 import logging
 from typing import Optional
 
@@ -21,6 +22,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from shared.common.auth import create_token, get_current_user
+from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.response import success, ParamError, AuthError, BusinessError
 
@@ -46,6 +48,12 @@ PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 _ERR_CODE_LOGIN = "手机号或验证码错误"
 _ERR_PWD_LOGIN = "用户名或密码错误"
 
+# A1 时序枚举防护：用户不存在/已停用/未设密码的失败路径会"秒回"（不执行
+# bcrypt），与"密码错误"路径（一次 bcrypt 校验，约百毫秒级）存在可探测的
+# 耗时差。本常量是固定合法的 bcrypt 哈希（rounds=12，仅用于拉平耗时，
+# 不参与任何真实比对），失败路径用它补一次真实校验。
+_DUMMY_PASSWORD_HASH = "$2b$12$kp0.wW8C1t9GBcPh2EN9Kety7cmEClhYS/tCrN.iyGC7lAe1xHcyW"
+
 # ---- 依赖：验证码存储 / 短信发送器（单测通过 dependency_overrides 注入替身）----
 
 _code_store_singleton: Optional[CodeStore] = None
@@ -58,8 +66,20 @@ def get_code_store() -> CodeStore:
     return _code_store_singleton
 
 
+# A8：发送器实例模块级缓存（provider -> sender）。aliyun SDK client 构造有
+# 开销，每次请求重建会拖慢 send-code。配置切换时自动重建。
+# 线程安全说明：send_code 经 asyncio.to_thread 在线程池并发调用，
+# AliyunSmsSender 的 SDK client 无共享可变状态（每次调用独立构造请求对象）、
+# ConsoleSender 无状态，两种现有实现并发安全；未来新增有状态实现需自行加锁。
+_sender_cache: Optional[tuple] = None
+
+
 def get_sender():
-    return get_sms_sender(settings.SMS_PROVIDER)
+    global _sender_cache
+    provider = settings.SMS_PROVIDER.strip().lower()
+    if _sender_cache is None or _sender_cache[0] != provider:
+        _sender_cache = (provider, get_sms_sender(settings.SMS_PROVIDER))
+    return _sender_cache[1]
 
 
 def _client_ip(request: Request) -> Optional[str]:
@@ -84,6 +104,10 @@ async def send_code(
     Request:  {"phone": "13800000000"}
     Response: {"expire_seconds": 300}   dev 模式下额外返回 {"code": "123456"}
     """
+    # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛 AttributeError 500
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     phone = str(payload.get("phone") or "").strip()
     if not PHONE_RE.match(phone):
         raise ParamError("手机号格式不正确")
@@ -103,12 +127,22 @@ async def send_code(
     if UserRepo.is_active(user):
         issued = generate_code(settings.CODE_LENGTH)
         try:
-            store.save(phone, issued, settings.CODE_TTL_SECONDS, settings.CODE_RESEND_SECONDS)
+            saved = store.save(
+                phone, issued, settings.CODE_TTL_SECONDS, settings.CODE_RESEND_SECONDS
+            )
         except CodeStoreError as exc:
             logger.error(f"验证码写入失败: {exc}")
             raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
+        if not saved:
+            # A9：冷却检查与 save 之间不再有竞态——save 用 SET NX，键已存在
+            # （并发请求已先写入）时返回 False。这里按冷却处理（响应码与
+            # in_cooldown 一致），后到者不再覆盖先发验证码（覆盖会让用户拿到废码）。
+            # 注：验证码 TTL（默认 300s）大于冷却（60s）时，冷却结束但验证码仍
+            # 在存的重发请求也会走到这里——先发验证码未被覆盖，行为可接受。
+            raise BusinessError("验证码已发送，请稍后再试", code=4002)
         try:
-            sender.send_code(phone, issued)
+            # A8：send_sms 是同步阻塞网络调用，丢线程池执行，不阻塞事件循环
+            await asyncio.to_thread(sender.send_code, phone, issued)
         except SmsSendError as exc:
             logger.error(f"短信发送失败 phone={phone}: {exc}")
             raise BusinessError(f"短信发送失败: {exc}", code=6001) from exc
@@ -120,6 +154,12 @@ async def send_code(
             store.drop(phone)
         except CodeStoreError:
             pass
+        # A7（缓解非根治）：正常路径走了一次真实短信发送（网络往返），
+        # 未注册路径少了这一步、响应明显更快。aliyun 通道下用固定延迟拉平
+        # 耗时特征。注意：真实网络抖动远大于该固定值，这只是缓解统计层面的
+        # 明显偏差，根治需网关/风控层统一延迟策略。
+        if settings.SMS_PROVIDER.strip().lower() == "aliyun":
+            await asyncio.sleep(0.2)
         logger.info("send-code 请求的手机号未注册或已停用，静默处理")
 
     await write_audit_log(
@@ -129,7 +169,10 @@ async def send_code(
         resource_id=phone,
         client_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
-        request_id=request.headers.get("x-request-id"),
+        # A6：取 RequestIDMiddleware 校验过的上下文 ID（超长/非法头会被中间件
+        # 替换成新 UUID），不用原始 X-Request-ID 头——超长头会把审计列撑爆，
+        # 且审计 write 失败被吞时会连自己的审计都抹掉
+        request_id=get_request_id() or None,
     )
 
     data = {"expire_seconds": settings.CODE_TTL_SECONDS}
@@ -155,6 +198,10 @@ async def login(
 
     Response: {"token": "...", "user": {...}}
     """
+    # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛 AttributeError 500
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     phone = str(payload.get("phone") or "").strip()
     code = str(payload.get("code") or "").strip()
     username = str(payload.get("username") or "").strip()
@@ -189,7 +236,8 @@ async def login(
         after_value={"method": "sms_code" if phone else "password", "role": user.role},
         client_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
-        request_id=request.headers.get("x-request-id"),
+        # A6：同 send-code，用中间件校验过的上下文 request_id，不用原始头
+        request_id=get_request_id() or None,
     )
     logger.info(f"登录成功 user_id={user.id} role={user.role}")
 
@@ -228,7 +276,8 @@ async def _write_login_failed_audit(
         after_value={"method": method, "username": username or None, "phone": phone or None},
         client_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
-        request_id=request.headers.get("x-request-id"),
+        # A6：同 send-code，用中间件校验过的上下文 request_id，不用原始头
+        request_id=get_request_id() or None,
     )
 
 
@@ -265,9 +314,23 @@ def _login_by_password(db: Session, username: str, password: str):
     """用户名 + 密码
 
     注意：当前没有做账号级失败锁定，暴力破解只受网关 IP 限流约束。
+
+    A1 时序枚举防护：用户不存在/已停用/未设密码这些"秒回"分支都会对固定
+    dummy hash 执行一次真实 bcrypt 校验，把耗时拉到与"密码错误"路径同一量级，
+    防用响应时间探测账号是否存在。各分支对外文案完全一致。
     """
     user = UserRepo.get_by_username(db, username)
-    if not UserRepo.is_active(user) or not verify_password(password, user.password_hash):
+    if not UserRepo.is_active(user):
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        logger.info(f"密码登录失败 username={username}")
+        raise AuthError(_ERR_PWD_LOGIN)
+    if not user.password_hash:
+        # 未设密码：verify_password 对空 hash 直接返回 False，不产生 bcrypt
+        # 耗时，这里补一次 dummy 校验拉平耗时
+        verify_password(password, _DUMMY_PASSWORD_HASH)
+        logger.info(f"密码登录失败 username={username}")
+        raise AuthError(_ERR_PWD_LOGIN)
+    if not verify_password(password, user.password_hash):
         logger.info(f"密码登录失败 username={username}")
         raise AuthError(_ERR_PWD_LOGIN)
     return user

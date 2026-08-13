@@ -56,6 +56,11 @@ async def write_log(
             "request_id": "uuid"
         }
     """
+    # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛
+    # AttributeError 500，也防 `**request` 解包异常
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     # 链路 ID 兜底（需求 7.1）：body 未带 request_id 时以内部调用头
     # X-Request-ID 为准（internal_headers() 保证必带），审计记录可全链路关联
     if not request.get("request_id"):
@@ -87,6 +92,11 @@ async def search_logs(
 
     支持按时间、用户、服务、操作类型、风险等级筛选
     """
+    # A4：时间参数预检——非法格式直接 ParamError，不把脏字符串交给数据库比较
+    # （此前非法值会被 SQL 绑定当字符串比，产生诡异的空结果或 500）
+    start_time = _parse_iso_time(start_time, "start_time")
+    end_time = _parse_iso_time(end_time, "end_time")
+
     query = db.query(AuditLog)
 
     if user_id:
@@ -161,12 +171,21 @@ async def export_report(
             "risk_level": "high"                     // 可选
         }
     """
+    # A3：与 /log 一致——非 JSON 对象直接参数错误，不让 dict 方法抛 AttributeError 500
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     query = db.query(AuditLog)
 
-    start_time = request.get("start_time")
-    end_time = request.get("end_time")
+    start_time_raw = request.get("start_time")
+    end_time_raw = request.get("end_time")
     service_name = request.get("service_name")
     risk_level = request.get("risk_level")
+
+    # A4：时间参数预检（非法 → ParamError 1000）。过滤用解析后的 datetime，
+    # 审计留痕用原始字符串（JSON 可序列化，且忠实记录请求原值）
+    start_time = _parse_iso_time(start_time_raw, "start_time")
+    end_time = _parse_iso_time(end_time_raw, "end_time")
 
     if start_time:
         query = query.filter(AuditLog.timestamp >= start_time)
@@ -222,8 +241,8 @@ async def export_report(
         action="audit_report_export",
         resource_type="audit_report",
         after_value={
-            "start_time": request.get("start_time"),
-            "end_time": request.get("end_time"),
+            "start_time": start_time_raw,
+            "end_time": end_time_raw,
             "service_name": request.get("service_name"),
             "risk_level": request.get("risk_level"),
             "rows": len(logs),
@@ -291,6 +310,19 @@ async def audit_stats(
 
 
 # ==================== 辅助 ====================
+
+def _parse_iso_time(value: Optional[str], name: str) -> Optional[datetime]:
+    """ISO 时间参数预检（A4）：非法格式直接 ParamError 1000。
+
+    返回解析后的 naive datetime 供 SQL 比较；value 为空时返回 None（不过滤）。
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError):
+        raise ParamError(f"{name} 格式不正确，应为 ISO 格式（如 2026-07-01T00:00:00）")
+
 
 def _client_ip(request: Request) -> Optional[str]:
     """取真实来源 IP。网关转发时以 X-Forwarded-For 首段为准。"""

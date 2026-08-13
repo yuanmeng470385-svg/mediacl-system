@@ -20,6 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from shared.common.auth import require_roles
 from shared.common.db_session import get_db
@@ -40,7 +41,8 @@ VALID_ROLES = {"admin", "manager", "rep", "compliance", "medical", "finance"}
 VALID_STATUSES = {"active", "disabled"}
 
 # 可更新字段白名单。role 虽在清单里，但只有 admin 能改（见 update_user 的校验）
-UPDATEABLE_FIELDS = {"full_name", "phone", "email", "role", "region", "status"}
+# manager_id 一并纳入（A2）：写库前预检存在性，不再落外键 IntegrityError 500
+UPDATEABLE_FIELDS = {"full_name", "phone", "email", "role", "region", "status", "manager_id"}
 
 
 def _reload_current_user(db: Session, current_user: dict) -> User:
@@ -91,11 +93,18 @@ async def create_user(
     db: Session = Depends(get_db),
 ):
     """创建用户。密码留空（password_hash=None）→ 该账号无法密码登录，需 seed_admin 设置"""
+    # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛 AttributeError 500
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     actor = _reload_current_user(db, current_user)
     username = (request.get("username") or "").strip()
     full_name = (request.get("full_name") or request.get("name") or "").strip()
     role = request.get("role", "rep")
-    phone = request.get("phone")
+    # 手机号归一化：空串视为未填（NULL）——唯一索引 uq_users_phone 只约束
+    # 非空值，多个用户不填手机号合法
+    phone = str(request.get("phone")).strip() if request.get("phone") is not None else None
+    phone = phone or None
 
     if not username or not full_name:
         raise ParamError("username 和 full_name 不能为空")
@@ -110,6 +119,20 @@ async def create_user(
         raise ParamError(f"status 不合法，可选：{'/'.join(sorted(VALID_STATUSES))}")
     if db.query(User).filter(User.username == username).first():
         raise BusinessError(f"用户名已存在: {username}", code=4001)
+    # A2：手机号查重预检（BusinessError 4001），替代 commit 时撞唯一索引的
+    # IntegrityError 500；手机号是登录凭据，重复会劫持验证码登录通道
+    if phone and db.query(User).filter(User.phone == phone).first():
+        raise BusinessError(f"手机号已被其他用户使用: {phone}", code=4001)
+    # A2：manager_id 存在性预检（ParamError 1000），替代 commit 时外键约束
+    # 的 IntegrityError 500
+    manager_id = request.get("manager_id")
+    if manager_id is not None:
+        try:
+            manager_id = int(manager_id)
+        except (TypeError, ValueError):
+            raise ParamError("manager_id 必须是整数")
+        if not UserRepo.get_by_id(db, manager_id):
+            raise ParamError(f"manager_id 不存在: {manager_id}")
 
     user = User(
         username=username,
@@ -118,11 +141,17 @@ async def create_user(
         email=request.get("email"),
         role=role,
         region=request.get("region"),
-        manager_id=request.get("manager_id"),
+        manager_id=manager_id,
         status=status,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A2 TOCTOU 兜底：预检与提交之间并发写入撞唯一索引（如手机号），
+        # 转为可读业务错误而非 500（终审发现 2）
+        db.rollback()
+        raise BusinessError("用户已存在（手机号重复或并发创建）", code=4001)
     db.refresh(user)
     logger.info(f"创建用户: {username} role={role} by user {actor.id}")
     await write_audit_log(
@@ -141,6 +170,10 @@ async def update_user(
     db: Session = Depends(get_db),
 ):
     """更新用户（白名单字段）。status=disabled 会立即停用该账号（profile/me 每次重读）"""
+    # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛 AttributeError 500
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
     actor = _reload_current_user(db, current_user)
     user = UserRepo.get_by_id(db, user_id)
     if not user:
@@ -157,6 +190,24 @@ async def update_user(
     # 密码登录不受影响但 SMS 通道会被劫持）—— manager 改自己的手机号同样拒绝（同角色自改限制）
     if "phone" in changed and actor.role != "admin":
         raise PermissionError("仅 admin 可变更用户手机号")
+    # A2：手机号查重预检（排除自身，BusinessError 4001），替代 commit 时撞唯一
+    # 索引的 IntegrityError 500；空串归一为 NULL（清空手机号）
+    if "phone" in changed:
+        new_phone = str(changed["phone"]).strip() or None
+        if new_phone and db.query(User).filter(
+            User.phone == new_phone, User.id != user_id
+        ).first():
+            raise BusinessError(f"手机号已被其他用户使用: {new_phone}", code=4001)
+        changed["phone"] = new_phone
+    # A2：manager_id 存在性预检（ParamError 1000），替代 commit 时外键约束的
+    # IntegrityError 500
+    if "manager_id" in changed:
+        try:
+            changed["manager_id"] = int(changed["manager_id"])
+        except (TypeError, ValueError):
+            raise ParamError("manager_id 必须是整数")
+        if not UserRepo.get_by_id(db, changed["manager_id"]):
+            raise ParamError(f"manager_id 不存在: {changed['manager_id']}")
     # status 只接受枚举值，拒绝垃圾状态
     if "status" in changed and changed["status"] not in VALID_STATUSES:
         raise ParamError(f"status 不合法，可选：{'/'.join(sorted(VALID_STATUSES))}")
@@ -171,7 +222,12 @@ async def update_user(
     before_values = {f: getattr(user, f) for f in changed}
     for field, value in changed.items():
         setattr(user, field, value)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A2 TOCTOU 兜底：手机号等唯一约束在预检与提交之间被并发占用（终审发现 2）
+        db.rollback()
+        raise BusinessError("用户信息冲突（手机号重复或并发修改）", code=4001)
     db.refresh(user)
     logger.info(f"更新用户: id={user_id} fields={list(changed)} by user {actor.id}")
     await write_audit_log(

@@ -106,3 +106,28 @@ class TestConsumeLua:
         store.save(TEST_PHONE, "123456", ttl=1, cooldown=60)
         time.sleep(1.1)
         assert store.consume(TEST_PHONE, "123456", 5) == CONSUME_NOTFOUND
+
+
+class TestSaveNx:
+    """A9 回归：save 的验证码键 SET NX —— 并发双发只有一个写入成功，
+    后到者返回 False 且不覆盖先发验证码（send-code 冷却检查与 save 之间
+    不再有竞态，用户不会拿到被覆盖的废码）"""
+
+    def test_键已存在时save返回False不覆盖(self, store):
+        assert store.save(TEST_PHONE, "111111", ttl=300, cooldown=60) is True
+        # 第二个 save 撞上仍在存的键：返回 False，不覆盖
+        assert store.save(TEST_PHONE, "222222", ttl=300, cooldown=60) is False
+        # 先发码仍在存且可校验，后到者的码从未生效
+        assert store.consume(TEST_PHONE, "111111", 5) == CONSUME_MATCHED
+
+    def test_并发save只有一个成功(self, store):
+        """真实 Redis 并发：SET NX 在 Lua 内原子执行，只有一个 True"""
+        def hit(_):
+            return store.save(TEST_PHONE, "123456", ttl=300, cooldown=60)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(hit, range(8)))
+        assert results.count(True) == 1
+        assert results.count(False) == 7
+        # 唯一写入的验证码可正常校验
+        assert store.consume(TEST_PHONE, "123456", 5) == CONSUME_MATCHED

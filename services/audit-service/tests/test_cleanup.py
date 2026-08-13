@@ -64,6 +64,22 @@ class TestCleanupExpiredLogs:
         assert result["deleted"] == 0
         assert result["batches"] == 1
 
+    def test_保留天数非法时跳过清理并记error日志(self, caplog):
+        """A5：retention_days <= 0 会把 cutoff 推到"现在"甚至未来，等于删光
+        全部审计留痕。防误配：跳过清理（不执行任何 DELETE）、error 日志留痕"""
+        import logging
+
+        with caplog.at_level(logging.ERROR):
+            db = _make_db([0])
+            for bad in (0, -30):
+                result = cleanup_expired_logs(db, retention_days=bad, batch=5000)
+                assert result == {"deleted": 0, "batches": 0, "cutoff": None}
+            # 一次 DELETE 都没执行
+            assert len(db.calls) == 0
+        assert len(caplog.records) == 2
+        assert all("跳过清理" in rec.message for rec in caplog.records)
+        assert all(rec.levelno >= logging.ERROR for rec in caplog.records)
+
 
 class TestRunCleanupOnce:
     def test_permission_failure_raises_not_silent(self, monkeypatch):

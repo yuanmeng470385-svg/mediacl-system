@@ -16,6 +16,30 @@ from shared.models.audit_log import AuditLog
 
 logger = logging.getLogger(__name__)
 
+# A6 审计防静默丢：字符串列长度上限（与 shared/models/audit_log.py 及
+# scripts/init_db.sql 对齐）。调用方（各业务服务）塞超长值时按列长截断，
+# 保证至少落一条截断记录——否则整条 INSERT 因 DataError 失败、被
+# log() 的 except 吞掉后审计留痕静默丢失。user_agent 是 TEXT 列不截断。
+_COLUMN_MAX_LEN = {
+    "service_name": 50,
+    "action": 100,
+    "resource_type": 50,
+    "resource_id": 100,
+    "ai_model": 50,
+    "ai_prompt_hash": 100,
+    "ai_response_hash": 100,
+    "risk_level": 20,
+    "client_ip": 50,
+    "request_id": 100,
+}
+
+
+def _truncate(value, max_len: int):
+    """字符串按列长截断；非字符串原样返回。"""
+    if isinstance(value, str) and len(value) > max_len:
+        return value[:max_len]
+    return value
+
 
 class AuditLogger:
     """审计日志记录器 — 异步写入，不影响主业务"""
@@ -66,22 +90,22 @@ class AuditLogger:
 
             log_entry = AuditLog(
                 timestamp=datetime.now(timezone.utc),
-                service_name=service_name,
+                service_name=_truncate(service_name, _COLUMN_MAX_LEN["service_name"]),
                 user_id=user_id,
-                action=action,
-                resource_type=resource_type,
-                resource_id=resource_id,
+                action=_truncate(action, _COLUMN_MAX_LEN["action"]),
+                resource_type=_truncate(resource_type, _COLUMN_MAX_LEN["resource_type"]),
+                resource_id=_truncate(resource_id, _COLUMN_MAX_LEN["resource_id"]),
                 before_value=before_value,
                 after_value=after_value,
                 ai_involved=ai_involved,
-                ai_model=ai_model,
-                ai_prompt_hash=ai_prompt_hash,
-                ai_response_hash=ai_response_hash,
+                ai_model=_truncate(ai_model, _COLUMN_MAX_LEN["ai_model"]),
+                ai_prompt_hash=_truncate(ai_prompt_hash, _COLUMN_MAX_LEN["ai_prompt_hash"]),
+                ai_response_hash=_truncate(ai_response_hash, _COLUMN_MAX_LEN["ai_response_hash"]),
                 compliance_result=compliance_result,
-                risk_level=risk_level,
-                client_ip=client_ip,
+                risk_level=_truncate(risk_level, _COLUMN_MAX_LEN["risk_level"]),
+                client_ip=_truncate(client_ip, _COLUMN_MAX_LEN["client_ip"]),
                 user_agent=user_agent,
-                request_id=request_id,
+                request_id=_truncate(request_id, _COLUMN_MAX_LEN["request_id"]),
             )
             db.add(log_entry)
             db.commit()

@@ -22,8 +22,18 @@ def cleanup_expired_logs(db, retention_days: int, batch: int = _DEFAULT_BATCH) -
 
     按 id 排序 LIMIT batch 循环删除，避免单条长事务 DELETE 锁住 audit_logs
     （idx_audit_timestamp 支撑范围条件）。返回 {deleted, batches, cutoff}。
+
+    A5：retention_days <= 0 时跳过清理并记 error 日志——0 天会把 cutoff 推到
+    "现在"（负值更是推到未来），等于一次删光全部审计留痕。防误配。
     """
     from sqlalchemy import text
+
+    if retention_days <= 0:
+        logger.error(
+            "审计日志保留天数配置非法（AUDIT_LOG_RETENTION_DAYS=%s），必须 > 0；"
+            "本次跳过清理，防止误删全部审计留痕", retention_days,
+        )
+        return {"deleted": 0, "batches": 0, "cutoff": None}
 
     cutoff = datetime.utcnow() - timedelta(days=retention_days)
     deleted = 0

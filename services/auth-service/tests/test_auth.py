@@ -190,6 +190,73 @@ class TestSendCode:
         assert r.status_code == 500
         assert r.json()["code"] == 5004
 
+    def test_非dict_body返回参数错误(self):
+        """A3：JSON 数组等非对象 body → 4xx code 1000（FastAPI 预校验 422 或
+        端点 isinstance 校验 400），绝不落 AttributeError 500"""
+        r = client.post("/api/v1/auth/send-code", json=["13800000001"])
+        assert r.status_code in (400, 422)
+        assert r.json()["code"] == 1000
+
+    def test_验证码键已存在时save返回False按冷却处理(self):
+        """A9：冷却检查与 save 之间的竞态——冷却键被绕过（如并发后到者）但
+        验证码键仍在存时，save 的 SET NX 返回 False → 按冷却 4002 处理，
+        先发验证码不被覆盖（用户拿到的码仍然有效）"""
+        _send_code(ACTIVE_PHONE)
+        code = _issued_code(ACTIVE_PHONE)
+        # 模拟并发后到者：冷却键已过期/被清，但验证码键还在存
+        store._cooldowns.clear()
+        r = _send_code(ACTIVE_PHONE)
+        assert r.status_code == 422
+        assert r.json()["code"] == 4002
+        # 后到者没有覆盖先发码：真实短信只发了一条，且先发码仍可登录
+        assert len(sender.sent) == 1
+        r2 = client.post("/api/v1/auth/login", json={"phone": ACTIVE_PHONE, "code": code})
+        assert r2.status_code == 200
+
+    def test_审计request_id用中间件校验值而非原始头(self, monkeypatch):
+        """A6：写审计的 request_id 取 RequestIDMiddleware 校验过的上下文值——
+        超长原始头会被中间件换成新 UUID，不再把 300 字符的原始头塞进审计列
+        （列长 100，超长会 DataError 整条失败、审计 write 异常被吞 = 抹掉自己）"""
+        import app.api.auth as auth_api
+
+        calls = []
+
+        async def fake_write(**kw):
+            calls.append(kw)
+
+        monkeypatch.setattr(auth_api, "write_audit_log", fake_write)
+        huge = "x" * 300
+        r = client.post("/api/v1/auth/send-code",
+                        json={"phone": ACTIVE_PHONE},
+                        headers={"X-Request-ID": huge})
+        assert r.status_code == 200
+        assert len(calls) == 1
+        rid = calls[0].get("request_id")
+        assert rid is not None and rid != huge
+        assert len(rid) <= 100
+
+    def test_未知手机号在aliyun通道下做等时长延迟补偿(self, monkeypatch):
+        """A7：aliyun 通道下未注册手机号不发短信、响应比正常路径快一个网络
+        往返，用固定延迟拉平耗时特征（缓解非根治）。console 通道不补偿。"""
+        import app.api.auth as auth_api
+
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(auth_api.asyncio, "sleep", fake_sleep)
+        monkeypatch.setattr(auth_api.settings, "SMS_PROVIDER", "aliyun")
+        assert _send_code(UNKNOWN_PHONE).status_code == 200
+        assert sleeps == [0.2]
+
+        # console 通道（本地/CI）无真实网络发送，不补偿
+        sleeps.clear()
+        store._cooldowns.clear()
+        monkeypatch.setattr(auth_api.settings, "SMS_PROVIDER", "console")
+        assert _send_code(UNKNOWN_PHONE).status_code == 200
+        assert sleeps == []
+
 
 # ==================== 验证码登录 ====================
 
@@ -345,6 +412,35 @@ class TestLoginByPassword:
         assert r.status_code == 400
         assert r.json()["code"] == 1000
 
+    def test_非dict_body返回参数错误(self):
+        """A3：JSON 数组等非对象 body → 4xx code 1000（FastAPI 预校验 422 或
+        端点 isinstance 校验 400），绝不落 AttributeError 500"""
+        r = client.post("/api/v1/auth/login", json=["x"])
+        assert r.status_code in (400, 422)
+        assert r.json()["code"] == 1000
+
+    def test_不存在与未设密码路径都执行bcrypt校验(self, monkeypatch):
+        """A1 时序枚举防护：不测耗时（不稳定），改为断言"用户不存在"与
+        "未设密码"两条秒回路径都补执行了一次真实 bcrypt 校验（dummy hash），
+        与"密码错误"路径耗时同量级，防响应时间探测账号存在性"""
+        import app.api.auth as auth_api
+
+        real_verify = auth_api.verify_password
+        calls = []
+
+        def spy(password, hashed):
+            calls.append((password, hashed))
+            return real_verify(password, hashed)
+
+        monkeypatch.setattr(auth_api, "verify_password", spy)
+        r1 = client.post("/api/v1/auth/login", json={"username": "nobody", "password": "wrong"})
+        r2 = client.post("/api/v1/auth/login", json={"username": "nopwd", "password": "wrong"})
+        assert r1.status_code == r2.status_code == 401
+        assert r1.json()["message"] == r2.json()["message"]
+        # 两条路径各执行了一次校验，且都打在 dummy hash 上（真实比对是幌子）
+        assert len(calls) == 2, calls
+        assert all(h == auth_api._DUMMY_PASSWORD_HASH for _, h in calls)
+
 
 # ==================== 当前用户 ====================
 
@@ -494,9 +590,10 @@ class TestUserManagementSecurity:
         db.close()
         r = client.get("/api/v1/users", headers=h)
         assert r.status_code == 401
-        # get_current_user 抛 HTTPException（FastAPI 默认渲染 {detail: {...}}，
-        # 平铺 {code, message, data} 只覆盖 AppError 系）
-        assert r.json()["detail"]["code"] == 2003
+        # get_current_user 抛 HTTPException(detail={code:2003,...})；
+        # S1（2026-08-13）起 shared 异常处理器把含 code 的 detail 原样平铺成
+        # {code, message, data}，不再套 FastAPI 默认的 {detail: {...}}
+        assert r.json()["code"] == 2003
 
     def test_被降级用户持旧token调users端点被拒(self, seeded_managers):
         """降级即时生效：库中 role 与 token 声明不一致 → 403，以库为准"""
@@ -508,3 +605,59 @@ class TestUserManagementSecurity:
         r = client.put("/api/v1/users/12", headers=h, json={"full_name": "改名"})
         assert r.status_code == 403
         assert r.json()["code"] == 3000
+
+    def test_create重复手机号返回4001不落500(self, seeded_managers):
+        """A2：手机号查重预检（BusinessError 4001），替代 commit 时撞唯一索引
+        uq_users_phone 的 IntegrityError 500。手机号是登录凭据，重复会劫持
+        验证码登录通道"""
+        r = client.post("/api/v1/users", headers=self._auth("admin01"),
+                        json={"username": "dup_phone", "full_name": "重复手机号",
+                              "phone": ACTIVE_PHONE})
+        # 业务错误码 4001 按共享异常处理器映射为 HTTP 422（非 500 即达修复目的）
+        assert r.status_code == 422
+        assert r.json()["code"] == 4001
+        db = TestSession()
+        try:
+            assert db.query(User).filter(User.username == "dup_phone").first() is None
+        finally:
+            db.close()
+
+    def test_create坏manager_id返回1000不落500(self, seeded_managers):
+        """A2：manager_id 存在性预检（ParamError 1000），替代 commit 时外键
+        约束的 IntegrityError 500；非整数同样 1000"""
+        h = self._auth("admin01")
+        for bad in (99999, "not-an-int"):
+            r = client.post("/api/v1/users", headers=h,
+                            json={"username": "bad_mgr", "full_name": "坏经理",
+                                  "manager_id": bad})
+            assert r.status_code == 400, bad
+            assert r.json()["code"] == 1000
+
+    def test_update重复手机号返回4001不落500(self, seeded_managers):
+        """A2：更新手机号查重（排除自身）——撞唯一索引前拦成 4001"""
+        r = client.put("/api/v1/users/12", headers=self._auth("admin01"),
+                       json={"phone": ACTIVE_PHONE})
+        # 业务错误码 4001 按共享异常处理器映射为 HTTP 422（非 500 即达修复目的）
+        assert r.status_code == 422
+        assert r.json()["code"] == 4001
+
+    def test_update坏manager_id返回1000不落500(self, seeded_managers):
+        """A2：更新 manager_id 预检存在性——不存在的 id 与非整数都 1000"""
+        h = self._auth("admin01")
+        for bad in (99999, "not-an-int"):
+            r = client.put("/api/v1/users/12", headers=h, json={"manager_id": bad})
+            assert r.status_code == 400, bad
+            assert r.json()["code"] == 1000
+
+    def test_update合法manager_id可变更(self, seeded_managers):
+        """A2 正向：manager_id 进更新白名单，合法变更不受预检影响"""
+        r = client.put("/api/v1/users/12", headers=self._auth("admin01"),
+                       json={"manager_id": 11})
+        assert r.status_code == 200
+
+    def test_create非dict_body返回参数错误(self, seeded_managers):
+        """A3：JSON 数组等非对象 body → 4xx code 1000（FastAPI 预校验 422 或
+        端点 isinstance 校验 400），绝不落 AttributeError 500"""
+        r = client.post("/api/v1/users", headers=self._auth("admin01"), json=[1, 2])
+        assert r.status_code in (400, 422)
+        assert r.json()["code"] == 1000

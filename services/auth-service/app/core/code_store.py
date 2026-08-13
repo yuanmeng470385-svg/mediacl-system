@@ -36,8 +36,13 @@ class CodeStore(ABC):
         """返回还需等待的秒数；0 表示可以发送"""
 
     @abstractmethod
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> None:
-        """写入验证码并起冷却计时"""
+    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
+        """写入验证码并起冷却计时。
+
+        A9（并发安全）：验证码键用 SET NX 语义——键已存在（并发请求已先
+        写入）时返回 False 且不覆盖已有验证码，调用方按冷却处理，防止并发
+        双发互相覆盖（后到者覆盖先发码会让用户拿到废码）。写入成功返回 True。
+        """
 
     @abstractmethod
     def consume(self, phone: str, code: str, max_attempts: int) -> str:
@@ -125,6 +130,17 @@ return {2}
 """
 
 
+# A9：save 的「SET NX + 冷却写」收进同一 Lua 脚本，Redis 单线程原子执行：
+#   并发双发只有一个写入成功（返回 1），后到者返回 0 且不重置先发者的冷却计时。
+_SAVE_NX_LUA = """
+if redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]), 'NX') then
+  redis.call('SETEX', KEYS[2], tonumber(ARGV[3]), '1')
+  return {1}
+end
+return {0}
+"""
+
+
 class RedisCodeStore(CodeStore):
     """Redis 实现"""
 
@@ -144,13 +160,20 @@ class RedisCodeStore(CodeStore):
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
         return ttl if ttl and ttl > 0 else 0
 
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> None:
+    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
         payload = json.dumps({"code": code, "attempts": 0, "created_at": int(time.time())})
         try:
-            pipe = self._redis.pipeline()
-            pipe.setex(_key(phone), ttl, payload)
-            pipe.setex(_cooldown_key(phone), cooldown, "1")
-            pipe.execute()
+            return bool(
+                self._redis.eval(
+                    _SAVE_NX_LUA,
+                    2,
+                    _key(phone),
+                    _cooldown_key(phone),
+                    payload,
+                    str(int(ttl)),
+                    str(int(cooldown)),
+                )[0]
+            )
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
@@ -193,9 +216,14 @@ class MemoryCodeStore(CodeStore):
         remaining = int(expire - time.time())
         return remaining if remaining > 0 else 0
 
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> None:
+    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
+        # 模拟 Redis SET NX 语义（A9）：键已存在（未过期）时不覆盖、返回 False
+        entry = self._codes.get(phone)
+        if entry and entry["expire"] > time.time():
+            return False
         self._codes[phone] = {"code": code, "attempts": 0, "expire": time.time() + ttl}
         self._cooldowns[phone] = time.time() + cooldown
+        return True
 
     def consume(self, phone: str, code: str, max_attempts: int) -> str:
         with self._lock:

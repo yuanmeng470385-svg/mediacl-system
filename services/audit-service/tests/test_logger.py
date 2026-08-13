@@ -99,3 +99,33 @@ class TestAuditLogger:
             },
         )
         assert log_id == 1
+
+    def test_log超长字符串字段按列长截断(self):
+        """A6 防静默丢：超长字符串按列长截断落库，保证至少落一条截断记录，
+        而不是整条 INSERT 因 DataError 失败被 log() 的 except 吞掉（审计留痕
+        静默丢失）。列长与 shared/models/audit_log.py / init_db.sql 对齐"""
+        mock_db = _make_mock_db()
+        log_id = self.logger.log(
+            mock_db,
+            service_name="x" * 80,
+            action="a" * 200,
+            resource_type="t" * 60,
+            resource_id="r" * 150,
+            ai_model="m" * 60,
+            # risk_level 由 compliance_result 派生（非 log() 直接入参）
+            compliance_result={"risk_level": "high" * 10},
+            client_ip="1" * 60,
+            request_id="z" * 300,
+            user_agent="u" * 500,  # TEXT 列，不截断
+        )
+        assert log_id == 1
+        entry = mock_db.add.call_args.args[0]
+        assert len(entry.service_name) == 50
+        assert len(entry.action) == 100
+        assert len(entry.resource_type) == 50
+        assert len(entry.resource_id) == 100
+        assert len(entry.ai_model) == 50
+        assert len(entry.risk_level) == 20
+        assert len(entry.client_ip) == 50
+        assert len(entry.request_id) == 100
+        assert len(entry.user_agent) == 500
