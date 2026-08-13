@@ -36,6 +36,7 @@ export default function HCPSearchScreen() {
   const [deptFilter, setDeptFilter] = useState('全部');
   const [regionFilter, setRegionFilter] = useState('全部');
   const [showFilters, setShowFilters] = useState(false);
+  const [error, setError] = useState('');
 
   const loadHCPs = useCallback(async () => {
     try {
@@ -45,8 +46,10 @@ export default function HCPSearchScreen() {
       if (regionFilter !== '全部') params.region = regionFilter;
       const result = await hcpAPI.list(params);
       setHcps(result.items || []);
-    } catch {
-      setHcps([]);
+      setError('');
+    } catch (e: any) {
+      // G4：失败不再静默置空 —— 断网时置空会误显示"暂无医生数据"，改错误态 + 重试
+      setError(e?.message || '医生数据加载失败，请检查网络');
     } finally {
       setLoading(false);
     }
@@ -55,6 +58,12 @@ export default function HCPSearchScreen() {
   useEffect(() => {
     loadHCPs();
   }, [loadHCPs]);
+
+  const handleRetry = () => {
+    setLoading(true);
+    setError('');
+    loadHCPs();
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -202,6 +211,14 @@ export default function HCPSearchScreen() {
             <View style={styles.loadingArea}>
               <ActivityIndicator size="large" color={Colors.primary} />
             </View>
+          ) : error && hcps.length === 0 ? (
+            // G4：加载失败显示错误 + 重试（与全站错误态一致），不伪装成"暂无医生数据"
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{error}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} activeOpacity={0.8}>
+                <Text style={styles.retryText}>重试</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <EmptyState
               icon="doctor"
@@ -279,6 +296,16 @@ const styles = StyleSheet.create({
   // 列表
   list: { padding: Spacing.lg },
   loadingArea: { padding: Spacing.xxxl, alignItems: 'center' },
+  errorBox: { alignItems: 'center', padding: Spacing.xxxl },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
   hcpCard: {
     backgroundColor: Colors.white,
     borderRadius: BorderRadius.lg,

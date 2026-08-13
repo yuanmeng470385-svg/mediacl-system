@@ -34,6 +34,7 @@ export default function HomeScreen() {
   const [visits, setVisits] = useState<VisitRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
 
   const loadVisits = useCallback(async () => {
     try {
@@ -46,14 +47,22 @@ export default function HomeScreen() {
         date_from: today, date_to: `${today}T23:59:59`,
       });
       setVisits(result.items || []);
-    } catch {
-      setVisits([]);
+      setError('');
+    } catch (e: any) {
+      // G4：失败不再静默置空 —— 断网时置空会误显示"暂无拜访安排"，改错误态 + 重试
+      setError(e?.message || '拜访列表加载失败，请检查网络');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { loadVisits(); }, [loadVisits]);
+
+  const handleRetry = () => {
+    setLoading(true);
+    setError('');
+    loadVisits();
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -145,6 +154,14 @@ export default function HomeScreen() {
         <Text style={styles.sectionTitle}>今日拜访</Text>
         {loading ? (
           <View style={styles.loading}><Text style={styles.loadingText}>加载中...</Text></View>
+        ) : error && visits.length === 0 ? (
+          // G4：加载失败显示错误 + 重试（与全站错误态一致），不伪装成"暂无拜访安排"
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={handleRetry} activeOpacity={0.8}>
+              <Text style={styles.retryText}>重试</Text>
+            </TouchableOpacity>
+          </View>
         ) : visits.length === 0 ? (
           <EmptyState
             icon="calendar-blank-outline"
@@ -240,4 +257,14 @@ const styles = StyleSheet.create({
   quickLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, fontWeight: '600' },
   loading: { padding: Spacing.xxxl, alignItems: 'center' },
   loadingText: { color: Colors.textHint, fontSize: FontSize.sm },
+  errorBox: { alignItems: 'center', padding: Spacing.xxxl },
+  errorText: {
+    fontSize: FontSize.md, color: Colors.danger,
+    marginBottom: Spacing.lg, paddingHorizontal: Spacing.xl, textAlign: 'center',
+  },
+  retryBtn: {
+    backgroundColor: Colors.primary, borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+  },
+  retryText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
 });

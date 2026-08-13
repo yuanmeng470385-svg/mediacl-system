@@ -88,7 +88,8 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
-  evidence_level?: string;
+  // evidence_level 已移除（2026-08-13 低危批 G6）：后端 Conversation.to_dict 无该字段、
+  // 表也无该列，历史恢复时恒为 undefined。REST 聊天消息的证据等级在 ChatResponse.evidence_level。
   timestamp: string;
 }
 

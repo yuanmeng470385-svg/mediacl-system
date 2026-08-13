@@ -89,7 +89,11 @@ export default function VisitInProgressScreen() {
       // LLM 实时推荐：关键节点累加、话术建议取最新一轮（后端每轮 transcript 都带）
       if (result.key_nodes?.length) setKeyNodes((prev) => [...prev, ...result.key_nodes]);
       if (result.ai_suggestion) setAiSuggestion(result.ai_suggestion);
-    } catch {} finally { setSending(false); }
+    } catch (e: any) {
+      // G5：保存失败不再静默吞掉 —— 该句已进本地转写列表但未落库，
+      // 提示用户避免误以为已记录（与 speakTts/handleEndVisit 的失败提示风格一致）
+      Alert.alert('末句转写保存失败', e?.message || '该句未能保存到记录，请检查网络后重试');
+    } finally { setSending(false); }
   }, [visitId, elapsed]);
 
   // 朗读话术（TTS 失败只 Alert 提示，不阻塞转写流程）
@@ -415,7 +419,8 @@ export default function VisitInProgressScreen() {
           <Icon name="keyboard-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.simBtnText}>输入文字</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing}>
+        {/* G5：sending（transcript POST 在途）时禁用结束 —— 在途句未落库就结束会丢末句 */}
+        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing || sending}>
           <Icon name="stop-circle-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.endBtnText}>结束</Text>
         </TouchableOpacity>

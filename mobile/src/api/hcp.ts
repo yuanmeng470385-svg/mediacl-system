@@ -206,19 +206,9 @@ export const hcpAPI = {
     return (list as RawInteraction[]).map(mapInteraction);
   },
 
-  /** 新增医生 */
-  async create(data: Partial<HCP>): Promise<{ id: number }> {
-    return apiClient.request<{ id: number }>(
-      'POST',
-      '/api/v1/hcps',
-      data
-    );
-  },
-
-  /** 编辑医生 */
-  async update(id: number, data: Partial<HCP>): Promise<void> {
-    return apiClient.request('PUT', `/api/v1/hcps/${id}`, data);
-  },
+  // create/update 已删除（2026-08-13 低危批 G3）：无调用方，且传 Partial<HCP>
+  // 会带 id/ai_profile 等后端白名单之外的键，直接撞 hcp-service 400。
+  // TODO：后续需要医生录入功能时，按后端白名单字段单独定义请求形状。
 
   /** 添加标签 */
   async addTags(id: number, tags: string[]): Promise<void> {

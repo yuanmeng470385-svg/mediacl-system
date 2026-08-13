@@ -31,7 +31,9 @@ const typeLabels: Record<string, { icon: string; label: string }> = {
   news: { icon: 'newspaper-variant-outline', label: '资讯' },
 };
 
-const tabs = ['全部', '文献', '指南', '说明书'];
+// 「资讯」tab：mapDocType 已把 competitor/other/未知 doc_type 映射为 news（typeLabels.news）
+// 此前无此 tab，资讯类内容在列表可见但无法按 tab 筛选（只能走"全部"）
+const tabs = ['全部', '文献', '指南', '说明书', '资讯'];
 
 export default function ContentScreen() {
   const navigation = useNavigation<Nav>();

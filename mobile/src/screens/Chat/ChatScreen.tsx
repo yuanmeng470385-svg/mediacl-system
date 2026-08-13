@@ -102,7 +102,8 @@ export default function ChatScreen() {
               role: h.role === 'user' ? ('user' as const) : ('assistant' as const),
               content: h.content,
               citations: h.citations,
-              evidenceLevel: h.evidence_level,
+              // evidenceLevel 不取历史：Conversation.to_dict 无 evidence_level（G6），
+              // 历史行证据徽章恒空属误导，恢复时不展示（REST 新消息仍显示）
               // 历史行只有快照（无会话内主键）→ 反馈/收藏按钮不显示
               conversationId: null,
             })),

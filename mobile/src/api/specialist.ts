@@ -71,16 +71,10 @@ export const specialistAPI = {
     );
   },
 
-  /** 获取专员使用统计 */
-  async getStats(
-    id: number
-  ): Promise<{
-    total_questions: number;
-    avg_latency_ms: number;
-    favorite_count: number;
-  }> {
-    return apiClient.request('GET', `/api/v1/specialists/${id}/stats`);
-  },
+  // getStats 已删除（2026-08-13 低危批 G3）：无调用方，且原声明形状
+  // {total_questions, avg_latency_ms, favorite_count} 与后端 /specialists/{id}/stats
+  // 实际返回 {total_conversations, total_feedback, satisfaction_rate} 不符。
+  // TODO：后续接线"我的统计"页时按后端真实形状实现，勿沿用旧字段名。
 
   /** 对话反馈（点赞/点踩）—— 挂 conversation_id，非 specialist_id */
   async sendFeedback(
