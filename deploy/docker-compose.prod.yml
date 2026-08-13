@@ -3,6 +3,18 @@
 # 使用阿里云 ACR 镜像，不本地构建
 # ==============================================
 #
+# 运行方式（2026-08-13 修复：env_file 与插值的路径基准说明）：
+#   - 各服务 env_file 写的是 ../.env（相对本文件所在目录 deploy/ 解析 → 仓库根 .env）；
+#   - ${DB_PASSWORD:?} 等插值只从 shell 环境变量 / --env-file 读取，而 --env-file
+#     的相对路径以当前工作目录为基准 —— 两者基准不同，运行命令须配套：
+#       在仓库根目录执行：
+#         docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
+#       或在 deploy/ 目录执行：
+#         docker compose --env-file ../.env -f docker-compose.prod.yml up -d
+#   - 生产 .env 需按 .env.example 补齐以下键（本文件 ${VAR:?...} 强制必填，
+#     缺失时 compose config / up 直接报错拒绝启动，不会带病上线）：
+#       DB_USER（有默认值 medagent，可省）/ DB_PASSWORD / REDIS_PASSWORD / AUDIT_DB_PASSWORD
+#
 # ⚠️ DB_USER 与 init_db.sql 的 REVOKE 角色一致性：
 #   scripts/init_db.sql:173 `REVOKE ... FROM medagent` 硬编码角色名 medagent。
 #   本文件允许用 ${DB_USER:-medagent} 自定义，若改为其他值：
@@ -82,7 +94,7 @@ services:
     restart: always
     ports:
       - "8000:8000"
-    env_file: .env
+    env_file: ../.env
     environment: *internal-urls
     depends_on:
       postgres:
@@ -99,7 +111,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/auth-service:${IMAGE_TAG:-latest}
     container_name: medagent-auth
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment:
       <<: *internal-urls
       AUTH_DEV_MODE: "false"
@@ -118,7 +130,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/specialist-service:${IMAGE_TAG:-latest}
     container_name: medagent-specialist
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment: *internal-urls
     depends_on:
       postgres:
@@ -135,7 +147,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/visit-service:${IMAGE_TAG:-latest}
     container_name: medagent-visit
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment: *internal-urls
     depends_on:
       postgres:
@@ -152,7 +164,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/knowledge-service:${IMAGE_TAG:-latest}
     container_name: medagent-knowledge
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment: *internal-urls
     depends_on:
       postgres:
@@ -169,7 +181,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/compliance-service:${IMAGE_TAG:-latest}
     container_name: medagent-compliance
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment:
       <<: *internal-urls
       # 容器内 shared 在 /app/shared，规则文件路径必须显式指定（与 dev compose 一致）
@@ -189,7 +201,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/audit-service:${IMAGE_TAG:-latest}
     container_name: medagent-audit
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment:
       <<: *internal-urls
       # 审计服务用专用低权账号（002_audit_immutable.sql 创建，仅 INSERT/SELECT）。
@@ -209,7 +221,7 @@ services:
     image: ${DOCKER_REGISTRY:-registry.cn-hangzhou.aliyuncs.com}/medagent/hcp-service:${IMAGE_TAG:-latest}
     container_name: medagent-hcp
     restart: always
-    env_file: .env
+    env_file: ../.env
     environment: *internal-urls
     depends_on:
       postgres:
