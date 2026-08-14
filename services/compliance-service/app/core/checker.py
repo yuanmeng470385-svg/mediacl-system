@@ -16,6 +16,7 @@ import re
 import json
 import time
 import logging
+import unicodedata
 from typing import Dict, List, Optional
 
 import yaml
@@ -25,6 +26,51 @@ from openai import OpenAI
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ==================== M2：Unicode 变体绕过防护 ====================
+
+# 匹配前剥离的零宽/不可见字符（Unicode 混淆攻击的常见载体），全部肉眼不可见、
+# 不影响正常语义，绝不含正常 CJK 或可见字符 —— 不会误删正常内容。
+# 清单用 \uXXXX 转义书写：这些字符本身不可见，直接写字面量会变成"隐形代码"。
+# 注意 U+3000 全角空格不在内：它是可见空格，拆词绕过属规则语义层问题
+# （如 "返 点" 对 regex "返[点红]" 仍不命中，正则本身不含允许空格），
+# 但 NFKC 会把它归一化成半角空格，使 "１００％　有效" 能命中带空格的规则。
+_ZERO_WIDTH_CHARS = (
+    "\u200b"  # ZERO WIDTH SPACE —— 最常见拆词字符
+    "\u200c"  # ZERO WIDTH NON-JOINER
+    "\u200d"  # ZERO WIDTH JOINER
+    "\u200e"  # LEFT-TO-RIGHT MARK
+    "\u200f"  # RIGHT-TO-LEFT MARK
+    "\ufeff"  # ZERO WIDTH NO-BREAK SPACE（BOM）
+    "\u2060"  # WORD JOINER
+    "\u180e"  # MONGOLIAN VOWEL SEPARATOR（不可见）
+    "\u00ad"  # SOFT HYPHEN（不可见连字符）
+    "\u061c"  # ARABIC LETTER MARK
+    "\u034f"  # COMBINING GRAPHEME JOINER
+    "\u2800"  # BRAILLE PATTERN BLANK（渲染为空白）
+    # 2026-08-14 M2 终审低4：补齐其余不可见/零宽混淆载体
+    "\ufe00\ufe01\ufe02\ufe03\ufe04\ufe05\ufe06\ufe07"  # VARIATION SELECTOR-1..8（不可见修饰符）
+    "\ufe08\ufe09\ufe0a\ufe0b\ufe0c\ufe0d\ufe0e\ufe0f"  # VARIATION SELECTOR-9..16（FE0F=emoji 修饰，常见拆词载体）
+    "\u2066\u2067\u2068\u2069"  # LRI / RLI / FSI / PDI —— bidi 隔离控制符（不可见方向控制）
+    "\u2061\u2062\u2063\u2064"  # FUNCTION APPLICATION / INVISIBLE TIMES / INVISIBLE SEPARATOR / INVISIBLE PLUS
+    "\u3164"  # HANGUL FILLER（韩文兼容填充符，渲染为空白）
+    "\u1160"  # HANGUL JUNGSEONG FILLER —— U+3164 经 NFKC 归一化为本字符，
+              # 归一化先于剥离执行，两码点必须都收否则 U+3164 剥不干净
+)
+_ZERO_WIDTH_TRANS = str.maketrans({ord(c): None for c in _ZERO_WIDTH_CHARS})
+
+
+def _normalize_for_match(text: str) -> str:
+    """文本层匹配前的统一归一化（M2）：NFKC + 零宽字符剥离。
+
+    - NFKC：全角 → 半角、兼容字符 → 规范形式（"１００％有效" → "100%有效"）；
+    - 剥离零宽/不可见字符（"返\u200b点" → "返点"）。
+
+    只用于匹配判定、不做存储：content 原文原样进入语义层/上报/落库，
+    归一化结果不进任何证据链路。
+    """
+    return unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH_TRANS)
 
 
 class ComplianceChecker:
@@ -123,18 +169,53 @@ class ComplianceChecker:
         return list(by_id.values())
 
     def _compile_rules(self):
-        """预编译关键词和正则（单条失败只剔除该条，不拖垮引擎）"""
+        """预编译关键词和正则（单条失败只剔除该条，不拖垮引擎）
+
+        M2 终审（2026-08-14）：pattern 与内容同口径归一化。此前 pattern 原样
+        存储/编译，管理员建的含全角字符的规则（如「１００％有效」）用原始
+        pattern 匹配**已归一化**内容，永远不命中且无任何日志（规则静默失效）。
+        这里复用 _normalize_for_match（NFKC + 零宽剥离），与 check() 内容侧
+        同口径，归一化结果存 _patterns/_compiled。
+
+        regex pattern 归一化安全性（已实测确认）：
+        - NFKC 不改变任何 ASCII 正则元字符（. * + ? [ ] { } ( ) | ^ $ \\ 均已是
+          规范形式，实测逐字符不变），\\d/\\s/\\w 等转义序列也不受影响；
+        - 全角元字符（（ ） ［ ］ ｜ ＊ ？ ＋ 等）变半角正是期望行为 —— 管理员
+          用全角写法书写的 regex 与全角内容被同样归一化，两侧口径一致；
+        - 已知边界：全角兼容字符会映射为半角（如「。」→「.」），极端写法
+          「。+」会变成「.+」匹配任意字符。内容侧同样被归一化，两侧口径
+          一致；此类写法在现行规则库中不存在，接受该已知边界。
+        归一化后为空的 pattern（纯零宽/不可见字符）直接丢弃 + warning ——
+        空 keyword 恒命中、空 regex 恒匹配，会让规则变成全量误报。
+        """
         valid = []
         for rule in self.rules:
             if rule["type"] == "keyword":
-                rule["_patterns"] = [p for p in rule.get("patterns", [])]
+                patterns = []
+                for p in rule.get("patterns", []):
+                    norm_p = _normalize_for_match(p)
+                    if not norm_p:
+                        logger.warning(
+                            "规则 %s 的关键词 pattern %r 归一化后为空，丢弃该 pattern（否则恒命中）",
+                            rule["id"], p,
+                        )
+                        continue
+                    patterns.append(norm_p)
+                rule["_patterns"] = patterns
                 valid.append(rule)
             elif rule["type"] == "regex":
                 compiled = []
                 ok = True
                 for p in rule.get("patterns", []):
+                    norm_p = _normalize_for_match(p)
+                    if not norm_p:
+                        logger.warning(
+                            "规则 %s 的正则 pattern %r 归一化后为空，丢弃该 pattern（否则恒匹配）",
+                            rule["id"], p,
+                        )
+                        continue
                     try:
-                        compiled.append(re.compile(p))
+                        compiled.append(re.compile(norm_p))
                     except re.error as exc:
                         logger.error("规则 %s 的正则 %r 编译失败，整条规则剔除: %s", rule["id"], p, exc)
                         ok = False
@@ -194,12 +275,18 @@ class ComplianceChecker:
         violations = []
         checked_rules = []
 
+        # M2（2026-08-14）：文本层入口一次性归一化（NFKC + 零宽剥离），fast 与
+        # full 共用本路径 —— 此前 "１００％有效"（全角）、"返\u200b点"（零宽插入）
+        # 绕过 R001/R002，fast 流式门禁被直接穿透。归一化 O(n)，文本层每帧调用
+        # 可接受；语义层仍吃 content 原文（证据原文，归一化结果不做存储）。
+        content_normalized = _normalize_for_match(content)
+
         # ----- 第 1 关 + 第 2 关：关键词 + 正则（合并，都是文本匹配） -----
         for rule in self.rules:
             if rule["type"] not in ("keyword", "regex"):
                 continue
             checked_rules.append(rule["id"])
-            matched = self._match_rule(content, rule)
+            matched = self._match_rule(content_normalized, rule)
             if matched:
                 violations.append({
                     "rule_code": rule["id"],
@@ -248,15 +335,28 @@ class ComplianceChecker:
 
     # ==================== 第 1 关 + 第 2 关：文本匹配 ====================
 
-    def _match_rule(self, content: str, rule: Dict) -> Optional[str]:
-        """对单条规则匹配内容，返回匹配到的文本或 None"""
+    def _match_rule(self, norm_content: str, rule: Dict) -> Optional[str]:
+        """对单条规则匹配**已归一化**文本，返回命中片段或 None。
+
+        调用方须先经 _normalize_for_match 归一化（check/test_rule 的文本层入口
+        各归一化一次，避免每规则重复 O(n) 归一化 —— 文本层每帧调用）。
+
+        M2 终审（2026-08-14）规则侧：_patterns/_compiled 已在 _compile_rules 时
+        同口径归一化，此处不再对 pattern 重复归一化。
+
+        M2（2026-08-14）存储口径：matched_text 采用**归一化后命中片段** ——
+        keyword 返回规则 pattern 本身，regex 返回归一化文本中的匹配片段
+        （如原文 "返\u200b点" 命中后报告 "返点"）。选择原因：归一化非一一映射，
+        反向定位原文片段成本高且不唯一；证据原文由内容存储层原样保留，
+        matched_text 仅作命中提示，归一化片段已足以说明命中了什么。
+        """
         if rule["type"] == "keyword":
             for pattern in rule.get("_patterns", []):
-                if pattern in content:
+                if pattern in norm_content:
                     return pattern
         elif rule["type"] == "regex":
             for compiled in rule.get("_compiled", []):
-                m = compiled.search(content)
+                m = compiled.search(norm_content)
                 if m:
                     return m.group()
         return None
@@ -429,11 +529,14 @@ class ComplianceChecker:
             rule_code: 可选，仅测试指定规则
         """
         rules_to_test = [r for r in self.rules if not rule_code or r["id"] == rule_code]
+        # M2：与 check() 同口径 —— 试跑页文本层同样先归一化再匹配，
+        # 避免管理员在试跑页得到与线上不一致的结论
+        content_normalized = _normalize_for_match(content)
         hits = []
         for rule in rules_to_test:
             inconclusive = False
             if rule["type"] in ("keyword", "regex"):
-                matched = self._match_rule(content, rule)
+                matched = self._match_rule(content_normalized, rule)
             else:
                 # 语义规则走 LLM
                 result = self._semantic_check(content, [rule], {})

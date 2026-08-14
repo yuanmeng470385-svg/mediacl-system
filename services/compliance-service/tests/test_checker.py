@@ -88,6 +88,120 @@ class TestComplianceChecker:
         assert result["hits"][0]["hit"] is False
 
 
+class TestUnicodeNormalizationM2:
+    """M2（2026-08-14）：Unicode 变体绕过防护 —— 文本层匹配前 NFKC + 零宽剥离。
+
+    此前 "１００％有效"（全角）、"返\u200b点"（零宽插入）直接绕过 R001/R002，
+    fast 流式门禁被穿透（语义层 full 复核兜底，但实时门禁失效）。
+    空格拆词（"返 点"）不在此列：regex "返[点红]" 本身不含允许空格，
+    属规则语义层问题 —— 本批只验证全角/零宽两类有判别力的用例。
+    """
+
+    def setup_method(self):
+        self.checker = ComplianceChecker()
+
+    @pytest.mark.parametrize("content", [
+        "１００％有效",          # 全角数字 + 全角% → NFKC → "100%有效" 命中 R001 关键词
+        "１００％\u3000有效",    # 全角空格 U+3000 → 半角空格 → 命中 "100% 有效"
+    ])
+    def test_fullwidth_hits_r001(self, content):
+        """全角变体经 NFKC 归一化后命中 R001 关键词"""
+        result = self.checker.check(content, {"type": "chat"})
+        assert result["blocked"] is True
+        assert any(v["rule_code"] == "R001" for v in result["violations"])
+
+    @pytest.mark.parametrize("ch", [
+        "\u200b", "\u200c", "\u200d", "\ufeff", "\u2060",  # 2026-08-14 前已覆盖
+        "\ufe0f",  # VARIATION SELECTOR-16（emoji 修饰）—— M2 终审低4 新增
+        "\u2066",  # LEFT-TO-RIGHT ISOLATE（bidi 隔离）—— M2 终审低4 新增
+        "\u2061",  # FUNCTION APPLICATION（不可见运算符）—— M2 终审低4 新增
+        "\u3164",  # HANGUL FILLER（NFKC → U+1160，两码点均在剥离表）—— 低4 新增
+    ])
+    def test_zero_width_insert_hits_r002(self, ch):
+        """零宽/不可见字符插入「返点」中间：剥离后命中 R002 正则「返[点红]」"""
+        result = self.checker.check("返" + ch + "点", {"type": "chat"})
+        assert result["blocked"] is True, "零宽字符 U+%04X 未命中 R002" % ord(ch)
+        assert any(v["rule_code"] == "R002" for v in result["violations"])
+
+    def test_matched_text_is_normalized_fragment(self):
+        """存储口径：matched_text 为归一化后命中片段（原文证据由内容存储保留）"""
+        result = self.checker.check("返\u200b点", {"type": "chat"})
+        v = next(v for v in result["violations"] if v["rule_code"] == "R002")
+        assert v["matched_text"] == "返点"
+
+    def test_fast_mode_blocks_unicode_bypass(self):
+        """fast 流式门禁与 full 共用归一化路径，同样拦截"""
+        r1 = self.checker.check("１００％有效", {"type": "chat"}, fast=True)
+        assert r1["blocked"] is True
+        assert any(v["rule_code"] == "R001" for v in r1["violations"])
+        r2 = self.checker.check("返\u200b点", {"type": "chat"}, fast=True)
+        assert r2["blocked"] is True
+        assert any(v["rule_code"] == "R002" for v in r2["violations"])
+
+    def test_normal_text_unaffected(self):
+        """NFKC/零宽剥离不改变常规中文：正常文本不新增误报"""
+        result = self.checker.check(
+            "我们的产品在III期临床试验中显示出良好的安全性和有效性", {"type": "chat"})
+        assert result["blocked"] is False
+
+    def test_zero_width_only_content_passes(self):
+        """纯零宽字符内容归一化后为空 → 无命中，不误拦截"""
+        result = self.checker.check("\u200b\u200b", {"type": "chat"})
+        assert result["blocked"] is False
+        assert result["violations"] == []
+
+    def test_normalize_helper(self):
+        """归一化工具函数行为直测"""
+        from app.core.checker import _normalize_for_match
+        assert _normalize_for_match("１００％有效") == "100%有效"
+        assert _normalize_for_match("返\u200b点") == "返点"
+        assert _normalize_for_match("返\ufe0f点") == "返点"   # 低4：变体选择符剥离
+        assert _normalize_for_match("返\u3164点") == "返点"  # 低4：韩文填充符（NFKC→U+1160 后剥离）
+        assert _normalize_for_match("正常中文ABC") == "正常中文ABC"
+
+    def test_test_rule_uses_normalization(self):
+        """试跑页与线上同口径：全角变体在 test_rule 中同样命中"""
+        result = self.checker.test_rule("１００％有效", "R001")
+        assert result["hits"][0]["hit"] is True
+
+
+    def test_fullwidth_rule_pattern_normalized_on_compile(self):
+        """M2 终审中1：规则 pattern 在 _compile_rules 时与内容同口径归一化。
+
+        此前 pattern 原样存 _patterns/编译，管理员建的含全角字符的规则
+        （「１００％治愈」keyword、「返［点红］」regex）用原始 pattern 匹配已
+        归一化内容永远不命中，规则静默失效。修复后全角/半角内容均命中。
+        """
+        checker = ComplianceChecker()
+        checker.rules.extend([
+            {"id": "RX01", "name": "全角关键词规则", "type": "keyword",
+             "patterns": ["１００％治愈"], "severity": "high", "action": "reject"},
+            {"id": "RX02", "name": "全角正则规则", "type": "regex",
+             "patterns": ["返［点红］"], "severity": "high", "action": "reject"},
+        ])
+        checker._compile_rules()
+        r1 = checker.check("１００％治愈", {"type": "chat"})
+        assert any(v["rule_code"] == "RX01" for v in r1["violations"]), r1
+        r2 = checker.check("100%治愈", {"type": "chat"})
+        assert any(v["rule_code"] == "RX01" for v in r2["violations"]), r2
+        r3 = checker.check("返点", {"type": "chat"})
+        assert any(v["rule_code"] == "RX02" for v in r3["violations"]), r3
+
+    def test_zero_width_only_pattern_dropped_not_match_all(self):
+        """M2 终审中1 防御：纯零宽 pattern 归一化后为空 → 丢弃 + warning。
+
+        空字符串 keyword 对任何内容恒命中（"" in x 恒 True），不丢弃会让
+        规则变成全量误报炸弹。
+        """
+        checker = ComplianceChecker()
+        checker.rules.extend([{"id": "RX03", "name": "纯零宽关键词", "type": "keyword",
+                               "patterns": ["\u200b\u200b"], "severity": "high",
+                               "action": "reject"}])
+        checker._compile_rules()
+        result = checker.check("正常内容", {"type": "chat"})
+        assert not any(v["rule_code"] == "RX03" for v in result["violations"])
+
+
 class TestSemanticCheck:
     """语义审核（S7 提示注入防护）测试 —— 全部用假 LLM，不发真实请求"""
 

@@ -136,3 +136,23 @@ def test_non_dict_content_row_skipped_not_poisoning(monkeypatch):
     assert any(r["id"] == "R011" for r in checker.rules)      # 其余 DB 规则正常
     result = checker.check("出现正常词", {})
     assert any(v["rule_code"] == "R011" for v in result["violations"])
+
+
+# ==================== M2 终审中1：pattern 与内容同口径归一化（2026-08-14） ====================
+
+def test_fullwidth_db_pattern_hits(monkeypatch):
+    """M2 终审中1：DB 规则全角关键词 pattern 与内容同口径归一化后命中。
+
+    此前 checker._compile_rules 原样存 pattern，管理员建的含全角字符的 DB 规则
+    用原始 pattern 匹配已归一化内容永远不命中，且无任何日志（静默失效）。
+    修复后全角/半角内容均命中（pattern 归一化口径与内容一致）。
+    """
+    rows = [_FakeRow("R900", "全角关键词规则(DB)", "keyword",
+                     {"patterns": ["１００％治愈"]})]
+    monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb(rows))
+    checker = ComplianceChecker()
+    result = checker.check("１００％治愈", {"type": "chat"})
+    assert any(v["rule_code"] == "R900" for v in result["violations"])
+    assert result["blocked"] is True
+    result2 = checker.check("100%治愈", {"type": "chat"})
+    assert any(v["rule_code"] == "R900" for v in result2["violations"])
