@@ -56,15 +56,15 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 低危批后 537 passed）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 M 系列第二轮后 603 passed）
 cd services/auth-service && python -m pytest tests/ -v        # 70 用例（含验证码并发 consume Lua 用例）
 cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
-cd services/visit-service && python -m pytest tests/ -v       # 99（含取消/结束态拦截/直调 qwen/转写去重/ASR 状态守卫）
-cd services/compliance-service && python -m pytest tests/ -v  # 72（语义网络错误 fail-closed/禁用规则生效/参数健壮性）
+cd services/visit-service && python -m pytest tests/ -v       # 115（含取消/结束态拦截/直调 qwen/转写去重/ASR 连接限制/full_transcript 前缀/结构化合规/prompt 定界）
+cd services/compliance-service && python -m pytest tests/ -v  # 97（语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
 cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
 cd services/audit-service && python -m pytest tests/ -v       # 26
-cd services/gateway && python -m pytest tests/ -v             # 49（CORS 白名单/WS 首帧鉴权/信任代理）
+cd services/gateway && python -m pytest tests/ -v             # 74（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -454,19 +454,19 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **H5 mobile 全链路明文 HTTP/WS**：`client.ts:10`/`wsChat.ts:7`/`asr.ts:10` JWT 与患者对话明文传输可被中间人截获
 - **H6 WS token 明文 query string + 网关 WS 零鉴权零限流**：`gateway main.py:362-381` proxy_chat_ws accept 前不验 token 不限流，token 原样透传上游；mobile `wsChat.ts:42`/`asr.ts:33` 拼 URL；specialist `chat_ws.py:58`、visit `asr_ws.py:73-85` 依赖 query token。修法：网关握手前验 token + 按 user_id 限流，token 改 Sec-WebSocket-Protocol 或首帧
 - ~~**M1 compliance 语义层 fail-open 覆盖"内容拒审"**：`checker.py:336-352` fail-closed 元组只收 (JSONDecodeError, KeyError, TypeError, ValueError)，内容过滤/拒答以 HTTP 400（BadRequestError，属 Exception）落入宽 except fail-open → R003/R004/R006 整体跳过，与 S7 口径冲突~~（B5 批 2026-08-12 已把宽 except 收敛为 R999 fail-closed，2026-08-13 复核确认已修并补划线）
-- **M2 compliance Unicode 变体绕过**：`checker.py:232-243` 匹配前无 NFKC/零宽字符剥离 → "１００％有效"、插 U+200B、"返 点"绕过 R001/R002，且 fast 流式门禁只跑文本层整体跳过
+- ~~**M2 compliance Unicode 变体绕过**：`checker.py:232-243` 匹配前无 NFKC/零宽字符剥离 → "１００％有效"、插 U+200B、"返 点"绕过 R001/R002，且 fast 流式门禁只跑文本层整体跳过~~（2026-08-13 已修：内容与规则 pattern 双端 NFKC 归一化 + 38 项零宽字符剥离（含 FE00-FE0F 变体选择符/bidi 隔离符/HANGUL FILLER 及其 NFKC 映射 U+1160），fast/full/test_rule 三路径同口径，语义层仍吃原文；纯零宽 pattern 丢弃防全量误报；终审修复 pattern 同口径与零宽表扩充）
 - ~~**M3 compliance 同步 LLM 阻塞事件循环**：`checker.py:287-295` 同步 create 跑 async 端点（默认超时 600s）→ LLM 变慢时 specialist/visit 调用方 10s 超时系统性 fail-open~~（2026-08-13 已修：/check 与 /rules/test 改 asyncio.to_thread + OpenAI 客户端 timeout 15s/max_retries=1，超时仍走 R999 fail-closed；test_check_async_blocking.py 5 用例）
 - **M4 compliance xlsx 导出公式注入**：`report.py:43-47` 拦截明细/规则快照原样写入 → `=HYPERLINK(...)`/`=cmd|` 开头内容按公式执行；audit 导出（logs.py:178-190）字符串列同理。修法：`= + - @ \t \r` 开头前置单引号或强制 data_type='s'
-- **M5 visit full_transcript 可覆盖真实转写**：`visit_manager.py:515-517` 客户端提交整段覆盖 conversation_transcript 且覆盖后不再过合规检查 → 被标记过 R002/R006 的对话可被洗白。修法：提交前全量合规检查并累加 compliance_flags，或仅允许追加 + 前缀匹配校验
-- **M6 visit follow_up 结构化输出零合规检查**：`visit_manager.py:561-569` 只查 ai_summary，key_points/hcp_interests/hcp_objections/follow_up_suggestions/next_visit_plan 及自动建任务完全不过合规
-- **M7 visit LLM prompt 注入**：`visit_manager.py:336-359/519-537/622-636`、`objection_detector.py:92-93` 用户可控转写/画像/历史无 `<user_content>` 定界直接内插（与 compliance S7 已修标准不一致）
+- ~~**M5 visit full_transcript 可覆盖真实转写**：`visit_manager.py:515-517` 客户端提交整段覆盖 conversation_transcript 且覆盖后不再过合规检查 → 被标记过 R002/R006 的对话可被洗白~~（2026-08-13 已修：full_transcript 必须以现有转写为前缀（追加语义，篡改拒绝 ParamError），新增部分过合规并累加 compliance_flags，与 F5 尾缀去重/状态守卫兼容）
+- ~~**M6 visit follow_up 结构化输出零合规检查**：`visit_manager.py:561-569` 只查 ai_summary，key_points/hcp_interests/hcp_objections/follow_up_suggestions/next_visit_plan 及自动建任务完全不过合规~~（2026-08-13 已修：结构化字段拼合过 check_compliance——reject 清空字段/不建任务/不推画像+审计留痕，warn 照常落库+flags 累加，客户端异常按 reject 处理；终审修复 summary 被拦分支同样不推画像）
+- ~~**M7 visit LLM prompt 注入**：`visit_manager.py:336-359/519-537/622-636`、`objection_detector.py:92-93` 用户可控转写/画像/历史无 `<user_content>` 定界直接内插（与 compliance S7 已修标准不一致）~~（2026-08-13 已修：prepare_visit/end_visit/follow_up/_llm_recommend/objection_detector 五处全部按 S7 同措辞包 <user_content> 定界 + system 声明）
 - **M8 specialist fast 门禁不覆盖语义层**：违规内容在 full 复核前到达客户端（fast 只跑 keyword/regex）
 - **M9 密码登录无账号级失败锁定**：`auth.py:263-272` 仅受网关 60/min/IP 限流，轮换 IP 可无限试弱密码。修法：Redis 账号级失败计数 + 临时锁定
 - **M10 网关限流不读 X-Forwarded-For**：`rate_limiter.py:154-158` 取 request.client.host → 反代部署下全站共享一桶，刷 login/send-code 可整体 DoS
-- **M11 网关 `..` 路径归一化绕过公开前缀**：`main.py:257` + `auth_middleware.py:110-116`，`/api/v1/auth/login/../../docs` 命中 PUBLIC_PATHS 免 JWT 且 httpx 建连归一化 → 未认证可拉全部 7 后端 /docs、/openapi.json、/metrics
+- ~~**M11 网关 `..` 路径归一化绕过公开前缀**：`main.py:257` + `auth_middleware.py:110-116`，`/api/v1/auth/login/../../docs` 命中 PUBLIC_PATHS 免 JWT 且 httpx 建连归一化 → 未认证可拉全部 7 后端 /docs、/openapi.json、/metrics~~（2026-08-13 已修：鉴权中间件在 PUBLIC/INTERNAL 匹配前拒绝 dot-segment 路径（urlsplit+逐段比对，覆盖 `/../`、`/./`、%2e 编码），400 code 1000；17 用例含零转发断言）
 - **M12 knowledge 解压炸弹**：50MB 只管压缩体积，`document_processor.py:8-33` 解压/渲染到内存无输出上限 → approve 线程池撑爆。修法：页数/文本长度硬上限 + 解析超时
 - **M13 hcp Excel 批量导入无大小限制**（zip 炸弹）
-- **M14 visit ASR WS 直连 8002 无连接数/帧大小/时长限制**（绕过网关限流，每条连接拉一条 NLS 付费会话 + conversation_transcript 无限追加 + 无界并发合规调用）
+- ~~**M14 visit ASR WS 直连 8002 无连接数/帧大小/时长限制**（绕过网关限流，每条连接拉一条 NLS 付费会话 + conversation_transcript 无限追加 + 无界并发合规调用）~~（2026-08-13 已修：全局并发 10/单用户 2（单进程近似）、帧 256KB、空闲 90s、时长 6h，超限 error 帧 + 4500；连接数检查在开 NLS 会话之前、状态守卫之后；close 纳入 send_lock 防与合规帧并发写）
 - ~~**M15 visit 合规内部调用与用户请求共用网关 IP 限流配额**：`rate_limiter.py:145-171` 内部路径无豁免 → 多 ASR 并发超 60/min 后合规 429~~（2026-08-13 已修：rate_limiter 豁免 INTERNAL_PATHS 三条内部路径（精确匹配或子路径口径，audit/logs 不误豁免）；内部路径仍强制 X-Internal-Key 双重校验，PUBLIC_PATHS 不限流豁免；test_rate_limiter_internal.py 8 用例）
 - **M16 specialist chat 无长度/并发限制**（网关 WS 绕过限流）
 - **M17 web localStorage JWT 无 CSP + 前端零角色访问控制**（`client.ts:10`/`AuthContext.tsx:37`；`App.tsx:43-64` 路由守卫只验登录态）
