@@ -19,6 +19,7 @@ import logging
 from typing import Dict, List, Optional
 
 import yaml
+import httpx
 from openai import OpenAI
 
 from app.config import settings
@@ -269,9 +270,17 @@ class ComplianceChecker:
             if not api_key:
                 logger.warning("DASHSCOPE_API_KEY 未配置，跳过语义审核")
                 return []
+            # M3（2026-08-14）：显式收紧超时与重试。OpenAI SDK 默认读超时 600s、
+            # 重试 2 次 —— LLM 高峰变慢时同步调用会占死服务 worker（端点现已
+            # to_thread 化，线程池仍会被慢响应占满）。读超时 15s / 连接超时 5s /
+            # 最多重试 1 次（真机 qwen-turbo 语义审核远小于 15s）。
+            # 超时/网络异常仍落入下方 except Exception → R999 fail-closed 拦截，
+            # 不放行（与 hcp/specialist/visit 的 qwen 客户端同款写法）。
             self.qwen_client = OpenAI(
                 api_key=api_key,
-                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                timeout=httpx.Timeout(15, connect=5),
+                max_retries=1,
             )
 
         # 2026-08-11：.get() 兜底 —— semantic 规则缺 id/name/action 时不再 KeyError 500

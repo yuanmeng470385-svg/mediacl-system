@@ -1,4 +1,5 @@
 """合规审核服务 API 路由"""
+import asyncio
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -163,7 +164,13 @@ async def check_content(
     if not content:
         raise ParamError("content 不能为空")
 
-    result = checker.check(content, context, fast=fast)
+    # M3（2026-08-14）：checker.check 同步调用 LLM（第 3 关语义审核）—— 在 async
+    # 端点里直接调用会阻塞事件循环，LLM 高峰变慢时 2 worker 被占死，所有调用方
+    # （specialist/visit）10s 超时后按 fail-closed 全被拦。丢线程池执行（与
+    # knowledge 的 upload/review 同款模式）。db 安全性：checker 内部的 TTL 规则
+    # 重载用独立 SessionLocal（自建自关），不共享本端点的 db session；本端点注入
+    # 的 db 仅用于拦截记录落库，仍在事件循环侧（check 返回后）执行。
+    result = await asyncio.to_thread(checker.check, content, context, fast=fast)
 
     # 快速模式（逐帧）：不写拦截记录 —— 内容是流式过程中的中间片段，记录会失真，
     # 且每帧一次会刷爆表。命中拦截的完整复核（fast=False，含语义层）由调用方在
@@ -391,7 +398,9 @@ async def test_rule(request: dict, current_user: dict = Depends(require_roles(*R
     rule_code = request.get("rule_code")
     if not content:
         raise ParamError("content 不能为空")
-    result = checker.test_rule(content, rule_code)
+    # M3：test_rule 对 semantic 规则同样同步调 LLM（_semantic_check），一并
+    # to_thread 化，避免规则试跑阻塞事件循环。
+    result = await asyncio.to_thread(checker.test_rule, content, rule_code)
     return success(result)
 
 
