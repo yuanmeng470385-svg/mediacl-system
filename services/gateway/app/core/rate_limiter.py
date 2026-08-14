@@ -34,6 +34,16 @@ logger = logging.getLogger(__name__)
 # 白名单路径不限流
 UNLIMITED_PATHS = ["/health", "/docs", "/openapi.json", "/redoc"]
 
+# M15（2026-08-14）：服务间内部调用路径不占用用户限流配额 —— 引用
+# auth_middleware 的同一常量，避免两处维护漂移（无循环 import：
+# auth_middleware 不依赖本模块；本中间件在 Auth 之后执行，内部路径的
+# X-Internal-Key 校验不受影响）。豁免原因：多 ASR 并发时每句都调
+# compliance/check，与用户请求共用 60/min 配额会触发 429 → 调用方
+# fail-closed 误拦正常拜访。豁免不削弱防护：无 X-Internal-Key 的请求
+# 在 Auth 层已被 403 拦下；PUBLIC_PATHS（login/send-code）是用户入口，
+# 继续受限流保护，不得加入豁免。
+from app.core.auth_middleware import INTERNAL_PATHS
+
 # Redis 滑动窗口原子脚本：清理过期成员 → 计数检查 → 记录 + 设置过期。
 # 返回 1 = 放行，0 = 超限拒绝。member 用 "score_随机后缀" 防同毫秒碰撞覆盖。
 _LUA_WINDOW = """
@@ -147,6 +157,12 @@ class RateLimiter(BaseHTTPMiddleware):
 
         # 白名单不限流
         if any(path.startswith(p) for p in UNLIMITED_PATHS):
+            return await call_next(request)
+
+        # M15：内部调用路径（服务间调用）不限流 —— 匹配口径与
+        # auth_middleware._is_internal 一致（精确匹配或子路径，
+        # 防 /api/v1/audit/logs 被误豁免）。
+        if any(path == p or path.startswith(p + "/") for p in INTERNAL_PATHS):
             return await call_next(request)
 
         # 已认证请求（Auth 先于本中间件执行并注入 scope["user"]）按 user_id 限流；
