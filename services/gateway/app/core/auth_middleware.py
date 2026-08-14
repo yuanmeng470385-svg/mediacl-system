@@ -10,6 +10,7 @@ JWT 认证中间件（网关层统一验证）
 """
 
 import logging
+from urllib.parse import urlsplit
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from starlette.requests import Request
@@ -46,11 +47,40 @@ INTERNAL_PATHS = [
 ]
 
 
+def _has_dot_segment(path: str) -> bool:
+    """路径是否包含 dot-segment（"." 或 ".." 整段）。
+
+    urlsplit 负责把可能带 host/query 的完整 URL 收敛到 path 部分，
+    判断用标准库 split("/") 逐段相等比对，不写正则：
+    - "/api/v1/auth/login/../../docs" → ['..', '..'] → True
+    - "/api/v1/a/./b"               → ['.']       → True
+    - "/api/v1/auth/login/.."       → ['..']（结尾）→ True
+    - "/api/v1/auth/login"          → 无 dot 段   → False
+    - "/docs-v1.."                  → 段 "docs-v1.." != ".." → False（不误伤）
+    """
+    path = urlsplit(path).path
+    return any(segment in (".", "..") for segment in path.split("/"))
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """JWT 认证中间件"""
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        # M11（2026-08-14）：拒绝含 dot-segment（"." / ".." 整段）的路径。
+        # 根因：网关鉴权/路由用的是未归一化的原始路径，而 httpx 建连时会把
+        # /a/../b 归一化为 /b —— /api/v1/auth/login/../../docs 可借 PUBLIC_PATHS
+        # 前缀匹配免 JWT，再借客户端归一化访问到非公开路径（后端 /docs、
+        # /openapi.json、/metrics）。必须在 PUBLIC_PATHS/INTERNAL_PATHS 匹配
+        # 之前拒绝（防前缀绕过）。ASGI 服务器已把 %2e 等百分号编码解码进
+        # scope path，此检查同样覆盖编码变体；正常 API 路径无 dot-segment，
+        # 网关自身 /docs 等不受影响。
+        if _has_dot_segment(path):
+            return JSONResponse(
+                status_code=400,
+                content={"code": 1000, "message": "路径包含非法 .. 段", "data": None},
+            )
 
         # 内部接口：必须携带有效的 X-Internal-Key（服务间调用）
         if self._is_internal(path):

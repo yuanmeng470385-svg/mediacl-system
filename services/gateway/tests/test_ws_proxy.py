@@ -62,7 +62,7 @@ def reset_factory():
 
 def test_ws_proxy_双向透传():
     """B5 首帧鉴权：客户端首帧发 auth 帧（真 token）→ 网关验过后透传；后续帧正常转发"""
-    import os
+    import time
     from shared.common.auth import create_token
     fake = FakeUpstream()
     set_upstream_factory(lambda url: fake)
@@ -74,7 +74,13 @@ def test_ws_proxy_双向透传():
             ws.send_text(json.dumps({"type": "auth", "token": token}))
             ws.send_text(json.dumps({"type": "question", "text": "你好"}))
             assert fake.received_event.wait(2.0), "代理未把客户端消息转发给上游"
+            # received_event 在首帧（auth）送达即置位，question 帧可能仍在转发途中
+            # —— 高负载下若立即断言会 IndexError（全量跑偶发 flake），等待两帧到齐
+            deadline = time.time() + 2.0
+            while len(fake.received) < 2 and time.time() < deadline:
+                time.sleep(0.01)
             frames = [json.loads(x) for x in fake.received if isinstance(x, str)]
+            assert len(frames) >= 2, "question 帧未到达上游"
             assert frames[0]["type"] == "auth"
             assert frames[1]["type"] == "question"
             # 上游 → 客户端（测试直接向队列投递，模拟上游主动下发）
