@@ -610,3 +610,166 @@ class TestFinishWaitsForCompletion:
             assert client._listener.done(), "listener 应已被 cancel"
 
         asyncio.run(run())
+
+
+# ---------- M14 回归（2026-08-14）：ASR WS 直连 8002 的连接数/帧大小/空闲/时长限制 ----------
+
+def _wait_until(cond, timeout=2.0, interval=0.05):
+    """deadline 轮询等待条件成立（终审低5，2026-08-14）：替代固定 time.sleep(0.3) ——
+    CI 高负载下服务端 handler 收尾（finally 递减计数）可能慢于固定等待导致 flaky；
+    写法对齐 services/gateway/tests/test_ws_proxy.py 的 deadline 轮询。超时返回
+    最后一次查询结果，由后续断言给出可读失败信息。"""
+    deadline = time.monotonic() + timeout
+    result = False
+    while True:
+        result = cond()
+        if result or time.monotonic() >= deadline:
+            return result
+        time.sleep(interval)
+
+
+class TestAsrWsLimits:
+    """M14：绕过网关限流的直连端点防御 —— 全局/用户并发上限、超帧、空闲超时、时长上限"""
+
+    @pytest.fixture(autouse=True)
+    def _reset_counters(self, monkeypatch):
+        """计数是模块级全局（单进程近似），用例间重置防相互污染"""
+        from app.api import asr_ws
+        asr_ws._asr_conn_count = 0
+        asr_ws._asr_conn_by_user = {}
+        yield
+        asr_ws._asr_conn_count = 0
+        asr_ws._asr_conn_by_user = {}
+
+    @staticmethod
+    def _patch_session(monkeypatch, asr_ws, user_id=7):
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession(user_id=user_id))
+        async def _ok_compliance(text, context=None):
+            return {"blocked": False, "violations": [], "risk_level": "none"}
+        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
+        monkeypatch.delenv("NLS_APPKEY", raising=False)
+        monkeypatch.setenv("NLS_MOCK", "1")
+
+    def test_global_connection_limit_rejects_excess(self, monkeypatch):
+        """全局并发上限：超限连接收 error 帧 + 4500；连接关闭后计数释放"""
+        from app.api import asr_ws
+        monkeypatch.setattr(asr_ws, "MAX_ASR_CONNECTIONS", 1)
+        self._patch_session(monkeypatch, asr_ws)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws1:
+                ws1.send_text(json.dumps({"type": "auth", "token": token}))
+                assert ws1.receive_json()["type"] == "ready"
+                assert asr_ws._asr_conn_count == 1, "第一条连接应登记计数"
+                # 第二条连接：全局上限（Mock 路径同样受限）
+                with client.websocket_connect("/ws/visits/1/asr") as ws2:
+                    ws2.send_text(json.dumps({"type": "auth", "token": token}))
+                    err = ws2.receive_json()
+                    assert err["type"] == "error"
+                    assert "上限" in err["message"]
+                    with pytest.raises(WebSocketDisconnect) as exc_info:
+                        ws2.receive_json()
+                    assert exc_info.value.code == 4500, f"超限关闭码应为 4500，实际 {exc_info.value.code}"
+            _wait_until(lambda: asr_ws._asr_conn_count == 0)  # 等服务端 handler 收尾（finally 递减）
+        assert asr_ws._asr_conn_count == 0, "连接关闭后计数应释放"
+        assert asr_ws._asr_conn_by_user == {}
+
+    def test_per_user_connection_limit(self, monkeypatch):
+        """同一用户并发上限：超限拒绝；不同用户不受影响"""
+        from app.api import asr_ws
+        monkeypatch.setattr(asr_ws, "MAX_ASR_CONNECTIONS", 10)
+        monkeypatch.setattr(asr_ws, "MAX_ASR_CONNECTIONS_PER_USER", 1)
+
+        holder = {"uid": 7}
+        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession(user_id=holder["uid"]))
+        async def _ok_compliance(text, context=None):
+            return {"blocked": False, "violations": [], "risk_level": "none"}
+        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
+        monkeypatch.delenv("NLS_APPKEY", raising=False)
+        monkeypatch.setenv("NLS_MOCK", "1")
+
+        token7 = create_token(7, "rep1", "rep")
+        token8 = create_token(8, "rep2", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws1:
+                ws1.send_text(json.dumps({"type": "auth", "token": token7}))
+                assert ws1.receive_json()["type"] == "ready"
+                # 同一用户第二条连接 → 拒绝（防单账号刷 NLS 会话）
+                with client.websocket_connect("/ws/visits/1/asr") as ws2:
+                    ws2.send_text(json.dumps({"type": "auth", "token": token7}))
+                    err = ws2.receive_json()
+                    assert err["type"] == "error"
+                    assert "账号" in err["message"]
+                    with pytest.raises(WebSocketDisconnect) as exc_info:
+                        ws2.receive_json()
+                    assert exc_info.value.code == 4500
+                # 不同用户 → 放行
+                holder["uid"] = 8
+                with client.websocket_connect("/ws/visits/1/asr") as ws3:
+                    ws3.send_text(json.dumps({"type": "auth", "token": token8}))
+                    assert ws3.receive_json()["type"] == "ready"
+            _wait_until(lambda: asr_ws._asr_conn_count == 0)
+        assert asr_ws._asr_conn_count == 0
+        assert asr_ws._asr_conn_by_user == {}
+
+    def test_oversized_frame_rejected(self, monkeypatch):
+        """超帧：error 帧 + 4500 关闭（PCM 分片 16KB 正常远小于 256KB 上限）"""
+        from app.api import asr_ws
+        monkeypatch.setattr(asr_ws, "MAX_FRAME_BYTES", 1024)
+        self._patch_session(monkeypatch, asr_ws)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                assert ws.receive_json()["type"] == "ready"
+                ws.send_bytes(b"\x00" * 2048)  # 超过注入上限 1024
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert "大小" in err["message"]
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == 4500
+
+    def test_idle_timeout_closes_session(self, monkeypatch):
+        """空闲超时：超时窗口内未收到任何帧 → error 帧（含"空闲"）+ 4500 关闭"""
+        from app.api import asr_ws
+        monkeypatch.setattr(asr_ws, "ASR_IDLE_TIMEOUT_SECONDS", 0.3)
+        self._patch_session(monkeypatch, asr_ws)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                assert ws.receive_json()["type"] == "ready"
+                # 不再推任何帧 → 0.3s 后服务端空闲超时
+                err = ws.receive_json()
+                assert err["type"] == "error"
+                assert "空闲超时" in err["message"]
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == 4500
+        _wait_until(lambda: asr_ws._asr_conn_count == 0)
+        assert asr_ws._asr_conn_count == 0, "空闲超时关闭后计数应释放"
+
+    def test_session_duration_cap_closes_session(self, monkeypatch):
+        """会话时长上限：即使持续有帧，超时后仍关闭（防僵尸连接挂住 NLS 会话）"""
+        from app.api import asr_ws
+        monkeypatch.setattr(asr_ws, "ASR_SESSION_MAX_SECONDS", 0.3)
+        monkeypatch.setattr(asr_ws, "ASR_IDLE_TIMEOUT_SECONDS", 90.0)
+        self._patch_session(monkeypatch, asr_ws)
+
+        token = create_token(7, "rep1", "rep")
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/visits/1/asr") as ws:
+                ws.send_text(json.dumps({"type": "auth", "token": token}))
+                assert ws.receive_json()["type"] == "ready"
+                err = ws.receive_json()  # 未推帧，时长上限（0.3s）先于空闲（90s）触发
+                assert err["type"] == "error"
+                assert "时长" in err["message"]
+                with pytest.raises(WebSocketDisconnect) as exc_info:
+                    ws.receive_json()
+                assert exc_info.value.code == 4500
+        _wait_until(lambda: asr_ws._asr_conn_count == 0)
+        assert asr_ws._asr_conn_count == 0

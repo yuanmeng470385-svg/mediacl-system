@@ -20,6 +20,8 @@ fail-closed：NLS_APPKEY 未配置且未显式 NLS_MOCK=1 时拒绝转写（不�
 import asyncio
 import json
 import logging
+import time
+from typing import Dict, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import HTTPException
@@ -36,6 +38,39 @@ from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED
 
 router = APIRouter(tags=["asr"])
 logger = logging.getLogger(__name__)
+
+# ==================== M14（2026-08-14）：直连 8002 的防御性限制 ====================
+# ASR WS 不走网关（网关不支持 WS 升级透传），天然绕过网关限流 —— 每条连接会
+# 拉起一条 NLS 付费会话 + conversation_transcript 无限追加 + 无界并发合规调用。
+# 以下限制为单进程近似防护：模块级计数器只覆盖本 worker（多 worker 部署时各
+# worker 各自计数，跨 worker 的精确控制可后续引入 Redis 分布式计数，与网关
+# 限流同模式）。计数增删之间无 await（asyncio 单线程内原子），无需加锁。
+MAX_ASR_CONNECTIONS = 10             # 全局并发 ASR 会话上限
+MAX_ASR_CONNECTIONS_PER_USER = 2     # 同一用户并发 ASR 会话上限（防单账号刷 NLS 会话）
+MAX_FRAME_BYTES = 256 * 1024         # 单帧字节上限（PCM 分片 16KB，正常远小于此）
+ASR_IDLE_TIMEOUT_SECONDS = 90.0      # 空闲超时：无任何帧即关闭（移动端录音中每 2s 推流，90s 宽松）
+ASR_SESSION_MAX_SECONDS = 6 * 3600   # 会话时长上限（防僵尸连接挂住 NLS 会话）
+
+_asr_conn_count = 0                  # 全局并发 ASR 会话计数
+_asr_conn_by_user: Dict[int, int] = {}  # user_id -> 并发 ASR 会话计数
+
+
+async def _send_error_frame(websocket: WebSocket, send_lock: asyncio.Lock, message: str,
+                            close_code: Optional[int] = None) -> None:
+    """best-effort error 帧推送（可附带关闭码）：客户端可能已断开/发送竞争，失败仅吞掉不炸
+
+    终审低3（2026-08-14）：close 帧同样是写帧 —— 与后台 _check_later 的 compliance
+    帧并发写会交错（websockets 并发写帧竞态，正是 send_lock 要防的）。close 与
+    error 帧在同一锁内发出保证帧序（error 先于 close，中间不被合规帧插入）；close
+    抛异常（客户端已断开）一并吞掉，不丢关闭码语义、不影响收尾 finally 递减计数。
+    """
+    try:
+        async with send_lock:
+            await websocket.send_json({"type": "error", "message": message})
+            if close_code is not None:
+                await websocket.close(code=close_code)
+    except Exception:
+        pass
 
 
 def _map_speaker(speaker) -> str:
@@ -71,6 +106,7 @@ def _get_asr_client():
 
 @router.websocket("/ws/visits/{visit_id}/asr")
 async def ws_visit_asr(websocket: WebSocket, visit_id: int):
+    global _asr_conn_count, _asr_conn_by_user  # M14：函数内 += 需显式声明全局
     # ---- 鉴权：先 accept（accept 前 close 的 4401/4403/4404 到不了客户端），
     #      再收首帧 —— B5 首帧鉴权（2026-08-12）：首帧 {"type":"auth","token"} 优先；
     #      旧客户端（query token）首帧即音频/stop → 回退 query，缓存该帧继续处理 ----
@@ -106,6 +142,7 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
 
     # ---- 归属校验（S4）：仅本人或 admin ----
     db = SessionLocal()
+    registered = False  # M14：通过连接数上限检查并登记后才置 True（finally 递减）
     try:
         # H2（2026-08-11）：账号状态与角色以库为准——token 是登录快照，停用/降级后
         # 旧 token 必须立即失效（WS 不走 get_current_user 依赖），admin 判定不再
@@ -136,6 +173,26 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
         # 串行化该连接的所有 send：后台合规任务与主路径并发 send 会触发
         # websockets>=12 的 ConcurrencyError（事件被吞、合规拦截丢失）
         send_lock = asyncio.Lock()
+
+        # ---- M14 连接级限制：在开 NLS 会话（_get_asr_client）前检查 ----
+        # 超限发 error 帧 + 4500 关闭（与"服务端未配置"同一关闭码语义）。
+        # Mock 客户端路径同样受此限制（Mock 不花钱，但无界连接同样拖垮服务，
+        # 连接数限制对两者都生效合理）。
+        if _asr_conn_count >= MAX_ASR_CONNECTIONS:
+            logger.warning("ASR 并发会话已达上限，拒绝新连接: visit_id=%s", visit_id)
+            await _send_error_frame(websocket, send_lock, "并发转写会话已达上限，请稍后再试")
+            await websocket.close(code=4500)
+            return
+        user_conns = _asr_conn_by_user.get(user_id, 0)
+        if user_conns >= MAX_ASR_CONNECTIONS_PER_USER:
+            logger.warning("用户 ASR 并发会话已达上限，拒绝新连接: visit_id=%s user_id=%s", visit_id, user_id)
+            await _send_error_frame(websocket, send_lock, "当前账号的并发转写会话已达上限")
+            await websocket.close(code=4500)
+            return
+        _asr_conn_count += 1
+        _asr_conn_by_user[user_id] = user_conns + 1
+        registered = True
+
         async with send_lock:
             await websocket.send_json({"type": "ready", "visit_id": visit_id})
 
@@ -238,14 +295,42 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
 
         # 首帧缓存（旧客户端首帧即音频/stop，已在鉴权段接收）先于循环消费
         pending_frames = [first_frame] if first_frame is not None else []
+        session_start = time.monotonic()  # M14：会话时长上限起点
         try:
             while True:
-                frame = pending_frames.pop(0) if pending_frames else await websocket.receive()
+                if pending_frames:
+                    frame = pending_frames.pop(0)
+                else:
+                    # M14：空闲超时 + 会话时长上限 —— 每次 receive 挂超时
+                    # （wait_for 与既有接收循环同构，无独立看门狗任务、无竞态）；
+                    # 移动端录音中每 2s 推流，90s 空闲阈值足够宽松
+                    remaining = ASR_SESSION_MAX_SECONDS - (time.monotonic() - session_start)
+                    if remaining <= 0:
+                        await _send_error_frame(websocket, send_lock, "转写会话时长已达上限", close_code=4500)
+                        break
+                    try:
+                        frame = await asyncio.wait_for(
+                            websocket.receive(),
+                            timeout=min(ASR_IDLE_TIMEOUT_SECONDS, remaining),
+                        )
+                    except asyncio.TimeoutError:
+                        if ASR_SESSION_MAX_SECONDS - (time.monotonic() - session_start) <= 0:
+                            message = "转写会话时长已达上限"
+                        else:
+                            message = "空闲超时，转写会话已关闭"
+                        logger.info("ASR 会话关闭: visit_id=%s reason=%s", visit_id, message)
+                        await _send_error_frame(websocket, send_lock, message, close_code=4500)
+                        break
                 if frame.get("type") == "websocket.disconnect":
                     break
                 data = frame.get("bytes") or frame.get("text")
                 if not data:
                     continue
+                # M14：帧大小上限 —— 超限发 error 帧并关闭（PCM 分片 16KB 正常远小于此）
+                if len(data) > MAX_FRAME_BYTES:
+                    logger.warning("ASR 超帧拒绝并关闭: visit_id=%s size=%d", visit_id, len(data))
+                    await _send_error_frame(websocket, send_lock, "音频帧超过大小上限", close_code=4500)
+                    break
                 if isinstance(data, str):
                     # 控制帧 {"type":"stop"} → 结束转写
                     try:
@@ -290,4 +375,13 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             except Exception:
                 pass  # 客户端已断开
     finally:
+        # M14：无论正常结束/断开/异常，登记的并发计数都递减（登记点之后
+        # 的任何 return 都被本 finally 覆盖）
+        if registered:
+            _asr_conn_count -= 1
+            left = _asr_conn_by_user.get(user_id, 0) - 1
+            if left <= 0:
+                _asr_conn_by_user.pop(user_id, None)
+            else:
+                _asr_conn_by_user[user_id] = left
         db.close()
