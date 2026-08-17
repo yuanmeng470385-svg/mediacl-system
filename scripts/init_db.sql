@@ -251,7 +251,7 @@ INSERT INTO products (product_code, product_name, generic_name, manufacturer, in
 VALUES ('ONC-001', 'XX注射液', 'XXX注射用冻干粉', 'XX制药', '用于治疗XXX', 'active')
 ON CONFLICT (product_code) DO NOTHING;
 
--- 初始合规规则 (R001-R007) —— 与 shared/compliance-rules/rules.yaml 完全一致
+-- 初始合规规则 (R001-R011) —— 与 shared/compliance-rules/rules.yaml 完全一致
 -- （compliance-service 加载时同 rule_code 以 DB 为准，故种子必须覆盖 YAML 全集，
 --   否则 YAML 有而 DB 没有的拦截词会永久失效）
 INSERT INTO compliance_rules (rule_code, rule_name, rule_type, content, severity, action, description)
@@ -278,11 +278,27 @@ VALUES
 
 ('R006', '禁止泄露患者信息', 'semantic',
  '{}',
- 'high', 'reject', '禁止在对话中提及可识别的患者个人信息'),
+ 'high', 'reject', '禁止在对话中非法收集、使用和传播可识别的患者个人信息及医疗机构内部信息（2026《医药代表管理办法》）'),
 
 ('R007', '禁止讨论未公开数据', 'semantic',
  '{}',
- 'high', 'warn', '禁止讨论公司内部未公开的临床试验数据或商业信息')
+ 'high', 'warn', '禁止讨论公司内部未公开的临床试验数据或商业信息'),
+
+('R008', '禁止附加销售条件利益输送', 'regex',
+ '{"patterns": ["按(销量|销售额|处方量|金额|数量).{0,12}(赞助|捐赠|资助)", "(赞助|捐赠|资助).{0,12}(按|以).{0,8}(销量|销售额|金额|数量)", "(销量|销售额)(达标|达到).{0,12}(赞助|捐赠|资助)"]}',
+ 'high', 'reject', '禁止以附加销售药品金额、数量等条件提供捐赠、资助、赞助（2026《医药代表管理办法》）'),
+
+('R009', '禁止馈赠财物', 'keyword',
+ '{"patterns": ["礼品", "礼金", "购物卡", "消费卡", "有价证券", "送红包", "宴请", "安排旅游", "报销差旅"]}',
+ 'high', 'reject', '禁止给予礼品、礼金、消费卡（券）、有价证券等财物或安排宴请、旅游（2026《医药代表管理办法》）'),
+
+('R010', '禁止隐匿不良反应', 'keyword',
+ '{"patterns": ["没有副作用", "零副作用", "无不良反应", "绝对安全", "安全性完全没问题", "不良反应不用", "不提不良反应"]}',
+ 'high', 'reject', '禁止隐匿药品已知不良反应信息或隐瞒医生反馈的不良反应（2026《医药代表管理办法》）'),
+
+('R011', '禁止误导用药', 'semantic',
+ '{}',
+ 'high', 'reject', '禁止误导医生使用药品、干预或影响临床合理使用药品（2026《医药代表管理办法》）')
 ON CONFLICT (rule_code) DO NOTHING;
 
 -- ============================================
