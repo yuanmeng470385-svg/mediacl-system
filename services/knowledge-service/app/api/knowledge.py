@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from shared.common.auth import get_current_user, require_roles
+from shared.common.internal_auth import require_internal_key
 from app.models.knowledge_feedback import KnowledgeFeedback
 from app.services.audit_client import write_audit_log
 
@@ -102,6 +103,31 @@ async def search_knowledge(
     return success({"results": results, "source": source,
                     "empty": not results and source != "bailian",
                     "message": "知识库暂无已上架文档，请先上传并审核文档" if not results and source != "bailian" else None})
+
+
+@router.post("/search-internal")
+async def search_knowledge_internal(
+    request: dict,
+    _key: dict = Depends(require_internal_key),
+    db: Session = Depends(get_db),
+):
+    """服务间检索（specialist medical QA 用）：与 /search 同款校验与检索逻辑，
+    鉴权为内部密钥（网关 INTERNAL_PATHS 双重校验）。"""
+    data = validate_search_request(request)
+    product_id = request.get("product_id")
+    if product_id is not None:
+        try:
+            product_id = int(product_id)
+        except (TypeError, ValueError):
+            raise ParamError("product_id 必须是整数")
+    results, source = await asyncio.to_thread(
+        lambda: _manager(db).search(
+            query=data["query"], product_id=product_id,
+            doc_type=request.get("doc_type"), top_k=data["top_k"],
+        )
+    )
+    return success({"results": results, "source": source,
+                    "empty": not results and source != "bailian"})
 
 
 @router.post("/upload")
