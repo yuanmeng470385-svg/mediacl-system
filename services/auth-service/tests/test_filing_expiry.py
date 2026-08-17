@@ -47,14 +47,21 @@ def _seed():
              status="active"),
         User(id=4, username="rep03", full_name="王代表", phone="13800000003", role="rep",
              status="active"),
+        User(id=5, username="rep04", full_name="赵代表", phone="13800000004", role="rep",
+             status="active"),
     ])
     db.add_all([
         RepresentativeQualification(id=1, representative_id=1, education_cert="https://oss/e.pdf",
-                                    filing_number="F-1", filing_expire_date=date.today() - timedelta(days=1)),
+                                    filing_number="F-1", audit_status="approved",
+                                    filing_expire_date=date.today() - timedelta(days=1)),
         RepresentativeQualification(id=2, representative_id=3, education_cert="https://oss/e.pdf",
                                     filing_number="F-2", filing_expire_date=date.today() + timedelta(days=30)),
         RepresentativeQualification(id=3, representative_id=4, education_cert="https://oss/e.pdf",
                                     filing_number="F-3", filing_expire_date=None),
+        # F4：已驳回 + 日期已过期 —— 未经人工审核通过，即使过期也不自动冻结
+        RepresentativeQualification(id=4, representative_id=5, education_cert="https://oss/e.pdf",
+                                    filing_number="F-4", audit_status="rejected",
+                                    filing_expire_date=date.today() - timedelta(days=1)),
     ])
     db.commit()
     db.close()
@@ -75,12 +82,14 @@ def test_freezes_only_expired_rep():
     assert users[2].status == "active"   # admin 不冻结
     assert users[3].status == "active"   # 未到期不冻结
     assert users[4].status == "active"   # 无到期日（有备案号无日期）不冻结
+    assert users[5].status == "active"   # 已驳回：日期过期也不冻结（F4）
 
 
 def test_second_run_is_idempotent():
     _seed()
     db = TestSession()
-    freeze_expired_qualifications(db)
+    frozen_first = freeze_expired_qualifications(db)
     frozen_again = freeze_expired_qualifications(db)
     db.close()
+    assert [u.id for u in frozen_first] == [1]  # 预期冻结列表不变：仅 approved+过期
     assert frozen_again == []

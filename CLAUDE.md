@@ -59,14 +59,14 @@ cd web && npm run build            # tsc -b && vite build
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
 # 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 M 系列第二轮后 603 passed）
-cd services/auth-service && python -m pytest tests/ -v        # 88 passed + 7 skipped（含验证码并发 consume Lua / 备案资质用例；2026-08-17 实测）
+cd services/auth-service && python -m pytest tests/ -v        # 89 passed + 7 skipped（含验证码并发 consume Lua / 备案资质用例；2026-08-17 终审修复后，本机 Redis 可用时 7 个 Lua 用例不跳过、实测 96 passed）
 cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
 cd services/visit-service && python -m pytest tests/ -v       # 115（含取消/结束态拦截/直调 qwen/转写去重/ASR 连接限制/full_transcript 前缀/结构化合规/prompt 定界）
 cd services/compliance-service && python -m pytest tests/ -v  # 97（语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
 cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
 cd services/audit-service && python -m pytest tests/ -v       # 26
-cd services/gateway && python -m pytest tests/ -v             # 76（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝；2026-08-17 实测）
+cd services/gateway && python -m pytest tests/ -v             # 77（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝/qualifications 超时 carve-out；2026-08-17 终审修复后实测）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -437,7 +437,7 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - ~~网关限流为单进程内存版（--workers 2 时每 worker 独立限额）~~（486d440 接 Redis 分布式滑动窗口，内存版仅降级兜底）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
 - **备案资质子系统挂账（2026-08-17 一期 A 收尾，勿误以为已做）**：
-  - 未备案/未过审的全量使用门禁（现仅备案到期自动冻结；未备案/审核未过是否禁用账号待老板拍板存量方案）
+  - 未备案/未过审的全量使用门禁（现仅备案到期自动冻结，且**仅限 audit_status=approved 的记录**——被驳回/待审的即使日期过期也不自动冻结；未备案/审核未过是否禁用账号待老板拍板存量方案）
   - 医生资质审核（Plan B：复用 qualification review 模式，hcps 表建资质字段）
   - 备案证书 OSS bucket ACL 私有化 + 签名 URL 预览（现 education_cert/training_cert 为直读 URL）
   - 国家备案平台公开查询接口调研（filing_number 真伪校验，现为人工核对）
@@ -521,4 +521,4 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **NLS TTS 合成**：mobile 直调 `https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?appkey&token&text&format=wav&sample_rate=16000`（REST 一次性合成，非流式）；appkey 非机密可放客户端，AK/SK 永不出服务端
 - **mobile/ react-native-sound 是首个音频播放依赖**（TTS 朗读；原生模块需重新 run-android）
 - **transcript 响应含 key_nodes/ai_suggestion**（LLM 推荐节流 20s/句；失败返回空数组/null 不阻塞）
-- **`QUALIFICATION_CHECK_INTERVAL_HOURS`**（auth-service 备案到期扫描周期，默认 24 小时、可省略不配）：启动即跑一次，此后每 N 小时扫描 `representative_qualifications` 的 filing_expire_date < 今天 且 role=rep/status=active 的代表，**自动冻结账号**（status→disabled）+ 审计 action=qualification_expired_freeze；审计失败不阻断冻结。filing_status 本身是派生值不落库。
+- **`QUALIFICATION_CHECK_INTERVAL_HOURS`**（auth-service 备案到期扫描周期，默认 24 小时、可省略不配）：启动即跑一次，此后每 N 小时扫描 `representative_qualifications` 的 filing_expire_date < 今天 且 role=rep/status=active **且 audit_status=approved** 的代表，**自动冻结账号**（status→disabled）+ 审计 action=qualification_expired_freeze；审计失败不阻断冻结。**到期日未经人工审核通过（pending/rejected）的代表即使日期过期也不自动冻结**——冻结只对审核结论做强制执行，不替代人工裁决（2026-08-17 终审修复 F4）。filing_status 本身是派生值不落库。

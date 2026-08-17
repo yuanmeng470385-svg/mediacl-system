@@ -1,7 +1,10 @@
 """备案到期自动冻结（需求文档 3.3(2)）：每日扫描 filing_expire_date < 今天的代表，
 将账号置为 disabled（冻结）。备案状态是确定性事实，无需人工确认。
 
-冻结范围仅 role='rep' 且 status='active'（管理员/合规/医学不冻结）。
+冻结范围仅 role='rep' 且 status='active'（管理员/合规/医学不冻结），
+且 audit_status='approved'（F4 修复，2026-08-17）：到期日未经人工审核通过的
+记录不冻结 —— 被驳回/待审的代表即使日期过期也不自动冻结，冻结只对审核
+结论做强制执行，不替代人工裁决。
 多 worker 部署各进程各跑一份——UPDATE 幂等（status 过滤），可接受。
 """
 import asyncio
@@ -21,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 def freeze_expired_qualifications(db: Session) -> List[User]:
-    """同步扫描并冻结到期代表（测试直接调用本函数，不碰 httpx/审计）。"""
+    """同步扫描并冻结到期代表（测试直接调用本函数，不碰 httpx/审计）。
+
+    冻结条件：role='rep' 且 status='active' 且 filing_expire_date < 今天
+    且 audit_status='approved'（被驳回/待审的代表即使日期过期也不自动冻结）。
+    """
     today = date.today()
     rows = (
         db.query(RepresentativeQualification, User)
@@ -29,6 +36,7 @@ def freeze_expired_qualifications(db: Session) -> List[User]:
         .filter(
             User.role == "rep",
             User.status == "active",
+            RepresentativeQualification.audit_status == "approved",
             RepresentativeQualification.filing_expire_date.isnot(None),
             RepresentativeQualification.filing_expire_date < today,
         )
