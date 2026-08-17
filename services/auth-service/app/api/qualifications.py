@@ -172,3 +172,104 @@ async def get_my_qualification(
         RepresentativeQualification.representative_id == current_user["id"]
     ).first()
     return success(qual.to_dict() if qual else None)
+
+
+@router.get("")
+async def list_qualifications(
+    page: int = 1,
+    page_size: int = 20,
+    audit_status: Optional[str] = None,
+    filing_status: Optional[str] = None,
+    keyword: Optional[str] = None,
+    current_user: dict = Depends(require_roles(*QUAL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """备案与资质列表（管理端：admin/manager/compliance/medical）"""
+    _reload_current_user(db, current_user)
+    if audit_status and audit_status not in VALID_AUDIT_STATUSES:
+        raise ParamError("audit_status 不合法")
+    if filing_status and filing_status not in ("valid", "expired", "not_filed"):
+        raise ParamError("filing_status 不合法")
+    p = PaginationParams(page=page, page_size=page_size)
+    query = db.query(RepresentativeQualification, User).join(
+        User, User.id == RepresentativeQualification.representative_id
+    )
+    if audit_status:
+        query = query.filter(RepresentativeQualification.audit_status == audit_status)
+    if filing_status:
+        query = query.filter(_filing_status_expr == filing_status)
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(or_(
+            User.full_name.ilike(like),
+            User.phone.ilike(like),
+            User.username.ilike(like),
+            RepresentativeQualification.filing_number.ilike(like),
+        ))
+    total = query.count()
+    rows = query.order_by(RepresentativeQualification.id.desc()).offset(p.offset).limit(p.limit).all()
+    items = [{**q.to_dict(), "rep_name": u.full_name, "rep_phone": u.phone} for q, u in rows]
+    return success(paginate(items, total, p.page, p.page_size))
+
+
+@router.put("/{qualification_id}/review")
+async def review_qualification(
+    qualification_id: int,
+    request: dict,
+    current_user: dict = Depends(require_roles(*QUAL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """资质审核（通过/驳回）。驳回必须附原因；可同时确认/修正备案有效期。"""
+    actor = _reload_current_user(db, current_user)
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    verdict = request.get("verdict")
+    if verdict not in ("approve", "reject"):
+        raise ParamError("verdict 必须是 approve 或 reject")
+    reason = (request.get("reason") or "").strip()
+    if verdict == "reject" and not reason:
+        raise ParamError("驳回必须填写原因")
+    if len(reason) > 500:
+        raise ParamError("原因长度不能超过 500 字符")
+    parsed_date = None
+    raw_date = request.get("filing_expire_date")
+    if raw_date:
+        try:
+            parsed_date = date.fromisoformat(str(raw_date))
+        except ValueError as exc:
+            raise ParamError("filing_expire_date 格式应为 YYYY-MM-DD") from exc
+
+    qual = db.query(RepresentativeQualification).filter(
+        RepresentativeQualification.id == qualification_id
+    ).first()
+    if not qual:
+        raise BusinessError("备案记录不存在", code=4001)
+    if qual.audit_status != "pending":
+        raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
+
+    before = {
+        "audit_status": qual.audit_status,
+        "filing_expire_date": qual.filing_expire_date.isoformat() if qual.filing_expire_date else None,
+    }
+    qual.audit_status = "approved" if verdict == "approve" else "rejected"
+    qual.reject_reason = reason if verdict == "reject" else None
+    qual.reviewed_by = actor.id
+    qual.reviewed_at = datetime.utcnow()
+    if parsed_date:
+        qual.filing_expire_date = parsed_date
+    db.commit()
+    db.refresh(qual)
+
+    await write_audit_log(
+        action="qualification_review",
+        user_id=actor.id,
+        resource_type="qualification",
+        resource_id=str(qual.id),
+        before_value=before,
+        after_value={
+            "audit_status": qual.audit_status,
+            "reject_reason": qual.reject_reason,
+            "filing_expire_date": qual.filing_expire_date.isoformat() if qual.filing_expire_date else None,
+        },
+    )
+    return success(qual.to_dict())

@@ -219,3 +219,111 @@ def test_me_requires_auth():
     # 与 test_auth.TestCurrentUser.test_无token被拒、specialist-service 既有约定一致）
     resp = client.get("/api/v1/qualifications/me")
     assert resp.status_code == 403
+
+
+def _add_qual(**kw):
+    db = TestSession()
+    defaults = dict(
+        id=kw.pop("id", 1), representative_id=kw.pop("representative_id", 1),
+        education_cert="https://oss/edu.pdf",
+        filing_number="F-1", audit_status="pending",
+        filing_expire_date=date.today() + timedelta(days=100),
+    )
+    defaults.update(kw)
+    db.add(RepresentativeQualification(**defaults))
+    db.commit()
+    db.close()
+    return defaults["id"]
+
+
+def test_list_returns_joined_items(fresh_state):
+    _add_qual()
+    resp = client.get("/api/v1/qualifications", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["rep_name"] == "张代表"
+    assert data["items"][0]["rep_phone"] == "13800000001"
+    assert data["items"][0]["filing_status"] == "valid"
+
+
+def test_list_filter_by_expired_status(fresh_state):
+    _add_qual(id=1, filing_expire_date=date.today() - timedelta(days=1))
+    _add_qual(id=2, representative_id=3, filing_number="F-2",
+              filing_expire_date=date.today() + timedelta(days=10))
+    resp = client.get("/api/v1/qualifications?filing_status=expired", headers=_token(2, "admin"))
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["representative_id"] == 1
+
+
+def test_list_rejects_rep(fresh_state):
+    resp = client.get("/api/v1/qualifications", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["code"] == 3000
+
+
+def test_review_approve_sets_fields(fresh_state):
+    _add_qual()
+    resp = client.put(
+        "/api/v1/qualifications/1/review",
+        json={"verdict": "approve", "filing_expire_date": "2029-01-01"},
+        headers=_token(2, "admin"),
+    )
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["audit_status"] == "approved"
+    assert body["data"]["filing_expire_date"] == "2029-01-01"
+    assert body["data"]["reviewed_by"] == 2
+    audit_mock = fresh_state
+    audit_mock.assert_awaited_once()
+
+
+def test_review_reject_requires_reason(fresh_state):
+    _add_qual()
+    resp = client.put(
+        "/api/v1/qualifications/1/review",
+        json={"verdict": "reject"},
+        headers=_token(2, "admin"),
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == 1000
+    assert "原因" in body["message"]
+
+
+def test_review_reject_saves_reason(fresh_state):
+    _add_qual()
+    resp = client.put(
+        "/api/v1/qualifications/1/review",
+        json={"verdict": "reject", "reason": "材料不清晰"},
+        headers=_token(2, "admin"),
+    )
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["audit_status"] == "rejected"
+    assert body["data"]["reject_reason"] == "材料不清晰"
+
+
+def test_review_not_pending_rejected(fresh_state):
+    _add_qual(audit_status="approved")
+    resp = client.put(
+        "/api/v1/qualifications/1/review",
+        json={"verdict": "approve"},
+        headers=_token(2, "admin"),
+    )
+    body = resp.json()
+    assert resp.status_code == 422
+    assert body["code"] == 4001
+
+
+def test_review_missing_row(fresh_state):
+    resp = client.put(
+        "/api/v1/qualifications/999/review",
+        json={"verdict": "approve"},
+        headers=_token(2, "admin"),
+    )
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
