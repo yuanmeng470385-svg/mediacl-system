@@ -273,3 +273,10 @@ def test_toggle_block_and_restore_audited(fresh_state):
     assert fresh_state.await_count == 2
     actions = [c.kwargs["action"] for c in fresh_state.await_args_list]
     assert actions == ["twin_subscription_toggle", "twin_subscription_toggle"]
+    # before/after 双留痕：迁移前旧状态（subscribed → blocked → subscribed）
+    assert [c.kwargs["before_value"]["status"] for c in fresh_state.await_args_list] == [
+        "subscribed", "blocked",
+    ]
+    assert [c.kwargs["after_value"]["status"] for c in fresh_state.await_args_list] == [
+        "blocked", "subscribed",
+    ]

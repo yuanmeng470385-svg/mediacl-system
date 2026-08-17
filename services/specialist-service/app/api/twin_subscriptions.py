@@ -173,6 +173,7 @@ async def toggle_subscription(
     if not sub:
         raise BusinessError("订阅不存在", code=4001)
 
+    before_value = sub.to_dict()
     sub.status = status
     db.commit()
     db.refresh(sub)
@@ -180,6 +181,6 @@ async def toggle_subscription(
     await write_audit_log(
         user_id=current_user["id"], action="twin_subscription_toggle",
         resource_type="doctor_twin_subscription", resource_id=str(sub.id),
-        after_value=sub.to_dict(),
+        before_value=before_value, after_value=sub.to_dict(),
     )
     return success(sub.to_dict())
