@@ -67,7 +67,7 @@ rules:
   - id: "R006"
     name: "禁止泄露患者信息"
     type: "semantic"
-    description: "禁止在对话中非法收集、使用和传播可识别的患者个人信息及医疗机构内部信息"
+    description: "禁止在对话中非法收集、使用和传播可识别的患者个人信息及医疗机构内部信息（2026《医药代表管理办法》）"
     severity: "high"
     action: "reject"
     enabled: true
@@ -131,5 +131,5 @@ rules:
     type: "semantic"
     severity: "high"
     action: "reject"
-    description: "禁止误导医生使用药品、干预或影响临床合理使用药品（2026《医药代表管理办法》）"
+    description: "禁止误导医生使用药品（2026《医药代表管理办法》）"
     enabled: true

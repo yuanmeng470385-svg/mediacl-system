@@ -5,6 +5,7 @@
 --
 -- 注意（同 004）：只插新增行/更新改动行，不回写其他规则 ——
 --   运营修改以 DB 为源，回写会覆盖后台改动。幂等可重复执行。
+-- 注意：重跑本脚本会把 R008-R011 的 enabled 重置为 TRUE（运营禁用会被覆盖），同 004 行为。
 --
 -- 执行：
 --   docker exec -i medagent-postgres psql -U medagent medagent \
@@ -30,7 +31,7 @@ VALUES
 
 ('R011', '禁止误导用药', 'semantic',
  '{}',
- 'high', 'reject', '禁止误导医生使用药品、干预或影响临床合理使用药品（2026《医药代表管理办法》）', TRUE)
+ 'high', 'reject', '禁止误导医生使用药品（2026《医药代表管理办法》）', TRUE)
 ON CONFLICT (rule_code) DO UPDATE SET
     rule_name   = EXCLUDED.rule_name,
     rule_type   = EXCLUDED.rule_type,
