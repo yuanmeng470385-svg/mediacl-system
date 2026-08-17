@@ -218,6 +218,27 @@ export interface User {
   status: 'active' | 'disabled';
 }
 
+// ========== 备案与资质 ==========
+// 字段与 auth-service RepresentativeQualification.to_dict 对齐（列表项另含 rep_name/rep_phone）
+export interface Qualification {
+  id: string;
+  representative_id: string;
+  education_cert: string;
+  training_cert?: string;
+  audit_status: 'pending' | 'approved' | 'rejected';
+  filing_number?: string;
+  filing_status: 'not_filed' | 'valid' | 'expired';
+  filing_expire_date?: string;
+  days_until_expiry?: number | null;
+  reject_reason?: string;
+  reviewed_by?: number;
+  reviewed_at?: string;
+  rep_name?: string;
+  rep_phone?: string;
+  compliance_training_completed: boolean;
+  commitment_signed: boolean;
+}
+
 // ========== 仪表盘 ==========
 export interface DashboardStats {
   active_users: number;
