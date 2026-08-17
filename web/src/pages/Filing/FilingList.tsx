@@ -57,9 +57,11 @@ export default function FilingList() {
   };
 
   const columns: ProColumns<Qualification>[] = [
-    { title: '代表', dataIndex: 'rep_name', width: 120 },
-    { title: '手机号', dataIndex: 'rep_phone', width: 130 },
-    { title: '备案号', dataIndex: 'filing_number', width: 160 },
+    // 搜索参数对齐后端 list_qualifications：仅 audit_status/filing_status/keyword；
+    // 以下四列 hideInSearch，避免表单输入被后端静默忽略（2026-08-17 审查修复）
+    { title: '代表', dataIndex: 'rep_name', width: 120, hideInSearch: true },
+    { title: '手机号', dataIndex: 'rep_phone', width: 130, hideInSearch: true },
+    { title: '备案号', dataIndex: 'filing_number', width: 160, hideInSearch: true },
     {
       title: '备案状态', dataIndex: 'filing_status', width: 90,
       valueEnum: { valid: '有效', expired: '已过期', not_filed: '未备案' },
@@ -69,7 +71,7 @@ export default function FilingList() {
       },
     },
     {
-      title: '备案有效期', dataIndex: 'filing_expire_date', width: 160,
+      title: '备案有效期', dataIndex: 'filing_expire_date', width: 160, hideInSearch: true,
       render: (_, r) => {
         if (!r.filing_expire_date) return '—';
         const d = r.days_until_expiry;
@@ -94,6 +96,7 @@ export default function FilingList() {
       title: '操作', width: 80,
       render: (_, r) => <a onClick={() => openDrawer(r)}>审核</a>,
     },
+    { title: '关键词', dataIndex: 'keyword', hideInTable: true },
   ];
 
   return (
