@@ -22,6 +22,27 @@ CREATE INDEX IF NOT EXISTS idx_users_manager ON users(manager_id);
 -- 手机号登录要求手机号唯一（仅约束非空值，允许多个用户不填手机号）
 CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON users(phone) WHERE phone IS NOT NULL;
 
+-- 代表备案与资质表（迁移 009）
+CREATE TABLE IF NOT EXISTS representative_qualifications (
+    id BIGSERIAL PRIMARY KEY,
+    representative_id BIGINT NOT NULL UNIQUE REFERENCES users(id),
+    education_cert VARCHAR(500) NOT NULL,
+    training_cert VARCHAR(500),
+    audit_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    filing_number VARCHAR(50),
+    filing_expire_date DATE,
+    reject_reason VARCHAR(500),
+    reviewed_by BIGINT,
+    reviewed_at TIMESTAMP,
+    compliance_training_completed BOOLEAN NOT NULL DEFAULT FALSE,
+    compliance_exam_score INTEGER,
+    commitment_signed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_qual_audit_status ON representative_qualifications(audit_status);
+CREATE INDEX IF NOT EXISTS idx_qual_expire ON representative_qualifications(filing_expire_date);
+
 -- 2. 产品表
 CREATE TABLE IF NOT EXISTS products (
     id BIGSERIAL PRIMARY KEY,
