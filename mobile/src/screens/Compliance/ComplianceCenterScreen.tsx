@@ -6,13 +6,17 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import DocumentPicker from 'react-native-document-picker';
 import Icon from '../../components/Icon';
 import { qualificationAPI } from '../../api/qualification';
 import type { Qualification } from '../../types';
+import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
 type PickedFile = { uri: string; name: string; type: string };
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const AUDIT_TEXT: Record<string, string> = {
   pending: '待审核', approved: '已通过', rejected: '已驳回',
@@ -25,6 +29,7 @@ const AUDIT_COLOR: Record<string, string> = {
 };
 
 export default function ComplianceCenterScreen() {
+  const navigation = useNavigation<Nav>();
   const [qual, setQual] = useState<Qualification | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [filingNumber, setFilingNumber] = useState('');
@@ -106,7 +111,11 @@ export default function ComplianceCenterScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Icon name="chevron-left" size={22} color={Colors.textWhite} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>备案与资质</Text>
+        <View style={{ width: 24 }} />
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {/* 备案状态卡 */}
@@ -201,8 +210,12 @@ export default function ComplianceCenterScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { paddingTop: Spacing.xl, paddingBottom: Spacing.md, alignItems: 'center' },
-  headerTitle: { fontSize: FontSize.lg, fontWeight: '600', color: Colors.textPrimary },
+  header: {
+    backgroundColor: Colors.primary, paddingTop: 50, paddingBottom: 14,
+    paddingHorizontal: Spacing.lg, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'space-between', ...Shadow.header,
+  },
+  headerTitle: { color: Colors.textWhite, fontSize: FontSize.lg, fontWeight: '600' },
   content: { padding: Spacing.md },
   card: { backgroundColor: Colors.card, borderRadius: BorderRadius.md, padding: Spacing.lg, marginBottom: Spacing.md },
   cardTitle: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary, marginBottom: Spacing.sm },
