@@ -34,6 +34,16 @@ class Settings:
     DEV_MODE = _as_bool(os.getenv("AUTH_DEV_MODE", "false"))
 
     GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
+
+    # --- OSS（资质证书文件；与 knowledge-service 共用 .env 键名）---
+    OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "")
+    OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "")
+    OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "")
+    OSS_BUCKET = os.getenv("OSS_BUCKET", "")
+
+    # --- 备案到期扫描 ---
+    QUALIFICATION_CHECK_INTERVAL_HOURS = int(os.getenv("QUALIFICATION_CHECK_INTERVAL_HOURS", "24"))
+
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
 
