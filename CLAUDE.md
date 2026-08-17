@@ -251,7 +251,7 @@ class MyModel(Base, TimestampMixin):
 | R003 禁止统方 | semantic (LLM) | **reject** |
 | R004 禁止超适应症推广 | semantic | **reject** |
 | R005 禁止贬低竞品 | semantic | **warn** (不拦截) |
-| R006 禁止非法收集、使用和传播患者信息 | semantic | **reject** |
+| R006 禁止泄露患者信息 | semantic | **reject** |
 | R007 禁止讨论未公开数据 | semantic | **warn** (不拦截) |
 | R008 禁止附加销售条件利益输送 | regex | **reject** |
 | R009 禁止馈赠财物 | keyword | **reject** |
