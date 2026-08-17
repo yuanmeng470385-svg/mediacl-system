@@ -93,7 +93,7 @@ def test_disabled_db_rule_overrides_yaml(monkeypatch):
     assert not any(v["rule_code"] == "R001" for v in result["violations"])
     assert result["blocked"] is False
     # 其他 YAML 规则不受影响
-    result2 = checker.check("这个药有返点吗", {"type": "chat"})
+    result2 = checker.check("这个药有返点吗", {"type": "chat"}, fast=True)
     assert any(v["rule_code"] == "R002" for v in result2["violations"])
 
 
@@ -143,7 +143,8 @@ def test_non_dict_content_row_skipped_not_poisoning(monkeypatch):
     assert not any(r["id"] == "R998" for r in checker.rules)  # 坏行被剔除
     assert any(r["id"] == "R011" for r in checker.rules)      # 其余 DB 规则正常
     # R010 来自 YAML 种子：坏行隔离不伤真规则
-    r010 = next(r for r in checker.rules if r["id"] == "R010")
+    r010 = next((r for r in checker.rules if r["id"] == "R010"), None)
+    assert r010 is not None
     assert r010["type"] == "keyword"
     assert r010["name"] == "禁止隐匿不良反应"
     result = checker.check("出现正常词", {})

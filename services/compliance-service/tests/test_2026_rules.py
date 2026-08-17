@@ -33,7 +33,8 @@ def checker(monkeypatch):
 def test_new_rules_loaded_from_yaml(checker):
     ids = {r["id"] for r in checker.rules}
     assert {"R008", "R009", "R010", "R011"} <= ids
-    r006 = next(r for r in checker.rules if r["id"] == "R006")
+    r006 = next((r for r in checker.rules if r["id"] == "R006"), None)
+    assert r006 is not None
     assert "非法收集" in r006["description"]
 
 
