@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# Metro
+.metro-health-check*
+
+# testing / coverage
+coverage/
+
+# native build artifacts
+ios/Pods/
+ios/build/
+ios/.xcode.env.local
+android/build/
+android/app/build/
+android/.gradle/
+
+# bundle cache
+.bundle/
