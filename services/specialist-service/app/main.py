@@ -68,6 +68,9 @@ app.include_router(chat_ws_router)
 from app.api.medical import router as medical_router
 app.include_router(medical_router)
 
+from app.api.twin_subscriptions import router as twin_subscriptions_router
+app.include_router(twin_subscriptions_router)
+
 
 @app.get("/health")
 async def health():

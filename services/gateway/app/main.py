@@ -148,6 +148,8 @@ ROUTE_MAP = {
     "/api/v1/users": settings.AUTH_SERVICE_URL,  # 用户管理（Web 后台）
     "/api/v1/qualifications": settings.AUTH_SERVICE_URL,  # 备案与资质（Web 后台 + 移动端）
     "/api/v1/medical": settings.SPECIALIST_SERVICE_URL,  # 医生端医学问答（一期 B）
+    "/api/v1/twin-subscriptions": settings.SPECIALIST_SERVICE_URL,  # 医生端分身订阅（一期 B）
+    "/api/v1/share-links": settings.SPECIALIST_SERVICE_URL,  # 医生端分享链接激活（一期 B）
 }
 
 
