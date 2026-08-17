@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import asyncio
+from contextlib import asynccontextmanager
 
 from app.config import settings
 from shared.common.exception_handler import register_exception_handlers
@@ -30,10 +32,32 @@ if settings.JWT_SECRET in _WEAK_SECRETS:
 if settings.DEV_MODE:
     logger.warning("AUTH_DEV_MODE=true：send-code 会在响应体里回传验证码，生产环境必须关闭！")
 
+async def _filing_expiry_loop() -> None:
+    """备案到期扫描：启动即跑一次，此后每 QUALIFICATION_CHECK_INTERVAL_HOURS 小时执行（参照 audit-service 清理任务模式）"""
+    from app.core.filing_expiry import run_filing_expiry_scan
+
+    while True:
+        try:
+            await run_filing_expiry_scan()
+        except Exception as exc:
+            logger.error("备案到期扫描失败: %s", exc)
+        await asyncio.sleep(settings.QUALIFICATION_CHECK_INTERVAL_HOURS * 3600)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_filing_expiry_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
 app = FastAPI(
     title="MedAgent - 认证服务",
     description="手机号验证码登录 / 用户名密码登录 / 当前用户信息",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
