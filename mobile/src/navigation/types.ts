@@ -39,6 +39,7 @@ export type RootStackParamList = {
   Settings: undefined;
   NotificationSettings: undefined;
   HelpCenter: undefined;
+  ComplianceCenter: undefined;
 };
 
 // ========== 路由参数类型导出 ==========

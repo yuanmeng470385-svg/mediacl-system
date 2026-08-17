@@ -16,7 +16,7 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const APP_VERSION: string = require('../../../package.json').version;
 
-type RowAction = 'profile' | 'notifications' | 'coming' | 'about';
+type RowAction = 'profile' | 'notifications' | 'compliance' | 'coming' | 'about';
 
 const sections: { title: string; items: { icon: string; label: string; desc: string; action: RowAction }[] }[] = [
   { title: '个人资料', items: [
@@ -25,6 +25,7 @@ const sections: { title: string; items: { icon: string; label: string; desc: str
   ]},
   { title: '工作', items: [
     { icon: 'account-group', label: '我的团队', desc: '团队成员与协作', action: 'coming' },
+    { icon: 'shield-account', label: '备案与资质', desc: '备案状态、资质审核', action: 'compliance' },
     { icon: 'chart-bar', label: '业绩统计', desc: '拜访、对话、合规数据', action: 'coming' },
   ]},
   { title: '通用', items: [
@@ -50,6 +51,9 @@ export default function SettingsScreen() {
         break;
       case 'about':
         Alert.alert('关于 MedAgent', `MedAgent 医药代表数字员工系统\n版本 v${APP_VERSION}`);
+        break;
+      case 'compliance':
+        navigation.navigate('ComplianceCenter');
         break;
       default:
         Alert.alert('提示', '该功能将在后续版本开放，敬请期待');

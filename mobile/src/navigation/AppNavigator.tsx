@@ -27,6 +27,7 @@ import ContentDetailScreen from '../screens/Content/ContentDetailScreen';
 import ComplianceScreen from '../screens/Compliance/ComplianceScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
 import SettingsScreen from '../screens/Settings/SettingsScreen';
+import ComplianceCenterScreen from '../screens/Compliance/ComplianceCenterScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
@@ -181,6 +182,7 @@ export default function AppNavigator() {
             <Stack.Screen name="Favorites" component={FavoritesScreen} options={{ animation: 'slide_from_right' }} />
             {/* 辅助页面 */}
             <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="ComplianceCenter" component={ComplianceCenterScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="HelpCenter" component={HelpCenterScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="VisitDetail" component={VisitDetailScreen} options={{ animation: 'slide_from_right' }} />
