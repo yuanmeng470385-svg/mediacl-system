@@ -4,6 +4,9 @@
  */
 import { qualificationAPI } from '../qualification';
 
+/** RN 0.75 的 FormData 类型无 get 方法，断言处用最小接口替代（运行时即真实 FormData） */
+type FDLike = { get(k: string): any };
+
 const okResponse = (data: any = {}) => ({
   json: async () => ({ code: 0, message: 'success', data }),
 });
@@ -38,7 +41,7 @@ describe('qualificationAPI', () => {
     expect(url).toContain('/api/v1/qualifications');
     expect(init.method).toBe('POST');
     expect(init.headers).not.toHaveProperty('Content-Type');
-    const fd = init.body as FormData;
+    const fd = init.body as unknown as FDLike;
     expect(fd.get('filing_number')).toBe('F-2026-001');
     expect(fd.get('filing_expire_date')).toBe('2028-06-30');
     expect(fd.get('education_cert')).toEqual({
@@ -53,7 +56,7 @@ describe('qualificationAPI', () => {
       educationCert: { uri: 'file:///edu.pdf', name: 'edu.pdf', type: 'application/pdf' },
     });
     const { init } = lastCall();
-    const fd = init.body as FormData;
+    const fd = init.body as unknown as FDLike;
     expect(fd.get('filing_number')).toBeNull();
     expect(fd.get('filing_expire_date')).toBeNull();
     expect(fd.get('training_cert')).toBeNull();
