@@ -61,7 +61,11 @@ def _qwen_json(prompt: str) -> dict:
     structured = _parse_json_content(resp.get("content", ""))
     if not isinstance(structured, dict):
         raise ValueError("qwen JSON 解析失败")
-    answer = str(structured.get("answer") or "")
+    answer = str(structured.get("answer") or "").strip()
+    # B5 修复（2026-08-17）：合法 JSON 但 answer 为空 → 视为不可用，走生成失败分支，
+    # 不得把空答案以 blocked=False 透出给医生（百炼空答案历史 bug 908af39 的 qwen 直调复现）
+    if not answer:
+        raise ValueError("qwen 生成答案为空")
     cited = structured.get("cited") or []
     if not isinstance(cited, list):
         cited = []

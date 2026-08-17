@@ -126,6 +126,32 @@ def test_generation_failure_returns_graceful_message(monkeypatch, client):
     assert data["citations"] == []
 
 
+def test_empty_answer_treated_as_generation_failure(monkeypatch, client):
+    """B5：合法 JSON 但 answer 为空 → _qwen_json 视为不可用 → 走生成失败分支（不 500）。
+
+    复现历史 bug 类（百炼空答案 908af39）：空答案不得以 blocked=False 透出给医生。
+    """
+    class FakeQwen:
+        def chat(self, messages, model=None, temperature=0.1, max_tokens=2000):
+            return {"content": '{"answer": "", "cited": []}', "usage": {}}
+
+    async def _retrieve(query, top_k=5):
+        return {"results": [], "source": None, "empty": True}
+
+    # 不 monkeypatch _qwen_json —— 走真实逻辑（QwenClient 换假），证明空答案守卫生效
+    monkeypatch.setattr("app.api.medical.QwenClient", lambda: FakeQwen())
+    monkeypatch.setattr("app.api.medical.check_compliance", _check_pass)
+    monkeypatch.setattr("app.api.medical.write_audit_log", _audit)
+    monkeypatch.setattr("app.api.medical._retrieve", _retrieve)
+
+    resp = client.post("/api/v1/medical/qa", json={"question": "正常问题"})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["answer"] == "AI 生成失败，请稍后重试。"
+    assert data["blocked"] is False
+    assert data["citations"] == []
+
+
 def test_answer_blocked_masked_and_audited(monkeypatch, client):
     audit_calls = []
     results = [{"title": "指南A", "url": "http://a", "doc_id": "d1", "content": "内容A"}]
