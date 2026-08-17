@@ -30,6 +30,8 @@ Web 管理后台 (React+Vite, web/, :3000) ─┐
 
 **2026-08-11 审计补记的服务端点（此前未入文档）**：audit `GET /api/v1/audit/stats`（仪表盘聚合：总数/风险分布/服务分布/按日趋势）、hcp `POST/DELETE /api/v1/hcps/{hcp_id}/tags`（标签增删）、visit `GET /api/v1/tasks` + `PUT /api/v1/tasks/{task_id}` + `GET /api/v1/visits/{visit_id}/tasks`（tasks 模块，follow_up 自动建任务后管理）、compliance `POST /api/v1/compliance/rules/test`（规则试跑）与 `GET /api/v1/compliance/redlines`（见 Compliance Rules 章节）、visit `GET /api/v1/nls/tts-token`（TTS 合成凭证：require_roles rep/admin/manager；未配 NLS_APPKEY → BusinessError 4xxx；移动端 TTS 凭证）。
 
+**2026-08-17 备案资质子系统补记的服务端点（一期 A，此前未入文档）**：auth `POST /api/v1/qualifications`（代表提交备案资质，multipart：学历/培训证明文件 + filing_number/filing_expire_date，仅 rep 可提交，审计 action=qualification_submit）、`GET /api/v1/qualifications/me`（代表查本人备案状态，filing_status 为派生值 not_filed/valid/expired）、`GET /api/v1/qualifications`（分页列表，audit_status/filing_status/keyword 过滤，含 rep_name）、`PUT /api/v1/qualifications/{id}/review`（资质审核 approve/reject，require_roles admin/manager/compliance/medical，审计 action=qualification_review）。
+
 ## Commands
 
 ```bash
@@ -57,14 +59,14 @@ cd web && npm run build            # tsc -b && vite build
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
 # 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 M 系列第二轮后 603 passed）
-cd services/auth-service && python -m pytest tests/ -v        # 70 用例（含验证码并发 consume Lua 用例）
+cd services/auth-service && python -m pytest tests/ -v        # 88 passed + 7 skipped（含验证码并发 consume Lua / 备案资质用例；2026-08-17 实测）
 cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
 cd services/visit-service && python -m pytest tests/ -v       # 115（含取消/结束态拦截/直调 qwen/转写去重/ASR 连接限制/full_transcript 前缀/结构化合规/prompt 定界）
 cd services/compliance-service && python -m pytest tests/ -v  # 97（语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
 cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
 cd services/audit-service && python -m pytest tests/ -v       # 26
-cd services/gateway && python -m pytest tests/ -v             # 74（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝）
+cd services/gateway && python -m pytest tests/ -v             # 76（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝；2026-08-17 实测）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -225,7 +227,7 @@ async with httpx.AsyncClient(timeout=10.0) as client:
 
 ## Database
 
-PostgreSQL（Docker `postgres:15`），**14 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes`（006）与 `visit_records.status`（008）两列 2026-08-13 起也已并入 init_db.sql，旧库仍须按序执行 006/008）。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
+PostgreSQL（Docker `postgres:15`），**15 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes`（006）与 `visit_records.status`（008）两列 2026-08-13 起也已并入 init_db.sql，旧库仍须按序执行 006/008）。**`representative_qualifications`（迁移 009，2026-08-17 备案资质子系统，已并入 init_db.sql）**：15 列（含二期预留的 compliance_training_completed / compliance_exam_score / commitment_signed，本计划只建列不接线）；**`filing_status` 是派生值不落库**，由 filing_number + filing_expire_date 计算（not_filed/valid/expired），见 `shared/models/qualification.py`；索引 idx_qual_audit_status / idx_qual_expire。旧库须执行 009。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
 
 **审计表不可篡改（`scripts/migrations/002_audit_immutable.sql`）**：audit_logs 的 owner 是 NOLOGIN 占位角色 `medagent_audit_owner`；`medagent_audit`（审计服务专用，`AUDIT_DATABASE_URL` 配置）只有 INSERT/SELECT；`medagent` 只 SELECT。该 migration 还会把 medagent 从 superuser 降级（PostgreSQL 官方镜像默认把 `POSTGRES_USER` 设为 superuser，superuser 无视 REVOKE）。migration 只需执行一次（medagent 降级后无法重跑，补权限找表 owner 或单用户模式）。
 
@@ -284,7 +286,7 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 和 `/health` 代理到网关 `localhost:8000`（`vite.config.ts`，/health 是 M54 网关状态卡探活），生产由反代同路径转发。
 
-9 模块 11 路由（`web/src/constants/routes.ts`，懒加载）：仪表盘 `/dashboard`、数字专员 `/specialist/list` + `/specialist/create`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、系统配置 `/system/config`。另有登录页 `/login`。
+10 模块 12 路由（懒加载，路由定义在 `web/src/App.tsx`，侧边菜单在 `web/src/constants/menu.tsx`；旧 `constants/routes.ts` 已删除）：仪表盘 `/dashboard`、数字专员 `/specialist/list`（新增/编辑在列表页 Modal 内）、拜访管理 `/visit/list`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、备案管理 `/filing/list`（2026-08-17 备案资质子系统：资质审核列表 + 审核抽屉）、系统配置 `/system/config`。另有登录页 `/login`。
 
 API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。非 401 的 4xx（含 403）由拦截器统一弹后端 message。
 
@@ -320,12 +322,12 @@ cd mobile && npx react-native start                   # Metro（Node v25 实测�
 # git-bash 下 npx react-native run-android 调 gradlew.bat 会失败（'gradlew.bat' 不是内部或外部命令）→ 手动装：
 cd mobile/android && ./gradlew.bat app:installDebug -PreactNativeDevServerPort=8081
 adb shell am start -n com.medagent.mobile/.MainActivity
-# 测试：cd mobile && npx jest（73 用例 = 契约 34 + wsChat 9 + asr 8 + tts 10 + asrStreaming 8 + date 4，锁 URL/method/body/响应形状；2026-08-13 核对）
+# 测试：cd mobile && npx jest（76 用例，7 套件：api-contract + qualification-contract（备案资质契约）+ wsChat + asr + tts + asrStreaming + date，锁 URL/method/body/响应形状；2026-08-17 核对）
 ```
 
 结构：`mobile/src/navigation/AppNavigator.tsx`（Stack：登录 → 底部 4 Tab：工作台/对话/医生/我的 → 拜访/医生详情等子页）+ `navigation/types.ts`（导航参数类型；2026-08-13 确认旧记录的死路由 `HCPProfile`/`ComplianceRuleDetail` 已不存在，仅残留 HCPProfile 类型接口）；`mobile/src/api/` 按服务拆分（auth/compliance/content/hcp/specialist/visit 6 文件），统一走 `mobile/src/api/client.ts`：Android 模拟器 `http://10.0.2.2:8000`、iOS `localhost:8000`（都是网关）；登录态在 `mobile/src/store/AuthContext.tsx`（AsyncStorage 存 token，仅 401 才登出，网络抖动保留登录态）。**契约铁律：请求体/响应形状以 src/api/*.ts 为唯一映射点**（snake_case、分页解包都在这里做，不污染屏幕组件）；改动后端响应形状或端点后，先改 api 层 + 契约测试，再动屏幕。
 
-其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 17 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 13（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
+其他模块（2026-08-11 全文件审计补记）：`src/components/` 六组件（Icon/EmptyState/EvidenceBadge/FAB/ProgressRing/VisitCard）、`src/constants/theme.ts`（设计令牌）、`src/utils/date.ts`（`formatLocalDate` 本地日期语义 + 4 测试）、`src/services/recorder.ts`（录音封装，`declare const atob` 绕 tsconfig 无 DOM lib）、`jest.setup.js`（mock AsyncStorage）。屏幕 18 个：Tab 4（Home/Specialists/HCPs——组件名 `HCPSearchScreen`/Profile）+ 子页 14（Chat/HCPDetail/VisitPrepare/VisitInProgress/VisitEnd/Content/ContentDetail/ComplianceManual/ComplianceCenter（个人合规中心 `ComplianceCenterScreen.tsx`，备案状态/到期提醒/资质上传提交，2026-08-17 备案资质子系统）/Settings/NotificationSettings/HelpCenter/VisitDetail/Login）。**Android Kotlin 目录是非标准布局**：`android/app/src/main/java/com/com.medagent.mobile/`（com 下直接套一个名为 `com.medagent.mobile` 的目录，非常规三段式）——Kotlin 不强制目录与包名一致，构建不受影响，但别按标准布局"整理"它。
 
 **已知问题（2026-08-06 第四批后）**：
 - 录音链路已接但 NLS_APPKEY 未配：`VisitInProgressScreen` 录音 → PCM 分片推 ASR WS，服务端未配置时发 error 帧 fail-closed（前端提示"NLS 识别通道未配置"，不产生假文本）；`ChatScreen` 语音按钮为入口提示 Alert（语音转写需在拜访中页使用——无拜访上下文），拜访中页为全链路流式语音输入。2026-08-12 真机联调已实测（Android 13+ 麦克风运行时权限 / message_id UUID / 流式三守卫等修复见 Known Gaps 已修批）；M19 已修复——轮询增量流式推流（录音中每 2s 读增量推送，stop 推完剩余并发 stop 帧）。
@@ -434,6 +436,12 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 短信默认仍 console（未配签名/模板 CODE 时，验证码捞 `logs/native/auth-service.log`；配齐后 `AUTH_SMS_PROVIDER=aliyun` 生效）
 - 系统配置经 .env 环境变量管理（web 只读展示配置状态，不支持在线保存——见 `GET /api/v1/system/config`）
 - ~~网关限流为单进程内存版（--workers 2 时每 worker 独立限额）~~（486d440 接 Redis 分布式滑动窗口，内存版仅降级兜底）；compliance 的 REQUESTS 计数未接线（可照 specialist 中间件扩展）
+- **备案资质子系统挂账（2026-08-17 一期 A 收尾，勿误以为已做）**：
+  - 未备案/未过审的全量使用门禁（现仅备案到期自动冻结；未备案/审核未过是否禁用账号待老板拍板存量方案）
+  - 医生资质审核（Plan B：复用 qualification review 模式，hcps 表建资质字段）
+  - 备案证书 OSS bucket ACL 私有化 + 签名 URL 预览（现 education_cert/training_cert 为直读 URL）
+  - 国家备案平台公开查询接口调研（filing_number 真伪校验，现为人工核对）
+  - 培训考试字段二期接线（compliance_training_completed / compliance_exam_score / commitment_signed 已建列未接线）
 
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
@@ -513,3 +521,4 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - **NLS TTS 合成**：mobile 直调 `https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts?appkey&token&text&format=wav&sample_rate=16000`（REST 一次性合成，非流式）；appkey 非机密可放客户端，AK/SK 永不出服务端
 - **mobile/ react-native-sound 是首个音频播放依赖**（TTS 朗读；原生模块需重新 run-android）
 - **transcript 响应含 key_nodes/ai_suggestion**（LLM 推荐节流 20s/句；失败返回空数组/null 不阻塞）
+- **`QUALIFICATION_CHECK_INTERVAL_HOURS`**（auth-service 备案到期扫描周期，默认 24 小时、可省略不配）：启动即跑一次，此后每 N 小时扫描 `representative_qualifications` 的 filing_expire_date < 今天 且 role=rep/status=active 的代表，**自动冻结账号**（status→disabled）+ 审计 action=qualification_expired_freeze；审计失败不阻断冻结。filing_status 本身是派生值不落库。
