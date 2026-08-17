@@ -86,7 +86,10 @@ def test_disabled_db_rule_overrides_yaml(monkeypatch):
                      {"patterns": ["保证治好"]}, enabled=False)]
     monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb(rows))
     checker = ComplianceChecker()
-    result = checker.check("保证治好", {"type": "chat"})
+    # 2026-08-17：fast=True 只跑文本层——用例锁定的是"DB 禁用 R001 后文本层不再
+    # 命中"，不依赖语义层（本机 DASHSCOPE_API_KEY 已配时，语义规则 R011 会把
+    # "保证治好"判为违规导致 blocked=True，测试被环境绑架）
+    result = checker.check("保证治好", {"type": "chat"}, fast=True)
     assert not any(v["rule_code"] == "R001" for v in result["violations"])
     assert result["blocked"] is False
     # 其他 YAML 规则不受影响
@@ -125,15 +128,24 @@ def test_disabled_then_enabled_rule_recovers(monkeypatch):
 # ==================== D2：坏 content 行隔离（2026-08-13） ====================
 
 def test_non_dict_content_row_skipped_not_poisoning(monkeypatch):
-    """D2：单行 content 非 dict（字符串）被跳过 + warning，不毒化全部 DB 规则加载"""
+    """D2：单行 content 非 dict（字符串）被跳过 + warning，不毒化全部 DB 规则加载
+
+    2026-08-17：坏行 id 由 R010 改为 YAML 中不存在的 R998 —— R010 已随 2026 办法
+    映射（Task 1）迁入 YAML 种子，"剔除后 rules 无 R010"的旧断言失去意义；
+    改为锁定 YAML R010 真规则仍在（keyword / 禁止隐匿不良反应）且不受坏行影响。
+    """
     rows = [
-        _FakeRow("R010", "坏数据规则", "semantic", "这是一段字符串 content"),
+        _FakeRow("R998", "坏数据规则", "semantic", "这是一段字符串 content"),
         _FakeRow("R011", "正常规则", "keyword", {"patterns": ["正常词"]}),
     ]
     monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb(rows))
     checker = ComplianceChecker()
-    assert not any(r["id"] == "R010" for r in checker.rules)  # 坏行被剔除
+    assert not any(r["id"] == "R998" for r in checker.rules)  # 坏行被剔除
     assert any(r["id"] == "R011" for r in checker.rules)      # 其余 DB 规则正常
+    # R010 来自 YAML 种子：坏行隔离不伤真规则
+    r010 = next(r for r in checker.rules if r["id"] == "R010")
+    assert r010["type"] == "keyword"
+    assert r010["name"] == "禁止隐匿不良反应"
     result = checker.check("出现正常词", {})
     assert any(v["rule_code"] == "R011" for v in result["violations"])
 
