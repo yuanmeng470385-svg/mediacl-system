@@ -27,6 +27,24 @@ export interface User {
   avatar?: string;
 }
 
+// ========== 备案与资质（后端 to_dict 同形状，见 web/src/types Qualification） ==========
+export interface Qualification {
+  id: number;
+  representative_id: number;
+  education_cert: string;
+  training_cert?: string;
+  audit_status: 'pending' | 'approved' | 'rejected';
+  filing_number?: string;
+  filing_status: 'not_filed' | 'valid' | 'expired';
+  filing_expire_date?: string;
+  days_until_expiry?: number | null;
+  reject_reason?: string;
+  reviewed_by?: number;
+  reviewed_at?: string;
+  compliance_training_completed: boolean;
+  commitment_signed: boolean;
+}
+
 export interface LoginResponse {
   token: string;
   user: User;

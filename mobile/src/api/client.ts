@@ -128,6 +128,61 @@ class APIClient {
     }
   }
 
+  /**
+   * multipart 上传通道（资质证书文件）：request 是 JSON 专用，上传走这里。
+   * 不设 Content-Type —— fetch 自动生成 multipart boundary；超时放宽到 60s。
+   */
+  async upload<T>(path: string, formData: FormData): Promise<T> {
+    const token = await this.getToken();
+    const headers: Record<string, string> = {
+      'X-Request-ID': this.generateUUID(),
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    try {
+      const response = await fetch(`${this.baseURL}${path}`, {
+        method: 'POST',
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const result = await response.json();
+
+      if (result.code !== 0) {
+        throw new APIError(
+          result.message || '请求失败',
+          result.code || -1,
+          response.status
+        );
+      }
+
+      return result.data as T;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error instanceof APIError) {
+        const tokenInvalid =
+          error.status === 401 || [2000, 2001, 2002, 2003].includes(error.code);
+        if (tokenInvalid) {
+          await this.clearToken();
+          this.onUnauthorized?.();
+        }
+        throw error;
+      }
+      if (error.name === 'AbortError') {
+        throw new APIError('上传超时，请检查网络连接', -1);
+      }
+      throw new APIError(error.message || '网络异常，请检查网络连接', -1);
+    }
+  }
+
   private generateUUID(): string {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
       /[xy]/g,
