@@ -18,6 +18,7 @@ const DoctorList = lazy(() => import('./pages/Doctor/DoctorList'));
 const DoctorDetail = lazy(() => import('./pages/Doctor/DoctorDetail'));
 const UserList = lazy(() => import('./pages/User/UserList'));
 const FilingList = lazy(() => import('./pages/Filing/FilingList'));
+const DoctorCertList = lazy(() => import('./pages/DoctorCert/DoctorCertList'));
 const SystemConfig = lazy(() => import('./pages/System/SystemConfig'));
 
 const Loading = () => (
@@ -63,6 +64,7 @@ export default function App() {
                   <Route path="doctor/:id" element={<DoctorDetail />} />
                   <Route path="user/list" element={<UserList />} />
                   <Route path="filing/list" element={<FilingList />} />
+                  <Route path="doctor-cert/list" element={<DoctorCertList />} />
                   <Route path="system/config" element={<SystemConfig />} />
                 </Route>
               </Routes>

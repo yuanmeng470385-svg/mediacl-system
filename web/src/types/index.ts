@@ -239,6 +239,21 @@ export interface Qualification {
   commitment_signed: boolean;
 }
 
+// ========== 医生资质审核 ==========
+// 字段与 auth-service DoctorCertification.to_dict 对齐（列表项另含 doctor_name/doctor_phone）
+export interface DoctorCert {
+  id: number;
+  doctor_id: number;
+  doctor_name?: string;
+  doctor_phone?: string;
+  cert_type: 'physician' | 'practice';
+  cert_image_url: string;
+  cert_status: 'pending' | 'approved' | 'rejected';
+  reject_reason?: string | null;
+  reviewed_by?: number | null;
+  reviewed_at?: string | null;
+}
+
 // ========== 仪表盘 ==========
 export interface DashboardStats {
   active_users: number;

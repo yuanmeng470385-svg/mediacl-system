@@ -10,6 +10,7 @@ import {
   SettingOutlined,
   CalendarOutlined,
   FileProtectOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import type { MenuDataItem } from '@ant-design/pro-components';
 
@@ -24,5 +25,6 @@ export const menuConfig: MenuDataItem[] = [
   { path: '/doctor/list', name: '医生管理', icon: <UserOutlined /> },
   { path: '/user/list', name: '用户管理', icon: <TeamOutlined /> },
   { path: '/filing/list', name: '备案管理', icon: <FileProtectOutlined /> },
+  { path: '/doctor-cert/list', name: '医生认证', icon: <IdcardOutlined /> },
   { path: '/system/config', name: '系统配置', icon: <SettingOutlined /> },
 ];
