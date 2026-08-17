@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone VARCHAR(20),
     email VARCHAR(100),
     password_hash VARCHAR(255),             -- bcrypt；NULL = 未设置密码，禁止密码登录
-    role VARCHAR(20) NOT NULL,              -- admin / manager / rep / compliance / medical / finance
+    role VARCHAR(20) NOT NULL,              -- admin / manager / rep / compliance / medical / finance / doctor
     region VARCHAR(50),
     manager_id BIGINT REFERENCES users(id),
     status VARCHAR(20) DEFAULT 'active',
@@ -365,3 +365,58 @@ ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS revision INT DEFAULT 1;
 ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS parent_doc_id BIGINT REFERENCES knowledge_documents(id);
 
 COMMIT;
+
+-- ============================================
+-- 011 — 一期 B 医生端四表：医师认证 / 分身订阅 / 知情同意留痕 / 分享链接
+-- 执行：docker exec -i medagent-postgres psql -U medagent medagent \
+--          < scripts/migrations/011_doctor_platform.sql
+-- 全新环境：init_db.sql 已同步包含以下定义，无需执行本脚本。
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS doctor_certifications (
+    id BIGSERIAL PRIMARY KEY,
+    doctor_id BIGINT NOT NULL UNIQUE REFERENCES users(id),
+    cert_type VARCHAR(20) NOT NULL,
+    cert_image_url VARCHAR(500) NOT NULL,
+    cert_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    reject_reason VARCHAR(500),
+    reviewed_by BIGINT,
+    reviewed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS doctor_twin_subscriptions (
+    id BIGSERIAL PRIMARY KEY,
+    doctor_id BIGINT NOT NULL REFERENCES users(id),
+    twin_id BIGINT NOT NULL REFERENCES digital_specialists(id),
+    status VARCHAR(20) NOT NULL DEFAULT 'subscribed',
+    consent_version VARCHAR(20) NOT NULL,
+    consent_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT uq_doctor_twin UNIQUE (doctor_id, twin_id)
+);
+
+CREATE TABLE IF NOT EXISTS doctor_consents (
+    id BIGSERIAL PRIMARY KEY,
+    doctor_id BIGINT NOT NULL REFERENCES users(id),
+    twin_id BIGINT REFERENCES digital_specialists(id),
+    consent_type VARCHAR(20) NOT NULL,
+    version VARCHAR(20) NOT NULL,
+    agreed_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS share_links (
+    id BIGSERIAL PRIMARY KEY,
+    twin_id BIGINT NOT NULL REFERENCES digital_specialists(id),
+    url_token VARCHAR(64) UNIQUE NOT NULL,
+    created_by BIGINT NOT NULL REFERENCES users(id),
+    expire_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dts_doctor ON doctor_twin_subscriptions(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_sl_token ON share_links(url_token);

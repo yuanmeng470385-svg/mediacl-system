@@ -5,6 +5,7 @@ from shared.models.product import Product
 from shared.models.compliance import ComplianceRule, ComplianceBlock
 from shared.models.audit_log import AuditLog
 from shared.models.qualification import RepresentativeQualification
+from shared.models.doctor import DoctorCertification, DoctorTwinSubscription, DoctorConsent, ShareLink
 
 __all__ = [
     "Base", "TimestampMixin",
