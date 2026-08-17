@@ -82,3 +82,30 @@ def test_requires_bearer_token(monkeypatch):
     resp = asyncio.run(_run())
     assert resp.status_code == 401
     assert log == []
+
+
+def test_qualifications_proxy_timeout_carve_out(monkeypatch):
+    """F3：/api/v1/qualifications/* 走 120s 超时 carve-out（移动端 60s 客户端超时，
+    网关 30s 默认超时会先掐断）—— 照 knowledge 路由先例，其他路由维持 30s。"""
+    timeouts: list = []
+
+    def _fake_async_client(*a, **k):
+        timeouts.append(k.get("timeout"))
+        return _RecordingClient([])
+
+    fake_httpx = types.SimpleNamespace(
+        AsyncClient=_fake_async_client,
+        ConnectError=httpx.ConnectError,
+        TimeoutException=httpx.TimeoutException,
+        HTTPError=httpx.HTTPError,
+    )
+    monkeypatch.setattr(main, "httpx", fake_httpx)
+
+    async def _run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+            await c.get("/api/v1/qualifications/me", headers=_auth_headers())
+            await c.get("/api/v1/visits/tasks", headers=_auth_headers())
+
+    asyncio.run(_run())
+    assert timeouts == [120.0, 30.0]

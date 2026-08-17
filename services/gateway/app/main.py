@@ -327,7 +327,10 @@ async def proxy(request: Request, path: str):
     # B5 修复（2026-08-12）：旧判断 `path.startswith("knowledge/")` 永不命中 ——
     # path 形如 "api/v1/knowledge/list"（无前导斜杠且带 /api/v1 前缀），
     # 120s 超时从未生效。修正前缀后知识库导入不再被 30s 掐断。
-    if path.startswith("api/v1/knowledge/"):
+    # F3 修复（2026-08-17）：备案资质链路同理 —— 移动端资质提交走网关且客户端
+    # 超时 60s，网关 30s 会先于客户端掐断（证书 OSS 上传 + 审核耗时超 30s 时
+    # 客户端看到 504）。qualifications 同样 120s carve-out。
+    if path.startswith(("api/v1/knowledge/", "api/v1/qualifications/")):
         proxy_timeout = 120.0
     else:
         proxy_timeout = 30.0
