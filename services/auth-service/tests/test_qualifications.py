@@ -188,3 +188,34 @@ def test_bad_date_format_rejected():
     body = resp.json()
     assert body["code"] == 1000
     assert "YYYY-MM-DD" in body["message"]
+
+
+def test_me_returns_row_when_exists(fresh_state):
+    db = TestSession()
+    db.add(RepresentativeQualification(
+        id=1, representative_id=1, education_cert="https://oss/edu.pdf",
+        filing_number="F-1", audit_status="approved",
+        filing_expire_date=date.today() + timedelta(days=100),
+    ))
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/qualifications/me", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["filing_number"] == "F-1"
+    assert body["data"]["days_until_expiry"] == 100
+
+
+def test_me_returns_null_without_row():
+    resp = client.get("/api/v1/qualifications/me", headers=_token(3, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"] is None
+
+
+def test_me_requires_auth():
+    # HTTPBearer 无 Authorization 头 → 403（缺头 403，无效 token 才是 401；
+    # 与 test_auth.TestCurrentUser.test_无token被拒、specialist-service 既有约定一致）
+    resp = client.get("/api/v1/qualifications/me")
+    assert resp.status_code == 403

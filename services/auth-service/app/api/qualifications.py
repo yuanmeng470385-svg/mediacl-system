@@ -160,3 +160,15 @@ async def submit_qualification(
         request_id=get_request_id() or None,
     )
     return success(qual.to_dict())
+
+
+@router.get("/me")
+async def get_my_qualification(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """本人备案与资质（无记录返回 null，移动端渲染"未备案"空态）"""
+    qual = db.query(RepresentativeQualification).filter(
+        RepresentativeQualification.representative_id == current_user["id"]
+    ).first()
+    return success(qual.to_dict() if qual else None)
