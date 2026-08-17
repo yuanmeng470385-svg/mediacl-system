@@ -48,6 +48,11 @@ _filing_status_expr = case(
 
 
 def _client_ip(request: Request) -> str:
+    """取真实来源 IP。网关转发时以 X-Forwarded-For 首段为准（与 auth.py 同口径：
+    网关会把 XFF 覆盖为真实对端，直接 trust 首段；无 XFF 回退直连对端）。"""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     return request.client.host if request.client else ""
 
 
@@ -226,7 +231,12 @@ async def review_qualification(
     verdict = request.get("verdict")
     if verdict not in ("approve", "reject"):
         raise ParamError("verdict 必须是 approve 或 reject")
-    reason = (request.get("reason") or "").strip()
+    # F1（2026-08-17）：reason 非字符串（如数字）在 strip 处 AttributeError → 500，
+    # 显式校验转可读的 400 参数错误
+    raw_reason = request.get("reason")
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        raise ParamError("reason 必须是字符串")
+    reason = (raw_reason or "").strip()
     if verdict == "reject" and not reason:
         raise ParamError("驳回必须填写原因")
     if len(reason) > 500:

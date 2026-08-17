@@ -307,6 +307,20 @@ def test_review_reject_saves_reason(fresh_state):
     assert body["data"]["reject_reason"] == "材料不清晰"
 
 
+def test_review_reject_reason_non_string(fresh_state):
+    # F1：reason 传数字不应在 strip 处 AttributeError → 500，须 400 + code 1000
+    _add_qual()
+    resp = client.put(
+        "/api/v1/qualifications/1/review",
+        json={"verdict": "reject", "reason": 123},
+        headers=_token(2, "admin"),
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == 1000
+    assert "字符串" in body["message"]
+
+
 def test_review_not_pending_rejected(fresh_state):
     _add_qual(audit_status="approved")
     resp = client.put(
