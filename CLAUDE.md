@@ -63,7 +63,7 @@ cd services/auth-service && python -m pytest tests/ -v        # 89 passed + 7 sk
 cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
 cd services/visit-service && python -m pytest tests/ -v       # 115（含取消/结束态拦截/直调 qwen/转写去重/ASR 连接限制/full_transcript 前缀/结构化合规/prompt 定界）
-cd services/compliance-service && python -m pytest tests/ -v  # 97（语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
+cd services/compliance-service && python -m pytest tests/ -v  # 104（含 R008-R011 命中/fast 跳过 7 用例；语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
 cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
 cd services/audit-service && python -m pytest tests/ -v       # 26
 cd services/gateway && python -m pytest tests/ -v             # 77（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝/qualifications 超时 carve-out；2026-08-17 终审修复后实测）
@@ -242,7 +242,7 @@ class MyModel(Base, TimestampMixin):
 
 ## Compliance Rules
 
-7 条规则（`shared/compliance-rules/rules.yaml`）：
+11 条规则（`shared/compliance-rules/rules.yaml`）：
 
 | 规则 | 类型 | 动作 |
 |------|------|------|
@@ -251,8 +251,14 @@ class MyModel(Base, TimestampMixin):
 | R003 禁止统方 | semantic (LLM) | **reject** |
 | R004 禁止超适应症推广 | semantic | **reject** |
 | R005 禁止贬低竞品 | semantic | **warn** (不拦截) |
-| R006 禁止泄露患者信息 | semantic | **reject** |
+| R006 禁止非法收集、使用和传播患者信息 | semantic | **reject** |
 | R007 禁止讨论未公开数据 | semantic | **warn** (不拦截) |
+| R008 禁止附加销售条件利益输送 | regex | **reject** |
+| R009 禁止馈赠财物 | keyword | **reject** |
+| R010 禁止隐匿不良反应 | keyword | **reject** |
+| R011 禁止误导用药 | semantic | **reject** |
+
+完整 22 项清单映射矩阵见 docs/compliance-2026-22items-matrix.md（可拦截 → 规则；流程类 → 平台管控点）。
 
 semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语义规则静默跳过。
 
@@ -442,6 +448,10 @@ adb shell am start -n com.medagent.mobile/.MainActivity
   - 备案证书 OSS bucket ACL 私有化 + 签名 URL 预览（现 education_cert/training_cert 为直读 URL）
   - 国家备案平台公开查询接口调研（filing_number 真伪校验，现为人工核对）
   - 培训考试字段二期接线（compliance_training_completed / compliance_exam_score / commitment_signed 已建列未接线）
+- **2026 办法 22 项映射挂账（2026-08-17，与 docs/compliance-2026-22items-matrix.md 第六节同口径）**：
+  - 机构授权台账（拜访前校验授权状态）——待立项
+  - 产品授权台账（授权外药品推广的硬校验）——待立项
+  - 药企侧商业贿赂记录核查对接备案平台公示信息——待备案平台接口调研结论
 
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
