@@ -146,6 +146,7 @@ ROUTE_MAP = {
     "/api/v1/nls": settings.VISIT_SERVICE_URL,
     "/api/v1/auth": settings.AUTH_SERVICE_URL,
     "/api/v1/users": settings.AUTH_SERVICE_URL,  # 用户管理（Web 后台）
+    "/api/v1/qualifications": settings.AUTH_SERVICE_URL,  # 备案与资质（Web 后台 + 移动端）
 }
 
 
