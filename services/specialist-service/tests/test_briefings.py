@@ -1,11 +1,13 @@
 """夜间简报生成核心测试（SQLite 内存库 + qwen 打桩，同 test_share_links.py 表模式）
 
-覆盖 5 条用例（Task 3 Step 3）：
+覆盖用例（Task 3 Step 3 + C3 审查修复）：
 - generate_for_date 只聚合 role=doctor 的对话（非 doctor 排除）
 - 重跑幂等（唯一键 upsert，不堆积）
 - 无 doctor 对话的分身 skipped、不建行
 - 无分享链接的 rep 不生成
 - _parse_json_content 兼容 ```json 包裹
+- 连续 assistant 行不配出 (None, ...)（C3 修复 1）
+- run_briefing_scan 逐篇写审计 action=briefing_generated（C3 修复 2）
 """
 import os
 import sys
@@ -31,7 +33,12 @@ from shared.models.nightly_briefing import NightlyBriefing
 from shared.models.product import Product
 from shared.models.user import User
 
-from app.core.briefing_generator import _parse_json_content, generate_for_date
+from app.core.briefing_generator import (
+    _doctor_rounds,
+    _parse_json_content,
+    generate_for_date,
+    run_briefing_scan,
+)
 from app.models.conversation import Conversation
 
 
@@ -137,7 +144,13 @@ def test_generate_for_date_aggregates_doctor_conversations(fresh_state, monkeypa
     result = generate_for_date(db, TARGET)
     db.close()
 
-    assert result == {"generated": 1, "skipped": 0, "reps": 1}
+    assert result["generated"] == 1
+    assert result["skipped"] == 0
+    assert result["reps"] == 1
+    assert len(result["generated_links"]) == 1
+    assert result["generated_links"][0]["representative_id"] == 3
+    assert result["generated_links"][0]["specialist_id"] == 1
+    assert result["generated_links"][0]["id"] is not None
     assert len(prompts) == 1
     # prompt 含医生问答、不含非 doctor 对话
     assert "张医生" in prompts[0]
@@ -177,6 +190,8 @@ def test_generate_upserts_idempotent(fresh_state, monkeypatch):
 
     assert r1["generated"] == 1
     assert r2["generated"] == 1  # 命中 existing 分支仍计 generated
+    # 两次指向同一行（更新而非新增）
+    assert r1["generated_links"][0]["id"] == r2["generated_links"][0]["id"]
 
     db = TestSession()
     rows = db.query(NightlyBriefing).all()
@@ -208,7 +223,10 @@ def test_generate_skips_no_doctor_dialogue(fresh_state, monkeypatch):
     result = generate_for_date(db, TARGET)
     db.close()
 
-    assert result == {"generated": 0, "skipped": 1, "reps": 1}
+    assert result["generated"] == 0
+    assert result["skipped"] == 1
+    assert result["reps"] == 1
+    assert result["generated_links"] == []
     assert called == []
 
     db = TestSession()
@@ -239,7 +257,10 @@ def test_generate_only_reps_with_share_links(fresh_state, monkeypatch):
     result = generate_for_date(db, TARGET)
     db.close()
 
-    assert result == {"generated": 0, "skipped": 0, "reps": 0}
+    assert result["generated"] == 0
+    assert result["skipped"] == 0
+    assert result["reps"] == 0
+    assert result["generated_links"] == []
     assert called == []
 
     db = TestSession()
@@ -262,3 +283,78 @@ def test_parse_json_content_handles_fenced_output():
     assert _parse_json_content("not json") is None
     assert _parse_json_content("") is None
     assert _parse_json_content(None) is None
+
+
+def test_doctor_rounds_consecutive_assistant_no_none_pairing(fresh_state):
+    """C3 修复 1：同一医生 user→assistant→assistant（无中间 user），第二段 assistant
+    不得误配出 (None, ...)，_build_prompt 对 None 切片不再抛 TypeError。"""
+    _add(
+        User(id=1, username="u1", full_name="张医生", phone="13800000001",
+             role="doctor", status="active"),
+        Specialist(id=1, name="肿瘤专员", product_id=None, status="active",
+                   compliance_level="internal"),
+    )
+    _add(
+        Conversation(id=1, user_id=1, specialist_id=1, session_id="s1",
+                     role="user", content="问题1",
+                     created_at=datetime(2026, 8, 17, 10, 0, 0)),
+        Conversation(id=2, user_id=1, specialist_id=1, session_id="s1",
+                     role="assistant", content="答案1",
+                     created_at=datetime(2026, 8, 17, 10, 1, 0)),
+        Conversation(id=3, user_id=1, specialist_id=1, session_id="s1",
+                     role="assistant", content="答案2",
+                     created_at=datetime(2026, 8, 17, 10, 2, 0)),
+    )
+
+    db = TestSession()
+    rounds = _doctor_rounds(
+        db, 1,
+        datetime(2026, 8, 17, 0, 0, 0),
+        datetime(2026, 8, 18, 0, 0, 0),
+    )
+    db.close()
+
+    assert len(rounds) == 1
+    assert rounds[0]["qa"] == [("问题1", "答案1")]  # 第二段 assistant 不配对
+
+
+@pytest.mark.asyncio
+async def test_run_briefing_scan_audits_each_generated(monkeypatch):
+    """C3 修复 2：run_briefing_scan 在生成后逐篇写审计 action=briefing_generated。"""
+    class FakeDb:
+        def close(self):
+            pass
+
+    generated = {
+        "generated": 2,
+        "skipped": 0,
+        "reps": 1,
+        "generated_links": [
+            {"id": 11, "representative_id": 3, "specialist_id": 1},
+            {"id": 12, "representative_id": 3, "specialist_id": 2},
+        ],
+    }
+
+    monkeypatch.setattr("app.core.briefing_generator.SessionLocal", lambda: FakeDb())
+    monkeypatch.setattr(
+        "app.core.briefing_generator.generate_for_date",
+        lambda db, target_date: generated,
+    )
+
+    audit_calls = []
+
+    async def _audit(**kwargs):
+        audit_calls.append(kwargs)
+
+    monkeypatch.setattr("app.core.briefing_generator.write_audit_log", _audit)
+
+    result = await run_briefing_scan()
+
+    assert result == generated
+    assert len(audit_calls) == 2
+    assert [c["action"] for c in audit_calls] == ["briefing_generated", "briefing_generated"]
+    assert [c["user_id"] for c in audit_calls] == [3, 3]
+    assert [c["resource_type"] for c in audit_calls] == ["nightly_briefing", "nightly_briefing"]
+    assert [c["resource_id"] for c in audit_calls] == ["11", "12"]
+    assert all(c["ai_involved"] is True for c in audit_calls)
+    assert all(c["ai_model"] == "qwen-max" for c in audit_calls)

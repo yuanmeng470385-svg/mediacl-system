@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 async def _briefing_loop() -> None:
     """夜间简报定时任务（需求 C）：启动即跑一次，此后按
     NIGHTLY_BRIEFING_INTERVAL_HOURS 周期执行。同步 DB 生成丢线程池（to_thread），
-    不阻塞事件循环；异常记 error 不崩（多 worker 各跑一份，upsert 幂等）。
+    不阻塞事件循环；异常记 error 不崩（多 worker 各跑一份，生成逻辑单行捕获
+    唯一键冲突转更新，等效 upsert 幂等）。
     """
     from app.core.briefing_generator import run_briefing_scan
 
