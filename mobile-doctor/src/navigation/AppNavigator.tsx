@@ -4,7 +4,7 @@
  */
 import React from 'react';
 import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../store/AuthContext';
@@ -23,6 +23,18 @@ import CertUploadScreen from '../screens/CertUpload/CertUploadScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
+
+/** 深链配置（Task 9）：medagent-doctor://twin/:token → 分身激活页
+ *  深链参数为 string，TwinActivate 的 token 参数即 { token?: string }。
+ *  iOS 侧 URL scheme 注册待有 Xcode 环境验证（挂账，见 CLAUDE.md Known Gaps）。 */
+const linking: LinkingOptions<RootStackParamList> = {
+  prefixes: ['medagent-doctor://'],
+  config: {
+    screens: {
+      TwinActivate: 'twin/:token',
+    },
+  },
+};
 
 /** 底部 3 Tab：问答 / 分身 / 我的 */
 function MainTabs() {
@@ -98,7 +110,7 @@ export default function AppNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn ? (
           <>
