@@ -100,6 +100,9 @@ app.include_router(medical_router)
 from app.api.twin_subscriptions import router as twin_subscriptions_router
 app.include_router(twin_subscriptions_router)
 
+from app.api.briefings import router as briefings_router
+app.include_router(briefings_router)
+
 
 @app.get("/health")
 async def health():
