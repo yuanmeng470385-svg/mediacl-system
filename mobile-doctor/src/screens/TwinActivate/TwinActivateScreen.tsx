@@ -40,7 +40,13 @@ export default function TwinActivateScreen() {
   const activate = async (tokenToUse: string) => {
     setActivating(true);
     try {
-      const res = await twinAPI.activate(tokenToUse); // {twin, subscribed}
+      const res = await twinAPI.activate(tokenToUse); // {twin, subscribed, subscription_status}
+      // B9：已订阅但被屏蔽（subscription_status==='blocked'）时不进对话 ——
+      // 提示"该分身已被暂停"，停留在激活页，不跳转
+      if (res.subscribed && res.subscription_status === 'blocked') {
+        Alert.alert('该分身已被暂停', '您已屏蔽该数字员工，如需继续对话请先在「分身」页取消屏蔽。');
+        return;
+      }
       if (res.subscribed) {
         navigation.replace('TwinChat', {
           twinId: res.twin.id,
