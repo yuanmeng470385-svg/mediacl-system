@@ -415,8 +415,23 @@ CREATE TABLE IF NOT EXISTS share_links (
     url_token VARCHAR(64) UNIQUE NOT NULL,
     created_by BIGINT NOT NULL REFERENCES users(id),
     expire_at TIMESTAMP,
+    add_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_dts_doctor ON doctor_twin_subscriptions(doctor_id);
 CREATE INDEX IF NOT EXISTS idx_sl_token ON share_links(url_token);
+
+CREATE TABLE IF NOT EXISTS nightly_briefings (
+    id BIGSERIAL PRIMARY KEY,
+    representative_id BIGINT NOT NULL REFERENCES users(id),
+    specialist_id BIGINT NOT NULL REFERENCES digital_specialists(id),
+    briefing_date DATE NOT NULL,
+    content JSONB NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'ready',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT uq_nb_rep_spec_date UNIQUE (representative_id, specialist_id, briefing_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nb_rep ON nightly_briefings(representative_id);

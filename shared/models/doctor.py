@@ -1,5 +1,5 @@
 """医生端模型（一期 B）：医师认证 / 分身订阅 / 知情同意留痕 / 分享链接"""
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import declarative_base
 
 from shared.models.base import Base, TimestampMixin
@@ -64,11 +64,13 @@ class ShareLink(Base):
     url_token = Column(String(64), unique=True, nullable=False)
     created_by = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     expire_at = Column(DateTime)
+    add_count = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     def to_dict(self) -> dict:
         return {
             "id": self.id, "twin_id": self.twin_id, "url_token": self.url_token,
             "created_by": self.created_by,
+            "add_count": self.add_count or 0,
             "expire_at": self.expire_at.isoformat() if self.expire_at else None,
         }
