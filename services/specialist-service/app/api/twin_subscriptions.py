@@ -17,14 +17,15 @@
 后端只留痕每次 subscribe 的 consent 记录（不在此做跨 twin 去重）。
 """
 import logging
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from shared.common.auth import get_current_user
 from shared.common.db_session import get_db
-from shared.common.response import BusinessError, ParamError, success
+from shared.common.response import BusinessError, ParamError, PermissionError, success
 from shared.models.doctor import DoctorConsent, DoctorTwinSubscription, ShareLink
 
 from app.models.specialist import Specialist
@@ -40,6 +41,87 @@ CONSENT_VERSION = "1.0"
 def _twin_info(specialist: Specialist) -> dict:
     """手写 twin 对外信息：只暴露 id/name/status，绝不带 bailian_app_id 等内部字段"""
     return {"id": specialist.id, "name": specialist.name, "status": specialist.status}
+
+
+SHARE_URL_PREFIX = "medagent-doctor://twin/"
+
+
+def _require_rep(current_user: dict):
+    if current_user["role"] != "rep":
+        raise PermissionError("仅医药代表可创建分享链接")
+
+
+@router.post("/share-links")
+async def create_share_link(
+    request: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """创建分身分享链接（rep 专属；每分身可多链接，各自追踪 add_count）"""
+    _require_rep(current_user)
+    if not isinstance(request, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    twin_id = request.get("twin_id")
+    try:
+        twin_id = int(twin_id)
+    except (TypeError, ValueError):
+        raise ParamError("twin_id 必须是整数")
+    specialist = db.query(Specialist).filter(Specialist.id == twin_id).first()
+    if not specialist or specialist.status != "active":
+        raise BusinessError("分身不存在或未启用", code=4001)
+
+    expire_days = request.get("expire_days", 30)
+    expire_at = None
+    if expire_days is not None:
+        try:
+            expire_days = int(expire_days)
+        except (TypeError, ValueError):
+            raise ParamError("expire_days 必须是整数")
+        if expire_days <= 0 or expire_days > 365:
+            raise ParamError("expire_days 必须在 1-365 之间")
+        expire_at = datetime.utcnow() + timedelta(days=expire_days)
+
+    link = ShareLink(
+        twin_id=twin_id,
+        url_token=uuid.uuid4().hex,
+        created_by=current_user["id"],
+        expire_at=expire_at,
+    )
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    await write_audit_log(
+        user_id=current_user["id"], action="twin_share_link_create",
+        resource_type="share_link", resource_id=str(link.id),
+        after_value={"twin_id": twin_id,
+                     "expire_at": expire_at.isoformat() if expire_at else None},
+    )
+    return success({
+        **link.to_dict(),
+        "twin_name": specialist.name,
+        "share_url": f"{SHARE_URL_PREFIX}{link.url_token}",
+    })
+
+
+@router.get("/share-links")
+async def list_share_links(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """我的分享链接列表（rep）"""
+    _require_rep(current_user)
+    rows = (
+        db.query(ShareLink, Specialist)
+        .join(Specialist, Specialist.id == ShareLink.twin_id)
+        .filter(ShareLink.created_by == current_user["id"])
+        .order_by(ShareLink.id.desc())
+        .all()
+    )
+    return success([
+        {**link.to_dict(), "twin_name": spec.name,
+         "share_url": f"{SHARE_URL_PREFIX}{link.url_token}"}
+        for link, spec in rows
+    ])
 
 
 @router.post("/share-links/{token}/activate")
@@ -64,6 +146,10 @@ async def activate_share_link(
         DoctorTwinSubscription.doctor_id == current_user["id"],
         DoctorTwinSubscription.twin_id == link.twin_id,
     ).first()
+
+    # 一期 C：激活计数（含重复激活，口径=被添加次数）
+    link.add_count = (link.add_count or 0) + 1
+    db.commit()
 
     return success({
         "twin": _twin_info(specialist),
