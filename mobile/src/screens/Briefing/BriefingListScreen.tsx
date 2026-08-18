@@ -18,10 +18,10 @@ import type { RootStackParamList } from '../../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
+/** 后端 NightlyBriefing.status 枚举（生成器只写 ready） */
 const STATUS_LABELS: Record<string, { label: string; color: string; bg: string }> = {
-  generated: { label: '已生成', color: Colors.success, bg: Colors.successLight },
-  sent: { label: '已发送', color: Colors.info, bg: Colors.infoLight },
-  pending: { label: '待生成', color: Colors.warning, bg: Colors.warningLight },
+  ready: { label: '已生成', color: Colors.success, bg: Colors.successLight },
+  generating: { label: '生成中', color: Colors.warning, bg: Colors.warningLight },
   failed: { label: '生成失败', color: Colors.danger, bg: Colors.dangerLight },
 };
 

@@ -98,6 +98,7 @@ export default function ShareScreen() {
       <View style={styles.cardFooter}>
         <View style={styles.metaRow}>
           <Icon name="clock-outline" size={12} color={Colors.textHint} />
+          {/* 后端 create 恒返回 expire_at（默认 30 天），空分支为防御性兜底，当前不可达 */}
           <Text style={styles.metaText}>
             {item.expire_at ? `有效期至 ${String(item.expire_at).slice(0, 10)}` : '永久有效'}
           </Text>

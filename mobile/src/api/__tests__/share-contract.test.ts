@@ -35,7 +35,7 @@ describe('shareAPI', () => {
     expect(c.body).toEqual({ twin_id: 7, expire_days: 30 });
   });
 
-  it('create 不带 expireDays 时 body 只含 twin_id（后端据此算永久链接）', async () => {
+  it('create 不带 expireDays 时 body 只含 twin_id（省略 expire_days 时后端默认 30 天）', async () => {
     await shareAPI.create(7);
     const c = lastCall();
     expect(c.method).toBe('POST');
