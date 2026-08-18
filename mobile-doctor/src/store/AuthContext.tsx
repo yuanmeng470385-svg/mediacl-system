@@ -18,6 +18,9 @@ interface AuthState {
   token: string | null;
   isLoading: boolean;
   isLoggedIn: boolean;
+  /** 深链分身激活 token：未登录收到 medagent-doctor://twin/:token 时暂存，登录成功后消费 */
+  pendingToken: string | null;
+  setPendingToken: (token: string | null) => void;
   login: (phone: string, code: string) => Promise<void>;
   loginByPassword: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -30,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [pendingToken, setPendingToken] = useState<string | null>(null);
 
   // 启动时检查登录态
   useEffect(() => {
@@ -108,6 +112,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         token,
         isLoading,
         isLoggedIn: !!token && !!user,
+        pendingToken,
+        setPendingToken,
         login,
         loginByPassword,
         logout,

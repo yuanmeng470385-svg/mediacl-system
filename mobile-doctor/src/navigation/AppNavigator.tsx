@@ -2,9 +2,9 @@
  * 主导航器 - 医生端
  * Stack：登录 → 主 Tab（问答/分身/我的）→ 分身激活/分身对话/资质上传
  */
-import React from 'react';
-import { ActivityIndicator, View, Text, StyleSheet } from 'react-native';
-import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
+import React, { useEffect } from 'react';
+import { ActivityIndicator, View, Text, StyleSheet, Linking } from 'react-native';
+import { NavigationContainer, createNavigationContainerRef, type LinkingOptions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../store/AuthContext';
@@ -35,6 +35,15 @@ const linking: LinkingOptions<RootStackParamList> = {
     },
   },
 };
+
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+/** 深链 token 解析：medagent-doctor://twin/:token → 取单段 token（排除 query/锚点） */
+function extractTwinToken(url: string | null): string | null {
+  if (!url) return null;
+  const match = url.match(/twin\/([^?#/]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 /** 底部 3 Tab：问答 / 分身 / 我的 */
 function MainTabs() {
@@ -103,14 +112,41 @@ function SplashScreen() {
 
 /** 根导航器 */
 export default function AppNavigator() {
-  const { isLoggedIn, isLoading } = useAuth();
+  const { isLoggedIn, isLoading, pendingToken, setPendingToken } = useAuth();
+
+  // F2（2026-08-18）：运行中收到深链时，未登录态先把 token 暂存 pendingToken
+  //（登录态由 linking 直接导航到 TwinActivate，这里不重复存，避免二次跳转）
+  useEffect(() => {
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      const token = extractTwinToken(url);
+      if (token && !isLoggedIn) setPendingToken(token);
+    });
+    return () => sub.remove();
+  }, [isLoggedIn, setPendingToken]);
+
+  // F2：冷启动深链——登录态确定后（未登录）才捕获暂存；已登录交 linking 导航
+  useEffect(() => {
+    if (isLoading || isLoggedIn) return;
+    Linking.getInitialURL().then((url) => {
+      const token = extractTwinToken(url);
+      if (token) setPendingToken(token);
+    });
+  }, [isLoading, isLoggedIn, setPendingToken]);
+
+  // F2：登录成功后消费 pendingToken → 跳转分身激活页并清空
+  useEffect(() => {
+    if (isLoggedIn && pendingToken && navigationRef.isReady()) {
+      navigationRef.navigate('TwinActivate', { token: pendingToken });
+      setPendingToken(null);
+    }
+  }, [isLoggedIn, pendingToken, setPendingToken]);
 
   if (isLoading) {
     return <SplashScreen />;
   }
 
   return (
-    <NavigationContainer linking={linking}>
+    <NavigationContainer linking={linking} ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn ? (
           <>
