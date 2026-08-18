@@ -11,7 +11,8 @@ MedAgent 药企 AI 数字员工系统 — 五层架构的医药代表 SaaS 平�
 ```
 Web 管理后台 (React+Vite, web/, :3000) ─┐
                                           ├─→ Gateway (:8000) ─→ 微服务集群
-移动端 (React Native, mobile/, 可构建) ───────┘
+移动端 (React Native, mobile/, 可构建) ────┤
+医生端 (React Native, mobile-doctor/, 2026-08-17 一期 B) ─┘
                                               ├─ auth(:8007)      认证 — 手机验证码/密码登录，签发 JWT
                                               ├─ specialist(:8001) 数字专员 — 每个专员=一个百炼多模态App
                                               ├─ visit(:8002)     陪访助手 — 听悟转写+合规实时检查+异议识别
@@ -26,11 +27,13 @@ Web 管理后台 (React+Vite, web/, :3000) ─┐
 
 **关键架构决策：** 每个数字专员 = 一个阿里云百炼多模态交互开发套件 App（自带知识库/文档解析/向量化/检索）。业务层不建文档处理流水线，百炼内部消化。陪访助手/医生管理不需要百炼App，全部通过千问直调（`DASHSCOPE_API_KEY`）或调用 specialist 的 chat 接口。
 
-**网关 ROUTE_MAP（main.py:81-93）：** 除 7 个服务前缀外，还映射了五个跨服务路由 —— `/api/v1/conversations`、`/api/v1/favorites`（→specialist）、`/api/v1/tasks`（→visit）、`/api/v1/users`（→auth）、`/api/v1/nls`（→visit），前端按资源路径访问无需关心服务归属。
+**网关 ROUTE_MAP（main.py）：** 除 7 个服务前缀外，还映射了跨服务路由 —— `/api/v1/conversations`、`/api/v1/favorites`（→specialist）、`/api/v1/tasks`（→visit）、`/api/v1/users`、`/api/v1/qualifications`（→auth）、`/api/v1/nls`（→visit），前端按资源路径访问无需关心服务归属。**2026-08-17 医生端（一期 B）追加**：`/api/v1/medical`、`/api/v1/twin-subscriptions`、`/api/v1/share-links`（→specialist）、`/api/v1/doctors`（→auth，医师认证）。**120s 超时 carve-out**：`api/v1/knowledge/`、`api/v1/qualifications/`、`api/v1/doctors/` 三前缀（百炼导入/证书 OSS 上传慢时防 30s 网关先断）。
 
 **2026-08-11 审计补记的服务端点（此前未入文档）**：audit `GET /api/v1/audit/stats`（仪表盘聚合：总数/风险分布/服务分布/按日趋势）、hcp `POST/DELETE /api/v1/hcps/{hcp_id}/tags`（标签增删）、visit `GET /api/v1/tasks` + `PUT /api/v1/tasks/{task_id}` + `GET /api/v1/visits/{visit_id}/tasks`（tasks 模块，follow_up 自动建任务后管理）、compliance `POST /api/v1/compliance/rules/test`（规则试跑）与 `GET /api/v1/compliance/redlines`（见 Compliance Rules 章节）、visit `GET /api/v1/nls/tts-token`（TTS 合成凭证：require_roles rep/admin/manager；未配 NLS_APPKEY → BusinessError 4xxx；移动端 TTS 凭证）。
 
 **2026-08-17 备案资质子系统补记的服务端点（一期 A，此前未入文档）**：auth `POST /api/v1/qualifications`（代表提交备案资质，multipart：学历/培训证明文件 + filing_number/filing_expire_date，仅 rep 可提交，审计 action=qualification_submit）、`GET /api/v1/qualifications/me`（代表查本人备案状态，filing_status 为派生值 not_filed/valid/expired）、`GET /api/v1/qualifications`（分页列表，audit_status/filing_status/keyword 过滤，含 rep_name）、`PUT /api/v1/qualifications/{id}/review`（资质审核 approve/reject，require_roles admin/manager/compliance/medical，审计 action=qualification_review）。
+
+**2026-08-17 医生端子系统补记的服务端点（一期 B，此前未入文档）**：auth `POST /api/v1/doctors/certs`（医生提交执业资质 multipart：cert_image + cert_type ∈ {physician, practice}，仅 role=doctor，提交重置 cert_status=pending，审计 action=doctor_cert_submit）、`GET /api/v1/doctors/certs/me`（任意登录查本人资质，无记录返回 null）、`GET /api/v1/doctors/certs?page&page_size&cert_status&keyword`（管理分页列表，require_roles admin/manager/compliance/medical，items 含 doctor_name/doctor_phone）、`PUT /api/v1/doctors/certs/{id}/review`（资质审核 approve/reject，驳回必填 reason，仅 pending 可审，审计 action=doctor_cert_review）；specialist `POST /api/v1/medical/qa`（医生端医学问答：search-internal 检索 → qwen 生成（仅基于片段作答+逐条引用）→ 问题/答案合规双检 → 审计；任意登录用户可用，返回 {answer, citations, disclaimer, blocked, violations, knowledge_empty}）、`POST /api/v1/twin-subscriptions`（订阅分身：twin 必须 active、consent_agreed 必 True，写 DoctorConsent 留痕 + 订阅行，同 twin 幂等）、`GET /api/v1/twin-subscriptions`（本人订阅列表，join 分身名/状态）、`POST /api/v1/twin-subscriptions/{twin_id}/toggle`（屏蔽/恢复 status subscribed/blocked）、`POST /api/v1/share-links/{token}/activate`（分享链接激活：token 不存在/过期 4001；返回 {twin, subscribed, subscription_status}）；knowledge `POST /api/v1/knowledge/search-internal`（服务间检索：require_internal_key + 网关 INTERNAL_PATHS 双重校验，body/校验/返回与 /search 同款）。
 
 ## Commands
 
@@ -59,14 +62,14 @@ cd web && npm run build            # tsc -b && vite build
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
 # 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-13 M 系列第二轮后 603 passed）
-cd services/auth-service && python -m pytest tests/ -v        # 89 passed + 7 skipped（含验证码并发 consume Lua / 备案资质用例；2026-08-17 终审修复后，本机 Redis 可用时 7 个 Lua 用例不跳过、实测 96 passed）
-cd services/specialist-service && python -m pytest tests/ -v  # 103（含反馈明细角色/流式门禁全量帧/降级多轮上下文）
+cd services/auth-service && python -m pytest tests/ -v        # 97 passed + 7 skipped（2026-08-17 一期 B 收尾实测；7 个跳过为验证码并发 consume Lua 用例——本机 Redis 未起，Redis 可用时不跳过即 104 passed；含备案资质 / 医生认证 endpoints 用例）
+cd services/specialist-service && python -m pytest tests/ -v  # 118 passed（2026-08-17 一期 B 收尾实测；含反馈明细角色/流式门禁全量帧/降级多轮上下文/医学问答/分身订阅激活）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
 cd services/visit-service && python -m pytest tests/ -v       # 115（含取消/结束态拦截/直调 qwen/转写去重/ASR 连接限制/full_transcript 前缀/结构化合规/prompt 定界）
 cd services/compliance-service && python -m pytest tests/ -v  # 104（含 R008-R011 命中/fast 跳过 7 用例；语义网络错误 fail-closed/禁用规则生效/参数健壮性/Unicode 归一化）
-cd services/knowledge-service && python -m pytest tests/ -v   # 64（ES 检索 status 过滤/索引后置写入/上传校验）
+cd services/knowledge-service && python -m pytest tests/ -v   # 68 passed（2026-08-17 一期 B 收尾实测；ES 检索 status 过滤/索引后置写入/上传校验/search-internal）
 cd services/audit-service && python -m pytest tests/ -v       # 26
-cd services/gateway && python -m pytest tests/ -v             # 77（CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝/qualifications 超时 carve-out；2026-08-17 终审修复后实测）
+cd services/gateway && python -m pytest tests/ -v             # 82 passed（2026-08-17 一期 B 收尾实测；CORS 白名单/WS 首帧鉴权/信任代理/路径 dot-segment 拒绝/qualifications 超时 carve-out/medical、share-links、doctors 转发）
 cd shared && python -m pytest common/tests/ -v                # shared 层自测（test_internal_auth.py）
 
 # 运行 A 的 AI 评估（需要真实百炼 App）
@@ -126,7 +129,7 @@ from shared.common.response import success, error, ParamError, AuthError, Busine
 from shared.common.auth import get_current_user, create_token, require_roles
 # @router.get("/xxx") → async def api(current_user: dict = Depends(get_current_user)): ...
 # @router.post("/rules") → async def api(current_user: dict = Depends(require_roles("admin", "manager"))): ...
-#   require_roles 未登录 401、角色不符 403（code 3000）。角色：admin/manager/rep/compliance/medical/finance
+#   require_roles 未登录 401、角色不符 403（code 3000）。角色：admin/manager/rep/compliance/medical/finance/doctor（doctor 为 2026-08-17 医生端新增，见 auth users.py VALID_ROLES）
 #   （2026-08-11）受限端点**每次实时查库**（注入 db 会话）：token 里的 role/status 只是登录时刻快照
 #   （最长 7 天），降级或停用后旧 token 立即失效——账号不存在/status != active → 403 "账号不存在或已停用"；
 #   角色不符 → 403 "无权限"；403 统一抛 PermissionError（AppError）走共享 exception_handler 渲染 {code, message, data}
@@ -198,6 +201,7 @@ GET  /api/v1/auth/me          (Bearer token)                        → user    
 POST /api/v1/compliance/check
 POST /api/v1/audit/log
 POST /api/v1/hcps/profile-update
+POST /api/v1/knowledge/search-internal  # 2026-08-17 医生端医学问答检索（specialist→knowledge）
 # PUBLIC_PATHS —— 真正公开（免 JWT 免 key）
 POST /api/v1/auth/login
 POST /api/v1/auth/send-code
@@ -227,7 +231,7 @@ async with httpx.AsyncClient(timeout=10.0) as client:
 
 ## Database
 
-PostgreSQL（Docker `postgres:15`），**15 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes`（006）与 `visit_records.status`（008）两列 2026-08-13 起也已并入 init_db.sql，旧库仍须按序执行 006/008）。**`representative_qualifications`（迁移 009，2026-08-17 备案资质子系统，已并入 init_db.sql）**：15 列（含二期预留的 compliance_training_completed / compliance_exam_score / commitment_signed，本计划只建列不接线）；**`filing_status` 是派生值不落库**，由 filing_number + filing_expire_date 计算（not_filed/valid/expired），见 `shared/models/qualification.py`；索引 idx_qual_audit_status / idx_qual_expire。旧库须执行 009。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
+PostgreSQL（Docker `postgres:15`），**19 张表**均在 `scripts/init_db.sql` 定义（users / products / digital_specialists / hcps / visit_records / conversations / knowledge_documents / audit_logs / compliance_rules / compliance_blocks / conversation_feedback / conversation_favorites / tasks / knowledge_feedback —— 后 4 张由迁移 003 补齐，已并入 init_db.sql；`visit_records.key_nodes`（006）与 `visit_records.status`（008）两列 2026-08-13 起也已并入 init_db.sql，旧库仍须按序执行 006/008）。**`representative_qualifications`（迁移 009，2026-08-17 备案资质子系统，已并入 init_db.sql）**：15 列（含二期预留的 compliance_training_completed / compliance_exam_score / commitment_signed，本计划只建列不接线）；**`filing_status` 是派生值不落库**，由 filing_number + filing_expire_date 计算（not_filed/valid/expired），见 `shared/models/qualification.py`；索引 idx_qual_audit_status / idx_qual_expire。旧库须执行 009。**`doctor_certifications` / `doctor_twin_subscriptions` / `doctor_consents` / `share_links`（迁移 011，2026-08-17 医生端一期 B，已并入 init_db.sql，模型在 `shared/models/doctor.py`）**：医师认证（doctor_id UNIQUE FK users、cert_type physician/practice、cert_image_url OSS、cert_status pending/approved/rejected、reject_reason/reviewed_by/reviewed_at）、分身订阅（UNIQUE(doctor_id,twin_id) uq_doctor_twin、status subscribed/blocked、consent_version/consent_at）、知情同意留痕（twin_id 可空=平台级、consent_type/version/agreed_at）、分享链接（url_token UNIQUE、created_by、expire_at 可空——B 只建表做激活接收侧，链接生成/追踪留 C 计划）；索引 idx_dts_doctor / idx_sl_token。旧库须执行 011。连接通过 `shared/common/db_session.py` 的 `get_db` 依赖注入。常用 ORM 模式：
 
 **审计表不可篡改（`scripts/migrations/002_audit_immutable.sql`）**：audit_logs 的 owner 是 NOLOGIN 占位角色 `medagent_audit_owner`；`medagent_audit`（审计服务专用，`AUDIT_DATABASE_URL` 配置）只有 INSERT/SELECT；`medagent` 只 SELECT。该 migration 还会把 medagent 从 superuser 降级（PostgreSQL 官方镜像默认把 `POSTGRES_USER` 设为 superuser，superuser 无视 REVOKE）。migration 只需执行一次（medagent 降级后无法重跑，补权限找表 owner 或单用户模式）。
 
@@ -292,7 +296,7 @@ semantic 类规则依赖 `DASHSCOPE_API_KEY`（qwen-turbo），未配置时语�
 
 Vite 5 + React 18 + TypeScript + AntD 5 + @ant-design/pro-components + @ant-design/charts，纯 SPA。开发时 vite 把 `/api` 和 `/health` 代理到网关 `localhost:8000`（`vite.config.ts`，/health 是 M54 网关状态卡探活），生产由反代同路径转发。
 
-10 模块 12 路由（懒加载，路由定义在 `web/src/App.tsx`，侧边菜单在 `web/src/constants/menu.tsx`；旧 `constants/routes.ts` 已删除）：仪表盘 `/dashboard`、数字专员 `/specialist/list`（新增/编辑在列表页 Modal 内）、拜访管理 `/visit/list`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、备案管理 `/filing/list`（2026-08-17 备案资质子系统：资质审核列表 + 审核抽屉）、系统配置 `/system/config`。另有登录页 `/login`。
+11 模块 13 路由（懒加载，路由定义在 `web/src/App.tsx`，侧边菜单在 `web/src/constants/menu.tsx`；旧 `constants/routes.ts` 已删除）：仪表盘 `/dashboard`、数字专员 `/specialist/list`（新增/编辑在列表页 Modal 内）、拜访管理 `/visit/list`、知识库 `/knowledge/list`、合规规则 `/compliance/list` + 拦截记录 `/compliance/blocks`、审计查询 `/audit/list`、医生管理 `/doctor/list` + `/doctor/:id`、用户管理 `/user/list`、备案管理 `/filing/list`（2026-08-17 备案资质子系统：资质审核列表 + 审核抽屉）、医生认证 `/doctor-cert/list`（2026-08-17 医生端一期 B：医师认证审核列表 + 审核抽屉，`services/doctorCert.ts`）、系统配置 `/system/config`。另有登录页 `/login`。
 
 API 约定：axios 实例 `web/src/services/client.ts`，`baseURL: '/api/v1'`；token 存 localStorage `medagent_token`，请求自动带 `Authorization: Bearer`。后端统一响应 `{code, message, data}`，分页接口的 data 是 `{items, total, page, page_size}`（见 `web/src/types/index.ts`）。非 401 的 4xx（含 403）由拦截器统一弹后端 message。
 
@@ -341,6 +345,18 @@ adb shell am start -n com.medagent.mobile/.MainActivity
 - 聊天 WS 流式已接（走网关 8000），未配真实百炼 key 时未做模拟器端到端冒烟。
 - HelpCenter 已接合规规则接口（红线清单真实数据，reject 类规则）；联系方式仍为静态占位。
 - iOS 未实际构建验证（本机无 Xcode；moduleName 已对齐，首次构建需实测）。
+
+## Frontend — mobile-doctor/（React Native 医生端，2026-08-17 一期 B）
+
+React Native 0.75 + TypeScript + react-navigation，独立工程（骨架自 mobile/ 移植，包名/bundle ID `com.medagent.doctor`，App 显示名 `MedAgent·医生端`，入口 `index.js` → `src/App.tsx`）。功能：医生手机号/密码登录（复用 auth 链路，role=doctor）、医师资格认证上传（DocumentPicker + multipart → auth `/api/v1/doctors/certs`，审核状态回显）、医学 AI 问答（REST `/api/v1/medical/qa`，强制渲染免责声明与"AI 生成"标识）、分身订阅与激活（`/api/v1/share-links/{token}/activate` + `/api/v1/twin-subscriptions`；知情同意弹窗文案对齐需求 5.3(5)；对话 REST 无流式）、深链 `medagent-doctor://twin/:token` → 激活页（AndroidManifest scheme 已注册 + AppNavigator linking；iOS 未验证挂账）。
+
+```bash
+cd mobile-doctor && npx tsc --noEmit                 # 零错误
+cd mobile-doctor && npx jest                         # 6 契约用例（doctor-contract：URL/method/body/FormData）
+cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17 + ANDROID_HOME 同 mobile）
+```
+
+结构：`src/navigation/AppNavigator.tsx`（linking 深链 + Stack：Login → MainTabs[MedicalQA/MyTwins/Profile] → TwinActivate/TwinChat/CertUpload；未登录时深链落到 Login）、`navigation/types.ts`（TwinActivate 参数 `{ token?: string }`——深链参数为 string）、`src/api/`（client.ts 自 mobile 原样拷贝，`medagent_token` 存储键一致；auth/doctor/medical/twin 四文件，契约以 api/*.ts 为唯一映射点）、`src/store/AuthContext.tsx`（useAuth：user/login/logout）、`src/constants/theme.ts` + `src/components/Icon.tsx` 自 mobile 拷贝。新增依赖仅 react-native-document-picker（上传）。细节：MyTwins 屏蔽态置灰禁聊；TwinActivate 对 activate 返回 subscribed=true 且 subscription_status=blocked 时不跳转（Alert「该分身已被暂停」，2026-08-17 B9 修复）；Profile 显示登录用户信息（useAuth）+ 医师资格认证入口（→ CertUpload，副标题回显审核状态）+ 退出登录。
 
 ## Real-time ASR（实时转写）
 
@@ -452,6 +468,14 @@ adb shell am start -n com.medagent.mobile/.MainActivity
   - 机构授权台账（拜访前校验授权状态）——待立项
   - 产品授权台账（授权外药品推广的硬校验）——待立项
   - 药企侧商业贿赂记录核查对接备案平台公示信息——待备案平台接口调研结论
+- **医生端子系统挂账（2026-08-17 一期 B 收尾，勿误以为已做）**：
+  - chat 端点订阅校验未硬限制（一期宽松）：订阅表用于前端入口与 C 的简报回传过滤；「未订阅不可 chat」挂账
+  - 医生端流式对话未做（一期 REST 问答走 `POST /api/v1/specialists/{id}/chat`；流式挂账）
+  - iOS 深链（URL scheme 注册）与 iOS 构建未验证（本机无 Xcode）
+  - doctor_cert 文件与 A 计划备案资质共 OSS 前缀（同 bucket、qualifications/ 对象键前缀）——若终审要求分离再改
+  - C 计划待做：分享链接生成/追踪统计/夜间简报（B 只建 share_links 表 + 激活接收侧）
+  - 医生端收藏与历史（需求 5.2(4)）挂账：复用 specialist 收藏端点，二期接线
+  - 测试基线（2026-08-17 一期 B 收尾 Task 9 全量回归实测）：auth 97 passed + 7 skipped（Redis 未起，起 Redis 后 104）/ specialist 118 / knowledge 68 / gateway 82 / mobile jest 76 / mobile-doctor jest 6 / web build PASS / mobile-doctor assembleDebug PASS
 
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
