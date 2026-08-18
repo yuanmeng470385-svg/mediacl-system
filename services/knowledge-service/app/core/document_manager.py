@@ -221,7 +221,7 @@ class DocumentManager:
         # DashVector 向量化（可选后端：未配置自动跳过）
         if self.dashvector.is_configured() and chunks:
             try:
-                fields = {"doc_type": doc.doc_type or ""}
+                fields = {"doc_type": doc.doc_type or "", "file_url": doc.file_url or ""}
                 if doc.product_id is not None:
                     # M27: product_id 元数据统一写 int，与 _filter_expr 的 int 字面量一致
                     fields["product_id"] = int(doc.product_id)
@@ -244,7 +244,8 @@ class DocumentManager:
             es = EsClient()
             if not es.is_configured():
                 return
-            fields = {"doc_type": doc.doc_type or "", "status": "ready"}
+            fields = {"doc_type": doc.doc_type or "", "status": "ready",
+                      "file_url": doc.file_url or ""}
             if doc.product_id is not None:
                 fields["product_id"] = int(doc.product_id)
             ok = es.index_doc(doc_id, title, content, fields=fields)
@@ -335,7 +336,7 @@ class DocumentManager:
             key = str(r["doc_id"])  # doc_id 统一为 str，避免与 local 的 int 键错位导致加权失效
             merged[key] = {"title": r["title"], "content": r["content"],
                            "doc_id": key, "score": 0.7 * r["score"] / vec_max,
-                           "backend": "dashvector"}
+                           "url": r.get("url") or "", "backend": "dashvector"}
         for r in keyword_results:
             key = str(r["doc_id"])
             if key in merged:
@@ -343,7 +344,7 @@ class DocumentManager:
             else:
                 merged[key] = {"title": r["title"], "content": r["content"],
                                "doc_id": r["doc_id"], "score": 0.3 * r["score"] / kw_max,
-                               "backend": "local"}
+                               "url": r.get("url") or "", "backend": "local"}
         ranked = sorted(merged.values(), key=lambda x: x["score"], reverse=True)
         return ranked[:top_k]
 

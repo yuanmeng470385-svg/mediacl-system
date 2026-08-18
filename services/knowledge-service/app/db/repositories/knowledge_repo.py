@@ -195,5 +195,6 @@ class KnowledgeRepository:
                 "evidence_level": doc.evidence_level,
                 "score": score,
                 "doc_id": doc.id,
+                "url": doc.file_url or "",
             })
         return results

@@ -281,6 +281,8 @@ def test_approve_success_indexes_es(monkeypatch):
     assert indexed[0][1]["title"] == "指南"
     assert indexed[0][1]["product_id"] == 7
     assert indexed[0][1]["doc_type"] == "guideline"
+    # F1（2026-08-18）：file_url 写入 ES _source（供 citations.url 引用）
+    assert indexed[0][1]["file_url"] == doc.file_url
 
 
 def test_approve_success_es_failure_does_not_block(monkeypatch, caplog):
@@ -318,7 +320,12 @@ def test_approve_without_bailian_writes_int_product_id(monkeypatch):
 
     assert result.status == "ready"
     # M27: product_id 元数据统一 int（非 str），与 _filter_expr 的 int 字面量一致
-    assert dv.upserted_fields == {"doc_type": "guideline", "product_id": 7}
+    # F1（2026-08-18）：file_url 透出到向量元数据（供 citations.url 引用）
+    assert dv.upserted_fields == {
+        "doc_type": "guideline",
+        "product_id": 7,
+        "file_url": doc.file_url,
+    }
     assert type(dv.upserted_fields["product_id"]) is int
 
 

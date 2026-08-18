@@ -271,6 +271,11 @@ class BailianKnowledgeClient:
                     "content": node.text or "",
                     "score": node.score,
                     "doc_id": metadata.get("file_id", ""),
+                    # F1（2026-08-18）：import 时以 original_file_url=doc.file_url 存入百炼，
+                    # 此处透出原始文件 URL（映射为 url 键），供 specialist 医学问答 citations.url 引用。
+                    "url": (metadata.get("original_file_url")
+                            or metadata.get("file_url")
+                            or metadata.get("url") or ""),
                 }
             )
         return results

@@ -121,7 +121,7 @@ class DashVectorClient:
             vector=vector,
             topk=top_k,
             filter=filter_expr,
-            output_fields=["doc_id", "title", "content", "chunk_index", "product_id", "doc_type"],
+            output_fields=["doc_id", "title", "content", "chunk_index", "product_id", "doc_type", "file_url"],
         )
         # C4（2026-08-13 低危批）：响应式 API —— 查询失败返回错误码但不抛异常，
         # resp.output 为空列表会被当作"无结果"正常返回，document_manager.search
@@ -144,5 +144,6 @@ class DashVectorClient:
                 "chunk_index": fields.get("chunk_index"),
                 "product_id": fields.get("product_id"),
                 "doc_type": fields.get("doc_type"),
+                "url": fields.get("file_url") or "",
             })
         return out

@@ -53,7 +53,8 @@ class EsClient:
         resp = es.search(index=self.index, size=top_k, query=body)
         return [
             {"title": h["_source"].get("title", ""), "content": (h["_source"].get("content") or "")[:500],
-             "score": h.get("_score", 0), "doc_id": h["_source"].get("doc_id")}
+             "score": h.get("_score", 0), "doc_id": h["_source"].get("doc_id"),
+             "url": h["_source"].get("file_url", "")}
             for h in resp["hits"]["hits"]
         ]
 
