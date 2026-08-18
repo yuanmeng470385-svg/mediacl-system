@@ -147,6 +147,7 @@ ROUTE_MAP = {
     "/api/v1/auth": settings.AUTH_SERVICE_URL,
     "/api/v1/users": settings.AUTH_SERVICE_URL,  # 用户管理（Web 后台）
     "/api/v1/qualifications": settings.AUTH_SERVICE_URL,  # 备案与资质（Web 后台 + 移动端）
+    "/api/v1/doctors": settings.AUTH_SERVICE_URL,  # 医生端医师认证（一期 B）
     "/api/v1/medical": settings.SPECIALIST_SERVICE_URL,  # 医生端医学问答（一期 B）
     "/api/v1/twin-subscriptions": settings.SPECIALIST_SERVICE_URL,  # 医生端分身订阅（一期 B）
     "/api/v1/share-links": settings.SPECIALIST_SERVICE_URL,  # 医生端分享链接激活（一期 B）
@@ -333,7 +334,9 @@ async def proxy(request: Request, path: str):
     # F3 修复（2026-08-17）：备案资质链路同理 —— 移动端资质提交走网关且客户端
     # 超时 60s，网关 30s 会先于客户端掐断（证书 OSS 上传 + 审核耗时超 30s 时
     # 客户端看到 504）。qualifications 同样 120s carve-out。
-    if path.startswith(("api/v1/knowledge/", "api/v1/qualifications/")):
+    # B9 修复（2026-08-17）：医生端医师认证证书上传同款问题（doctorAPI 客户端
+    # 超时 60s，OSS 上传慢时网关 30s 先断）—— doctors 同样 120s carve-out。
+    if path.startswith(("api/v1/knowledge/", "api/v1/qualifications/", "api/v1/doctors/")):
         proxy_timeout = 120.0
     else:
         proxy_timeout = 30.0

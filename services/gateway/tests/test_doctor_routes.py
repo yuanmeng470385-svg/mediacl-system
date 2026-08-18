@@ -88,3 +88,61 @@ def test_share_links_activate_routes_to_specialist_service(monkeypatch):
     method, url = log[0]
     assert method == "POST"
     assert url == f"{main.settings.SPECIALIST_SERVICE_URL}/api/v1/share-links/abc/activate"
+
+
+def test_doctors_certs_me_routes_to_auth_service(monkeypatch):
+    """B9：/api/v1/doctors/certs/me（医生端 submitCert/getMyCert）转发到 auth-service，
+    且必须带 JWT —— Task 2 计划遗漏，此前经网关 404。"""
+    log = _record_forwarding(monkeypatch)
+
+    async def _run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+            return await c.get("/api/v1/doctors/certs/me", headers=_auth_headers())
+
+    resp = asyncio.run(_run())
+    assert resp.status_code == 200
+    assert len(log) == 1
+    method, url = log[0]
+    assert method == "GET"
+    assert url == f"{main.settings.AUTH_SERVICE_URL}/api/v1/doctors/certs/me"
+
+
+def test_doctors_requires_bearer_token(monkeypatch):
+    log = _record_forwarding(monkeypatch)
+
+    async def _run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+            return await c.get("/api/v1/doctors/certs/me")
+
+    resp = asyncio.run(_run())
+    assert resp.status_code == 401
+    assert log == []
+
+
+def test_doctors_proxy_timeout_carve_out(monkeypatch):
+    """B9：/api/v1/doctors/* 走 120s 超时 carve-out（证书 OSS 上传慢时防 30s 网关
+    先断）—— 照 qualifications 路由先例，其他路由维持 30s。"""
+    timeouts: list = []
+
+    def _fake_async_client(*a, **k):
+        timeouts.append(k.get("timeout"))
+        return _RecordingClient([])
+
+    fake_httpx = types.SimpleNamespace(
+        AsyncClient=_fake_async_client,
+        ConnectError=httpx.ConnectError,
+        TimeoutException=httpx.TimeoutException,
+        HTTPError=httpx.HTTPError,
+    )
+    monkeypatch.setattr(main, "httpx", fake_httpx)
+
+    async def _run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+            await c.get("/api/v1/doctors/certs/me", headers=_auth_headers())
+            await c.get("/api/v1/visits/tasks", headers=_auth_headers())
+
+    asyncio.run(_run())
+    assert timeouts == [120.0, 30.0]
