@@ -314,3 +314,62 @@ export interface ContentItem {
   file_url?: string;
   tags?: string[];
 }
+
+// ========== 医生端（一期 B） ==========
+
+/** 执业资质 —— 后端 DoctorCertification.to_dict 同形状（auth-service doctors.py） */
+export interface DoctorCert {
+  id: number;
+  doctor_id: number;
+  /** physician=医师资格证 / practice=执业证书 */
+  cert_type: 'physician' | 'practice';
+  cert_image_url: string;
+  cert_status: 'pending' | 'approved' | 'rejected';
+  reject_reason?: string;
+  reviewed_by?: number;
+  reviewed_at?: string;
+}
+
+/** 医学问答回答 —— POST /api/v1/medical/qa 响应形状（specialist-service medical.py） */
+export interface MedicalAnswer {
+  answer: string;
+  citations: { title: string; url?: string; doc_id?: string }[];
+  /** 强制展示的合规免责声明（后端拼好文案） */
+  disclaimer: string;
+  /** 问题预检或答案审核被拦时为 true（answer 为安全话术） */
+  blocked: boolean;
+  violations?: ChatViolation[];
+  /** 知识库无匹配片段 */
+  knowledge_empty?: boolean;
+}
+
+/** 分身公开信息 —— activate 响应里的 twin（只暴露 id/name/status） */
+export interface TwinInfo {
+  id: number;
+  name: string;
+  status: string;
+}
+
+/** 分享链接激活结果 */
+export interface TwinActivateResult {
+  twin: TwinInfo;
+  /** 本人是否已订阅（true 时跳过知情同意弹窗直接进对话） */
+  subscribed: boolean;
+  subscription_status: 'subscribed' | 'blocked' | null;
+}
+
+/** 分身订阅行 —— 后端 DoctorTwinSubscription.to_dict 同形状 */
+export interface TwinSubscription {
+  id: number;
+  doctor_id: number;
+  twin_id: number;
+  status: 'subscribed' | 'blocked';
+  consent_version: string;
+  consent_at: string | null;
+}
+
+/** 订阅列表元素 —— 订阅行 + join Specialist 补充的 twin_name/twin_status */
+export interface TwinSubscriptionItem extends TwinSubscription {
+  twin_name?: string | null;
+  twin_status?: string | null;
+}

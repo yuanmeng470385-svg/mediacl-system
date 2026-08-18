@@ -1,8 +1,8 @@
 /**
  * 登录页 - 医生端
- * 手机号 + 验证码登录（authAPI.sendCode / useAuth.login）
+ * 手机号+验证码 / 用户名+密码双模式登录（照 mobile/src/screens/Login 视觉范式）
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,11 +19,23 @@ import { authAPI } from '../../api/auth';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, loginByPassword } = useAuth();
+  const [mode, setMode] = useState<'code' | 'password'>('code');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [agreed, setAgreed] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [loading, setLoading] = useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setInterval>>();
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const validatePhone = (p: string) => /^1[3-9]\d{9}$/.test(p);
 
@@ -35,6 +47,16 @@ export default function LoginScreen() {
     setSendingCode(true);
     try {
       await authAPI.sendCode(phone);
+      setCountdown(60);
+      timerRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
       Alert.alert('提示', '验证码已发送');
     } catch (e: any) {
       Alert.alert('发送失败', e.message || '请稍后重试');
@@ -44,22 +66,50 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
-    if (!validatePhone(phone)) {
-      Alert.alert('提示', '请输入正确的手机号');
-      return;
+    if (mode === 'password') {
+      if (!username.trim()) {
+        Alert.alert('提示', '请输入用户名');
+        return;
+      }
+      if (!password) {
+        Alert.alert('提示', '请输入密码');
+        return;
+      }
+    } else {
+      if (!validatePhone(phone)) {
+        Alert.alert('提示', '请输入正确的手机号');
+        return;
+      }
+      if (!code || code.length < 4) {
+        Alert.alert('提示', '请输入验证码');
+        return;
+      }
     }
-    if (!code || code.length < 4) {
-      Alert.alert('提示', '请输入验证码');
+    if (!agreed) {
+      Alert.alert('提示', '请先同意用户协议和隐私政策');
       return;
     }
     setLoading(true);
     try {
-      await login(phone, code);
+      if (mode === 'password') {
+        await loginByPassword(username.trim(), password);
+      } else {
+        await login(phone, code);
+      }
     } catch (e: any) {
-      Alert.alert('登录失败', e.message || '请检查手机号和验证码');
+      Alert.alert(
+        '登录失败',
+        e.message || (mode === 'password' ? '请检查用户名和密码' : '请检查手机号和验证码')
+      );
     } finally {
       setLoading(false);
     }
+  };
+
+  const switchMode = () => {
+    setMode((prev) => (prev === 'code' ? 'password' : 'code'));
+    setCode('');
+    setPassword('');
   };
 
   return (
@@ -67,6 +117,9 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <View style={styles.bgTop} />
+      <View style={styles.bgBottom} />
+
       <View style={styles.content}>
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
@@ -77,53 +130,115 @@ export default function LoginScreen() {
         </View>
 
         <View style={[styles.card, Shadow.card]}>
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>手机号</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="请输入手机号"
-              placeholderTextColor={Colors.textHint}
-              keyboardType="phone-pad"
-              maxLength={11}
-              value={phone}
-              onChangeText={setPhone}
-            />
-          </View>
+          {mode === 'code' ? (
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>手机号</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入手机号"
+                  placeholderTextColor={Colors.textHint}
+                  keyboardType="phone-pad"
+                  maxLength={11}
+                  value={phone}
+                  onChangeText={setPhone}
+                />
+              </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>验证码</Text>
-            <View style={styles.codeRow}>
-              <TextInput
-                style={[styles.input, styles.codeInput]}
-                placeholder="请输入验证码"
-                placeholderTextColor={Colors.textHint}
-                keyboardType="number-pad"
-                maxLength={6}
-                value={code}
-                onChangeText={setCode}
-              />
-              <TouchableOpacity
-                style={styles.codeButton}
-                onPress={handleSendCode}
-                disabled={sendingCode}
-              >
-                <Text style={styles.codeButtonText}>
-                  {sendingCode ? '发送中...' : '获取验证码'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>验证码</Text>
+                <View style={styles.codeRow}>
+                  <TextInput
+                    style={[styles.input, styles.codeInput]}
+                    placeholder="请输入验证码"
+                    placeholderTextColor={Colors.textHint}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                    value={code}
+                    onChangeText={setCode}
+                  />
+                  <TouchableOpacity
+                    style={[
+                      styles.codeBtn,
+                      (countdown > 0 || sendingCode || !validatePhone(phone)) && styles.codeBtnDisabled,
+                    ]}
+                    onPress={handleSendCode}
+                    disabled={countdown > 0 || sendingCode || !validatePhone(phone)}
+                    activeOpacity={0.7}
+                  >
+                    {sendingCode ? (
+                      <ActivityIndicator color={Colors.primary} size="small" />
+                    ) : (
+                      <Text
+                        style={[styles.codeBtnText, countdown > 0 && styles.codeBtnDisabledText]}
+                      >
+                        {countdown > 0 ? `${countdown}s` : '获取验证码'}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>用户名</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入用户名"
+                  placeholderTextColor={Colors.textHint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  value={username}
+                  onChangeText={setUsername}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>密码</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="请输入密码"
+                  placeholderTextColor={Colors.textHint}
+                  secureTextEntry
+                  value={password}
+                  onChangeText={setPassword}
+                />
+              </View>
+            </>
+          )}
 
           <TouchableOpacity
-            style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+            style={[styles.loginBtn, loading && styles.loginBtnLoading]}
             onPress={handleLogin}
             disabled={loading}
+            activeOpacity={0.8}
           >
             {loading ? (
               <ActivityIndicator color={Colors.textWhite} />
             ) : (
-              <Text style={styles.loginButtonText}>登录</Text>
+              <Text style={styles.loginBtnText}>登 录</Text>
             )}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.switchRow} onPress={switchMode} activeOpacity={0.7}>
+            <Text style={styles.switchText}>
+              {mode === 'code' ? '使用密码登录' : '使用验证码登录'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.agreementRow}
+            onPress={() => setAgreed(!agreed)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.checkbox, agreed && styles.checkboxChecked]}>
+              {agreed && <Text style={styles.checkmark}>✓</Text>}
+            </View>
+            <Text style={styles.agreementText}>
+              已阅读并同意 <Text style={styles.link}>《用户协议》</Text> 和{' '}
+              <Text style={styles.link}>《隐私政策》</Text>
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -132,62 +247,106 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.primary },
-  content: { flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.xl },
-  logoArea: { alignItems: 'center', marginBottom: Spacing.xxxl },
+  container: { flex: 1, backgroundColor: Colors.background },
+  bgTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '45%',
+    backgroundColor: Colors.primary,
+    borderBottomLeftRadius: 40,
+    borderBottomRightRadius: 40,
+  },
+  bgBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '55%',
+    backgroundColor: Colors.background,
+  },
+  content: { flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.xxl },
+  logoArea: { alignItems: 'center', marginBottom: 40 },
   logoCircle: {
     width: 72,
     height: 72,
-    borderRadius: BorderRadius.xl,
+    borderRadius: 20,
     backgroundColor: Colors.textWhite,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.lg,
+    ...Shadow.fab,
   },
-  logoIcon: { fontSize: FontSize.xxl, fontWeight: '800', color: Colors.primary },
-  appName: { fontSize: FontSize.xxl, fontWeight: '700', color: Colors.textWhite },
-  subtitle: { fontSize: FontSize.sm, color: Colors.primarySurface, marginTop: Spacing.sm },
-  card: {
-    backgroundColor: Colors.card,
-    borderRadius: BorderRadius.xl,
-    padding: Spacing.xl,
-  },
-  inputGroup: { marginBottom: Spacing.lg },
-  inputLabel: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
+  logoIcon: { fontSize: 28, fontWeight: '800', color: Colors.primary, letterSpacing: -1 },
+  appName: {
+    fontSize: 30,
+    fontWeight: '700',
+    color: Colors.textWhite,
     marginBottom: Spacing.sm,
-    fontWeight: '600',
   },
+  subtitle: { fontSize: FontSize.md, color: 'rgba(255,255,255,0.7)' },
+  card: {
+    backgroundColor: Colors.white,
+    borderRadius: BorderRadius.xl,
+    padding: Spacing.xxl,
+    gap: Spacing.xl,
+  },
+  inputGroup: { gap: Spacing.sm },
+  inputLabel: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.textPrimary },
   input: {
-    height: 48,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: BorderRadius.md,
-    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
     fontSize: FontSize.md,
     color: Colors.textPrimary,
     backgroundColor: Colors.backgroundAlt,
   },
-  codeRow: { flexDirection: 'row', alignItems: 'center' },
-  codeInput: { flex: 1, marginRight: Spacing.sm },
-  codeButton: {
-    height: 48,
+  codeRow: { flexDirection: 'row', gap: Spacing.md },
+  codeInput: { flex: 1 },
+  codeBtn: {
     paddingHorizontal: Spacing.lg,
-    borderRadius: BorderRadius.md,
-    backgroundColor: Colors.primarySurface,
-    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.primary,
     justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 110,
   },
-  codeButtonText: { fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
-  loginButton: {
-    height: 48,
-    borderRadius: BorderRadius.md,
+  codeBtnDisabled: { borderColor: Colors.border },
+  codeBtnText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '600' },
+  codeBtnDisabledText: { color: Colors.textHint },
+  loginBtn: {
     backgroundColor: Colors.primary,
+    borderRadius: BorderRadius.lg,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
     marginTop: Spacing.sm,
   },
-  loginButtonDisabled: { opacity: 0.6 },
-  loginButtonText: { fontSize: FontSize.md, color: Colors.textWhite, fontWeight: '700' },
+  loginBtnLoading: { opacity: 0.7 },
+  loginBtnText: {
+    color: Colors.textWhite,
+    fontSize: FontSize.lg,
+    fontWeight: '600',
+    letterSpacing: 4,
+  },
+  switchRow: { alignItems: 'center', marginTop: -Spacing.sm },
+  switchText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '500' },
+  agreementRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  checkbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: Colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  checkmark: { color: Colors.white, fontSize: 12, fontWeight: '700' },
+  agreementText: { fontSize: FontSize.xs, color: Colors.textSecondary, flex: 1 },
+  link: { color: Colors.primary },
 });
