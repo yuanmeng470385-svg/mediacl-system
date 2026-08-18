@@ -73,4 +73,5 @@ class ShareLink(Base):
             "created_by": self.created_by,
             "add_count": self.add_count or 0,
             "expire_at": self.expire_at.isoformat() if self.expire_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -212,6 +212,8 @@ def test_list_returns_only_own_links(fresh_state):
     assert by_id[2]["twin_name"] == "心血管专员"
     assert by_id[2]["add_count"] == 5
     assert by_id[2]["share_url"] == "medagent-doctor://twin/t2"
+    # 含 created_at（server_default 落库，列表项非空）
+    assert all(item["created_at"] for item in data)
     # 不含他人（created_by=1）链接
     assert all(item["created_by"] == 3 for item in data)
 
