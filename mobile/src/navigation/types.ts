@@ -40,6 +40,10 @@ export type RootStackParamList = {
   NotificationSettings: undefined;
   HelpCenter: undefined;
   ComplianceCenter: undefined;
+  // 分身分享 & 夜间简报
+  Share: undefined;
+  BriefingList: undefined;
+  BriefingDetail: { briefingId: number };
 };
 
 // ========== 路由参数类型导出 ==========

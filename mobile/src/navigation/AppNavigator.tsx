@@ -33,6 +33,9 @@ import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
 import TaskListScreen from '../screens/TaskList/TaskListScreen';
 import FavoritesScreen from '../screens/Favorites/FavoritesScreen';
+import ShareScreen from '../screens/Share/ShareScreen';
+import BriefingListScreen from '../screens/Briefing/BriefingListScreen';
+import BriefingDetailScreen from '../screens/Briefing/BriefingDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -186,6 +189,10 @@ export default function AppNavigator() {
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="HelpCenter" component={HelpCenterScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="VisitDetail" component={VisitDetailScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 分身分享 & 夜间简报 */}
+            <Stack.Screen name="Share" component={ShareScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="BriefingList" component={BriefingListScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="BriefingDetail" component={BriefingDetailScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen

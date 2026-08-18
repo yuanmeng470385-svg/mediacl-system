@@ -314,3 +314,33 @@ export interface ContentItem {
   file_url?: string;
   tags?: string[];
 }
+
+// ========== 分身分享链接 ==========
+export interface ShareLinkItem {
+  id: number;
+  twin_id: number;
+  twin_name: string;
+  url_token: string;
+  share_url: string;
+  add_count: number;
+  expire_at?: string | null;
+  created_at?: string;
+}
+
+// ========== 夜间简报 ==========
+export interface NightlyBriefing {
+  id: number;
+  specialist_id: number;
+  twin_name: string;
+  briefing_date: string;
+  content: {
+    summary: string;
+    doctors: {
+      doctor_name: string;
+      questions: string[];
+      concern?: string;
+      follow_up?: string;
+    }[];
+  };
+  status: string;
+}

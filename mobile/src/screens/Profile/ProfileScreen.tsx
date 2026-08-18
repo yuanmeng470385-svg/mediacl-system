@@ -24,6 +24,8 @@ const menuItems = [
   { icon: 'account-outline', label: '个人资料', route: 'Settings' as const },
   { icon: 'clipboard-check-outline', label: '我的任务', route: 'TaskList' as const },
   { icon: 'star-outline', label: '我的收藏', route: 'Favorites' as const },
+  { icon: 'share-variant-outline', label: '分身分享', route: 'Share' as const },
+  { icon: 'weather-night', label: '夜间简报', route: 'BriefingList' as const },
   // 「我的统计」已移除：无对应页面，此前误路由到 Settings
   { icon: 'bell-outline', label: '通知设置', route: 'NotificationSettings' as const },
   { icon: 'shield-check-outline', label: '合规手册', route: 'ComplianceManual' as const },
