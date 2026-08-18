@@ -34,7 +34,7 @@ from shared.models.user import User
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 logger = logging.getLogger(__name__)
 
-# 合法角色（init_db.sql）：admin / manager / rep / compliance / medical / finance
+# 合法角色（init_db.sql）：admin / manager / rep / compliance / medical / finance / doctor
 VALID_ROLES = {"admin", "manager", "rep", "compliance", "medical", "finance", "doctor"}
 
 # status 只允许这两个枚举值，拒绝任意字符串写入垃圾状态

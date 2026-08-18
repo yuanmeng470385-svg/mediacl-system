@@ -11,6 +11,7 @@ const ROLE_MAP: Record<string, { color: string; text: string }> = {
   admin: { color: 'red', text: '管理员' }, manager: { color: 'blue', text: '管理者' },
   rep: { color: 'green', text: '代表' }, compliance: { color: 'orange', text: '合规' },
   medical: { color: 'purple', text: '医学' }, finance: { color: 'cyan', text: '财务' },
+  doctor: { color: 'geekblue', text: '医生' },
 };
 
 export default function UserList() {
@@ -31,7 +32,7 @@ export default function UserList() {
     { title: '手机号', dataIndex: 'phone', width: 140 },
     { title: '角色', dataIndex: 'role', width: 100,
       render: (_, r) => { const rm = ROLE_MAP[r.role] || { color: 'default', text: r.role }; return <Tag color={rm.color}>{rm.text}</Tag>; },
-      valueEnum: { admin: '管理员', manager: '管理者', rep: '代表', compliance: '合规', medical: '医学', finance: '财务' } },
+      valueEnum: { admin: '管理员', manager: '管理者', rep: '代表', compliance: '合规', medical: '医学', finance: '财务', doctor: '医生' } },
     { title: '区域', dataIndex: 'region', width: 120 },
     { title: '状态', dataIndex: 'status', width: 80,
       // valueEnum 让搜索表单渲染为 启用/禁用 下拉（后端 users.py list 支持 status 筛选）
