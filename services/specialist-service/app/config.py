@@ -35,5 +35,8 @@ class Settings:
     # 日志
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+    # --- 夜间简报 ---
+    NIGHTLY_BRIEFING_INTERVAL_HOURS = int(os.getenv("NIGHTLY_BRIEFING_INTERVAL_HOURS", "24"))
+
 
 settings = Settings()

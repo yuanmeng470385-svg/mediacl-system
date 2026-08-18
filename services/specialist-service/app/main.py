@@ -1,6 +1,8 @@
 """数字学术专员服务 - FastAPI 入口"""
 import sys
 import os
+import asyncio
+from contextlib import asynccontextmanager
 
 # 确保 shared 可导入
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -19,6 +21,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+async def _briefing_loop() -> None:
+    """夜间简报定时任务（需求 C）：启动即跑一次，此后按
+    NIGHTLY_BRIEFING_INTERVAL_HOURS 周期执行。同步 DB 生成丢线程池（to_thread），
+    不阻塞事件循环；异常记 error 不崩（多 worker 各跑一份，upsert 幂等）。
+    """
+    from app.core.briefing_generator import run_briefing_scan
+
+    while True:
+        try:
+            await run_briefing_scan()
+        except Exception as exc:
+            logger.error("夜间简报生成失败: %s", exc)
+        await asyncio.sleep(settings.NIGHTLY_BRIEFING_INTERVAL_HOURS * 3600)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_briefing_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
 # H1（2026-08-11）：JWT_SECRET fail-fast（同 gateway/auth 守卫）——漏配或弱值
 # 拒绝启动，防止 shared 验签回退到公开默认密钥后任何人可伪造任意角色 token 直连
 from shared.common.auth import validate_jwt_secret
@@ -28,7 +55,8 @@ validate_jwt_secret(settings.JWT_SECRET)
 app = FastAPI(
     title="MedAgent - 数字学术专员服务",
     description="管理 AI 数字专员，处理学术问答对话",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
