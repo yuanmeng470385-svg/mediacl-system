@@ -222,3 +222,99 @@ def test_ai_generate_rejects_rep():
                        json={"material_id": 1}, headers=_token(1, "rep"))
     assert resp.status_code == 403
     assert resp.json()["code"] == 3000
+
+
+def _add_qualification(representative_id: int):
+    db = TestSession()
+    from shared.models.qualification import RepresentativeQualification
+    db.add(RepresentativeQualification(
+        representative_id=representative_id, education_cert="https://oss/edu.pdf",
+        audit_status="approved", filing_number="F-1",
+    ))
+    db.commit()
+    db.close()
+
+
+def test_start_returns_approved_questions_no_answer():
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="single", content="q2", options=["A", "B"], answer=[0], review_status="pending")
+    resp = client.post("/api/v1/exams/start", json={"question_count": 10}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    items = body["data"]["questions"]
+    assert len(items) == 1  # 只抽 approved
+    assert items[0]["content"] == "q1"
+    assert "answer" not in items[0]
+
+
+def test_start_requires_rep():
+    resp = client.post("/api/v1/exams/start", json={}, headers=_token(2, "admin"))
+    assert resp.status_code == 403
+
+
+def test_submit_scores_and_writes_record(fresh_state):
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="multiple", content="q2", options=["A", "B", "C"], answer=[0, 2], review_status="approved")
+    db = TestSession()
+    _add_qualification(1)
+    db.close()
+
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+        {"question_id": 2, "selected": [0, 2]},
+    ]}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["question_count"] == 2
+    assert data["correct_count"] == 2
+    assert data["score"] == 100
+    assert data["passed"] is True
+    audit_mock = fresh_state
+    audit_mock.assert_awaited_once()
+
+    # 回写 representative_qualifications
+    from shared.models.qualification import RepresentativeQualification
+    db = TestSession()
+    qual = db.query(RepresentativeQualification).filter_by(representative_id=1).first()
+    assert qual.compliance_exam_score == 100
+    assert qual.compliance_training_completed is True
+    db.close()
+
+
+def test_submit_partial_score():
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="single", content="q2", options=["A", "B"], answer=[0], review_status="approved")
+    db = TestSession()
+    _add_qualification(1)
+    db.close()
+
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+        {"question_id": 2, "selected": [1]},  # 错
+    ]}, headers=_token(1, "rep"))
+    body = resp.json()
+    data = body["data"]
+    assert data["score"] == 50
+    assert data["passed"] is False
+
+
+def test_submit_unknown_question_rejected():
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 999, "selected": [0]},
+    ]}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_records_me_and_admin_list():
+    db = TestSession()
+    db.add(ExamRecord(id=1, representative_id=1, question_count=2, correct_count=2, score=100, passed=True))
+    db.add(ExamRecord(id=2, representative_id=1, question_count=2, correct_count=1, score=50, passed=False))
+    db.commit()
+    db.close()
+
+    me = client.get("/api/v1/exams/records/me", headers=_token(1, "rep"))
+    assert me.json()["data"]["total"] == 2
+    all_ = client.get("/api/v1/exams/records", headers=_token(2, "admin"))
+    assert all_.json()["data"]["total"] == 2

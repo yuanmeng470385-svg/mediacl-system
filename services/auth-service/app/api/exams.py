@@ -1,6 +1,7 @@
 """题库与考试（需求文档 3.4(2)(3)）：医学部/合规部人工审核题目；代表端在线考试"""
 import asyncio
 import logging
+import os
 import random
 from datetime import datetime
 from typing import Optional
@@ -14,6 +15,7 @@ from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, PermissionError, success
 from shared.models.training_exam import ExamQuestion, ExamRecord, TrainingMaterial
+from shared.models.qualification import RepresentativeQualification
 
 from app.services.audit_client import write_audit_log
 
@@ -24,6 +26,8 @@ router = APIRouter(prefix="/api/v1/exams", tags=["exams"])
 EXAM_ADMIN_ROLES = ("admin", "manager", "compliance", "medical")
 VALID_TYPES = ("single", "multiple", "judge")
 VALID_REVIEW = ("pending", "approved", "rejected")
+
+_PASS_SCORE = int(os.getenv("EXAM_PASS_SCORE", "80"))
 
 
 def _validate_question(payload: dict) -> dict:
@@ -228,3 +232,125 @@ async def ai_generate_questions(
         except ParamError:
             continue  # 单条草稿不合规跳过，不整体失败
     return success(drafts)
+
+
+# ---------------- 考试（代表端） ----------------
+
+def _score_match(selected: list, answer: list) -> bool:
+    """判分：按集合相等（排序后比较），多选必须全对。"""
+    if not isinstance(selected, list):
+        return False
+    try:
+        return sorted(int(i) for i in selected) == sorted(int(a) for a in answer)
+    except (TypeError, ValueError):
+        return False
+
+
+@router.post("/start")
+async def start_exam(
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """开始考试：从 approved 题目随机抽题（默认 10 道，最多 30），不含答案。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    question_count = payload.get("question_count") or 10
+    if not isinstance(question_count, int) or not (1 <= question_count <= 30):
+        raise ParamError("question_count 必须是 1-30 的整数")
+    pool = db.query(ExamQuestion).filter(ExamQuestion.review_status == "approved").all()
+    if not pool:
+        raise BusinessError("暂无可考试的题目，请联系医学部/合规部上架题目", code=4001)
+    questions = random.sample(pool, min(question_count, len(pool)))
+    return success({"questions": [q.to_dict() for q in questions]})
+
+
+@router.post("/submit")
+async def submit_exam(
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """提交考试：判分 + 写 exam_records + 回写 representative_qualifications 三字段。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    answers = payload.get("answers")
+    if not isinstance(answers, list) or not answers:
+        raise ParamError("answers 必须是题目作答数组")
+    q_ids = [a.get("question_id") for a in answers if isinstance(a, dict)]
+    if not q_ids:
+        raise ParamError("answers 缺少 question_id")
+    rows = db.query(ExamQuestion).filter(ExamQuestion.id.in_(q_ids)).all()
+    by_id = {q.id: q for q in rows}
+    if len(rows) != len(set(q_ids)):
+        raise BusinessError("存在不存在的题目", code=4001)
+    if any(q.review_status != "approved" for q in rows):
+        raise BusinessError("存在未上架的题目，请重新开始考试", code=4001)
+
+    correct = 0
+    for a in answers:
+        q = by_id.get(a.get("question_id"))
+        if q is None:
+            raise BusinessError("存在不存在的题目", code=4001)
+        if _score_match(a.get("selected"), q.answer):
+            correct += 1
+    total = len(answers)
+    score = round(correct * 100 / total)
+    passed = score >= _PASS_SCORE
+
+    record = ExamRecord(
+        representative_id=current_user["id"],
+        question_count=total,
+        correct_count=correct,
+        score=score,
+        passed=passed,
+    )
+    db.add(record)
+    # 回写代表资质表
+    qual = db.query(RepresentativeQualification).filter(
+        RepresentativeQualification.representative_id == current_user["id"]
+    ).first()
+    if qual:
+        if qual.compliance_exam_score is None or score > qual.compliance_exam_score:
+            qual.compliance_exam_score = score
+        if passed:
+            qual.compliance_training_completed = True
+    db.commit()
+    db.refresh(record)
+    await write_audit_log(
+        action="exam_submit",
+        user_id=current_user["id"],
+        resource_type="exam_record",
+        resource_id=str(record.id),
+        after_value={"score": score, "passed": passed, "question_count": total},
+        request_id=get_request_id() or None,
+    )
+    return success(record.to_dict())
+
+
+@router.get("/records/me")
+async def my_exam_records(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    p = PaginationParams(page=page, page_size=page_size)
+    query = db.query(ExamRecord).filter(ExamRecord.representative_id == current_user["id"])
+    total = query.count()
+    rows = query.order_by(ExamRecord.id.desc()).offset(p.offset).limit(p.limit).all()
+    return success(paginate([r.to_dict() for r in rows], total, p.page, p.page_size))
+
+
+@router.get("/records")
+async def list_exam_records(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(require_roles(*EXAM_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    p = PaginationParams(page=page, page_size=page_size)
+    query = db.query(ExamRecord)
+    total = query.count()
+    rows = query.order_by(ExamRecord.id.desc()).offset(p.offset).limit(p.limit).all()
+    return success(paginate([r.to_dict() for r in rows], total, p.page, p.page_size))
