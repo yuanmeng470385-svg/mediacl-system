@@ -1,10 +1,12 @@
 """对话反馈 / 收藏 / 我的收藏"""
 import logging
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from shared.common.auth import get_current_user
+from shared.common.auth import get_current_user, require_roles
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import ParamError, success
@@ -46,6 +48,71 @@ def assert_session_owner(db: Session, session_id: str, user_id: int):
     ).first()
     if not owned:
         raise HTTPException(status_code=404, detail="会话不存在")
+
+
+@router.get("/search")
+async def search_conversations(
+    page: int = 1,
+    page_size: int = 20,
+    keyword: Optional[str] = None,
+    user_id: Optional[int] = None,
+    specialist_id: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    _admin: dict = Depends(require_roles("admin", "manager", "compliance")),
+    db: Session = Depends(get_db),
+):
+    """对话日志全文检索（二期 E，需求 3.2(1)）：admin/manager/compliance。
+
+    按 代表(user_id) / 分身(specialist_id) / 时间范围 / 命中词 筛选；
+    返回每条命中 + 该会话完整上下文（session_id 全部行，role/content）。
+    """
+    from datetime import datetime
+    from shared.common.response import ParamError as PE
+
+    def _parse(s: Optional[str], name: str) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s)
+        except ValueError:
+            raise PE(f"{name} 格式应为 ISO 时间")
+
+    q = db.query(Conversation)
+    if keyword:
+        q = q.filter(Conversation.content.ilike(f"%{keyword}%"))
+    if user_id:
+        q = q.filter(Conversation.user_id == user_id)
+    if specialist_id:
+        q = q.filter(Conversation.specialist_id == specialist_id)
+    if date_from:
+        q = q.filter(Conversation.created_at >= _parse(date_from, "date_from"))
+    if date_to:
+        q = q.filter(Conversation.created_at <= _parse(date_to, "date_to"))
+
+    total = q.count()
+    rows = q.order_by(Conversation.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+
+    items = []
+    for conv in rows:
+        ctx_rows = db.query(Conversation).filter(
+            Conversation.session_id == conv.session_id
+        ).order_by(Conversation.id.asc()).all()
+        items.append({
+            "id": conv.id,
+            "user_id": conv.user_id,
+            "specialist_id": conv.specialist_id,
+            "session_id": conv.session_id,
+            "role": conv.role,
+            "content": conv.content,
+            "blocked": bool(conv.compliance_result and conv.compliance_result.get("blocked")),
+            "created_at": conv.created_at.isoformat() if conv.created_at else None,
+            "context": [{
+                "role": c.role, "content": c.content,
+                "blocked": bool(c.compliance_result and c.compliance_result.get("blocked")),
+            } for c in ctx_rows],
+        })
+    return success(paginate(items, total=total, page=page, page_size=page_size))
 
 
 @router.post("/{conversation_id}/feedback")
