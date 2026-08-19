@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS digital_specialists (
     prompt_version VARCHAR(20),
     status VARCHAR(20) DEFAULT 'draft',     -- draft / intern / active / disabled
     is_official BOOLEAN NOT NULL DEFAULT FALSE,
-    representative_id BIGINT,
+    representative_id BIGINT REFERENCES users(id),
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
