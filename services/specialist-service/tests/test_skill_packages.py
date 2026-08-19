@@ -111,6 +111,30 @@ def test_create_skill_sets_pending(fresh_state):
     assert "skill_weights" not in body["data"]  # 权重不返回
 
 
+def test_create_skill_public_flag(fresh_state):
+    resp = client.post("/api/v1/skill-packages", json={
+        "name": "严谨学术风", "style_tags": ["严谨学术"],
+        "skill_weights": {"formal_level": "标准学术"}, "is_public": True,
+    }, headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["is_public"] is True
+    assert body["data"]["audit_status"] == "pending"
+    assert "skill_weights" not in body["data"]
+
+
+def test_detail_exposes_weights_to_admin(fresh_state):
+    _add_skill(id=1)
+    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["skill_weights"] == {"formal_level": "标准学术"}
+    # rep 无权限查看权重
+    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
 def test_review_approve_sets_public(fresh_state):
     _add_skill(id=1)
     resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},

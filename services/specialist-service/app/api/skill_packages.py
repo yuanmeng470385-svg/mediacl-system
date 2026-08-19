@@ -43,9 +43,10 @@ async def create_skill(
     db: Session = Depends(get_db),
 ):
     data = _validate_payload(payload)
+    is_public = bool(payload.get("is_public", False))
     sk = SkillPackage(
         name=data["name"], creator_id=current_user["id"],
-        is_public=False, is_anonymous=False, audit_status="pending",
+        is_public=is_public, is_anonymous=False, audit_status="pending",
         style_tags=data["style_tags"], heat=0,
         skill_weights=data["skill_weights"],
     )
@@ -101,6 +102,19 @@ async def public_plaza(
     total = q.count()
     rows = q.order_by(SkillPackage.heat.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
+
+
+@router.get("/{skill_id}/detail")
+async def skill_detail(
+    skill_id: int,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """审核详情：受控查看 skill_weights（仅医学部等管理角色，隐私边界附录B-1）"""
+    sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
+    if not sk:
+        raise BusinessError("Skill 不存在", code=4001)
+    return success(sk.to_dict(expose_weights=True))
 
 
 @router.post("/{skill_id}/review")
