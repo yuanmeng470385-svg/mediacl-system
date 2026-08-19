@@ -778,7 +778,9 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, TrainingMaterial.__table__, ExamQuestion.__table__, ExamRecord.__table__]
+    from shared.models.qualification import RepresentativeQualification
+    tables = [User.__table__, TrainingMaterial.__table__, ExamQuestion.__table__,
+              ExamRecord.__table__, RepresentativeQualification.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -797,6 +799,7 @@ def fresh_state(monkeypatch):
 
 
 def _add_q(**kw):
+    """建题目行。支持覆盖任意字段；未指定 review_status 时默认 approved。"""
     db = TestSession()
     defaults = dict(
         id=kw.pop("id", 1), material_id=None, question_type="single",
@@ -1324,13 +1327,15 @@ git commit -m "feat(auth): AI 出题草稿端点（qwen 辅助，人工复核入
 Append to `services/auth-service/tests/test_exams.py`：
 
 ```python
-def _add_qualification(db, representative_id: int):
+def _add_qualification(representative_id: int):
+    db = TestSession()
     from shared.models.qualification import RepresentativeQualification
     db.add(RepresentativeQualification(
         representative_id=representative_id, education_cert="https://oss/edu.pdf",
         audit_status="approved", filing_number="F-1",
     ))
     db.commit()
+    db.close()
 
 
 def test_start_returns_approved_questions_no_answer():
@@ -1351,10 +1356,10 @@ def test_start_requires_rep():
 
 
 def test_submit_scores_and_writes_record(fresh_state):
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="multiple", content="q2", options=["A", "B", "C"], answer=[0, 2], review_status="approved")
     db = TestSession()
-    _add_q_in_db(db, id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
-    _add_q_in_db(db, id=2, question_type="multiple", content="q2", options=["A", "B", "C"], answer=[0, 2], review_status="approved")
-    _add_qualification(db, 1)
+    _add_qualification(1)
     db.close()
 
     resp = client.post("/api/v1/exams/submit", json={"answers": [
@@ -1381,10 +1386,10 @@ def test_submit_scores_and_writes_record(fresh_state):
 
 
 def test_submit_partial_score():
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="single", content="q2", options=["A", "B"], answer=[0], review_status="approved")
     db = TestSession()
-    _add_q_in_db(db, id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
-    _add_q_in_db(db, id=2, question_type="single", content="q2", options=["A", "B"], answer=[0], review_status="approved")
-    _add_qualification(db, 1)
+    _add_qualification(1)
     db.close()
 
     resp = client.post("/api/v1/exams/submit", json={"answers": [
@@ -1395,14 +1400,6 @@ def test_submit_partial_score():
     data = body["data"]
     assert data["score"] == 50
     assert data["passed"] is False
-
-
-def _add_q_in_db(db, **kw):
-    defaults = dict(id=1, material_id=None, question_type="single", content="q",
-                    options=["A", "B"], answer=[1], review_status="approved")
-    defaults.update(kw)
-    db.add(ExamQuestion(**defaults))
-    db.commit()
 
 
 def test_submit_unknown_question_rejected():
@@ -1716,8 +1713,11 @@ def fresh_state(monkeypatch):
 
     monkeypatch.setitem(app.dependency_overrides, get_db, _override_db)
     store = _FakeStore()
-    monkeypatch.setattr(commit_api, "get_code_store", lambda: store)
-    monkeypatch.setattr(commit_api, "get_sender", lambda: _FakeSender())
+    # 注意：get_code_store/get_sender 是 FastAPI 依赖函数对象，必须覆盖
+    # app.dependency_overrides（monkeypatch 模块属性对 Depends() 捕获的函数对象无效）
+    from app.api.auth import get_code_store, get_sender
+    monkeypatch.setitem(app.dependency_overrides, get_code_store, lambda: store)
+    monkeypatch.setitem(app.dependency_overrides, get_sender, lambda: _FakeSender())
     audit_mock = AsyncMock(return_value=None)
     monkeypatch.setattr(commit_api, "write_audit_log", audit_mock)
     yield store, audit_mock
@@ -1772,22 +1772,27 @@ Create `services/auth-service/app/api/commitment.py`：
 ```python
 """年度合规承诺书签署（需求 3.4(4)）：勾选 + 短信验证码 + 审计留痕。
 一期为平台内电子确认（不接第三方 CA）；培训前置先上线不强制。"""
+import asyncio
 import logging
+import secrets
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from shared.common.auth import get_current_user, require_roles
 from shared.common.context import get_request_id
 from shared.common.db_session import get_db
-from shared.common.response import ParamError, PermissionError, success
+from shared.common.response import BusinessError, ParamError, PermissionError, success
 from shared.models.qualification import RepresentativeQualification
 from shared.models.user import User
 
 from app.api.auth import get_code_store, get_sender, _client_ip
 from app.config import settings
+from app.core.code_store import CodeStore, CodeStoreError
 from app.services.audit_client import write_audit_log
+from app.services.sms import SmsSendError
 
 logger = logging.getLogger(__name__)
 
@@ -1803,25 +1808,20 @@ async def send_commitment_code(
     sender=Depends(get_sender),
 ):
     """向当前代表手机发送承诺书签署验证码（复用 auth 验证码存储）"""
-    from app.core.code_store import CodeStoreError
-    from app.services.sms import SmsSendError
     phone = current_user.get("phone") or ""
     try:
         remaining = store.in_cooldown(phone)
         if remaining > 0:
             raise ParamError(f"请 {remaining} 秒后再试")
-        code = __import__("secrets").choice("0123456789")
-        code = "".join(__import__("random").choice("0123456789") for _ in range(settings.CODE_LENGTH))
+        code = "".join(secrets.choice("0123456789") for _ in range(settings.CODE_LENGTH))
         saved = store.save(phone, code, settings.CODE_TTL_SECONDS, settings.CODE_RESEND_SECONDS)
         if not saved:
             raise ParamError("验证码已发送，请稍后再试")
         await asyncio.to_thread(sender.send_code, phone, code)
     except CodeStoreError as exc:
         logger.error(f"承诺书验证码存储不可用: {exc}")
-        from shared.common.response import BusinessError
         raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004)
     except SmsSendError as exc:
-        from shared.common.response import BusinessError
         raise BusinessError(f"短信发送失败: {exc}", code=6001)
     await write_audit_log(
         action="commitment_send_code",
@@ -1843,7 +1843,6 @@ async def sign_commitment(
     store: CodeStore = Depends(get_code_store),
 ):
     """签署承诺书：校验短信验证码 → commitment_signed=true + 审计"""
-    from app.core.code_store import CodeStoreError
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
     code = str(payload.get("code") or "").strip()
@@ -1854,7 +1853,6 @@ async def sign_commitment(
         result = store.consume(phone, code, settings.CODE_MAX_ATTEMPTS)
     except CodeStoreError as exc:
         logger.error(f"承诺书验证码校验存储不可用: {exc}")
-        from shared.common.response import BusinessError
         raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004)
     if result != "matched":
         raise ParamError("验证码错误或已过期")
