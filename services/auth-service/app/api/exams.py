@@ -131,6 +131,12 @@ async def update_question(
     q.answer = data["answer"]
     if "material_id" in payload:
         q.material_id = payload.get("material_id")
+    # 重新送审语义：pending/rejected 题目被编辑后重置为待审核，清空上一轮审核信息
+    # （否则被驳回的题修正后仍是 rejected，而 review 仅 pending 可审 → 永久无法重新送审）
+    q.review_status = "pending"
+    q.review_reason = None
+    q.reviewed_by = None
+    q.reviewed_at = None
     db.commit()
     db.refresh(q)
     await write_audit_log(

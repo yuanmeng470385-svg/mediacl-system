@@ -177,3 +177,15 @@ def test_review_not_pending_rejected():
                        headers=_token(3, "medical"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+def test_update_rejected_resets_to_pending():
+    _add_q(id=1, review_status="rejected", review_reason="选项有歧义", reviewed_by=3)
+    resp = client.put("/api/v1/exams/questions/1",
+                      json={"question_type": "single", "content": "修正后的题目",
+                            "options": ["A", "B"], "answer": [0]},
+                      headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["review_status"] == "pending"
+    assert body["data"]["review_reason"] is None
