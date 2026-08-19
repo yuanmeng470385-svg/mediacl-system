@@ -6,6 +6,7 @@ from shared.common.response import success, ParamError, BusinessError
 from shared.common.auth import get_current_user, require_roles
 from shared.common.pagination import PaginationParams, paginate
 from app.services.audit_client import write_audit_log
+from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from app.models.specialist import Specialist
 from app.core.answer_generator import AnswerGenerator
@@ -339,8 +340,9 @@ async def get_specialist_feedback(
 SPECIALIST_UPDATE_FIELDS = {
     "name", "product_id", "persona", "knowledge_scope",
     "compliance_level", "bailian_app_id", "status",
+    "is_official", "representative_id",
 }
-VALID_STATUSES = {"draft", "active", "disabled"}
+VALID_STATUSES = {"draft", "active", "disabled", "frozen"}
 
 
 def _normalize_status(status: str) -> str:
@@ -378,6 +380,8 @@ def _validate_specialist_fields(request: dict, creating: bool) -> dict:
             data["product_id"] = int(data["product_id"])
         except (TypeError, ValueError):
             raise ParamError("product_id 必须为整数")
+    if data.get("is_official") and data.get("representative_id"):
+        raise ParamError("官方公共数字员工不能绑定代表（representative_id 须为空）")
     return data
 
 
@@ -393,12 +397,72 @@ def _ensure_product_exists(db: Session, product_id: int) -> None:
         raise BusinessError(f"产品不存在: {product_id}")
 
 
+# ==================== 分身冻结/解冻（合规风控，人工裁决） ====================
+
+@router.post("/{specialist_id}/freeze")
+async def freeze_specialist(
+    specialist_id: int,
+    payload: dict,
+    current_user: dict = Depends(require_roles("admin", "manager", "compliance")),
+    db: Session = Depends(get_db),
+):
+    """合规冻结分身（需求 3.2(3) 人工裁决）：reason 必填 + 审计。不做自动冻结。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    reason = (payload.get("reason") or "").strip() if isinstance(payload.get("reason"), str) else ""
+    if not reason:
+        raise ParamError("冻结必须填写理由")
+    spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not spec:
+        raise BusinessError("分身不存在", code=4001)
+    if spec.status == "frozen":
+        raise BusinessError("分身已处于冻结状态", code=4001)
+    spec.status = "frozen"
+    db.commit()
+    db.refresh(spec)
+    await write_audit_log(
+        action="specialist_freeze",
+        user_id=current_user["id"],
+        resource_type="digital_specialist",
+        resource_id=str(spec.id),
+        after_value={"status": "frozen", "reason": reason},
+        request_id=get_request_id() or None,
+    )
+    return success(spec.to_dict())
+
+
+@router.post("/{specialist_id}/unfreeze")
+async def unfreeze_specialist(
+    specialist_id: int,
+    current_user: dict = Depends(require_roles("admin", "manager", "compliance")),
+    db: Session = Depends(get_db),
+):
+    """解冻分身：frozen → active + 审计"""
+    spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not spec:
+        raise BusinessError("分身不存在", code=4001)
+    if spec.status != "frozen":
+        raise BusinessError("分身未处于冻结状态", code=4001)
+    spec.status = "active"
+    db.commit()
+    db.refresh(spec)
+    await write_audit_log(
+        action="specialist_unfreeze",
+        user_id=current_user["id"],
+        resource_type="digital_specialist",
+        resource_id=str(spec.id),
+        after_value={"status": "active"},
+        request_id=get_request_id() or None,
+    )
+    return success(spec.to_dict())
+
+
 # ==================== 专员 CRUD（S6：仅 admin） ====================
 
 @router.post("")
 async def create_specialist(
     request: dict,
-    current_user: dict = Depends(require_roles("admin")),
+    current_user: dict = Depends(require_roles("admin", "manager", "compliance", "medical")),
     db: Session = Depends(get_db),
 ):
     """创建专员"""
@@ -412,6 +476,8 @@ async def create_specialist(
         compliance_level=data.get("compliance_level", "internal"),
         bailian_app_id=data.get("bailian_app_id"),
         status=_normalize_status(data.get("status", "draft")),
+        is_official=data.get("is_official", False),
+        representative_id=data.get("representative_id"),
     )
     db.add(specialist)
     db.commit()
@@ -449,6 +515,8 @@ async def update_specialist(
             # status 有枚举语义，显式 null 同样按非法值处理。
             if field == "status":
                 raise ParamError("status 不能为 null")
+            if field == "is_official":
+                raise ParamError("is_official 不能为 null")
             setattr(specialist, field, None)
             continue
         value = _normalize_status(value) if field == "status" else value
