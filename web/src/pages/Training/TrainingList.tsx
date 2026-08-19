@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Form, Input, Modal, Radio, Select, Tabs, Tag } from 'antd';
+import { App, Button, Form, Input, Modal, Radio, Select, Tabs, Tag, Typography } from 'antd';
 import { ProTable } from '@ant-design/pro-components';
 import type { ProColumns } from '@ant-design/pro-components';
 import { trainingAPI } from '../../services/training';
@@ -167,6 +167,9 @@ export default function TrainingList() {
               </Form>
               {aiQuestions.map((q, i) => (
                 <div key={i} style={{ marginTop: 8, padding: 8, background: '#fafafa', borderRadius: 4 }}>
+                  <Typography.Text type="warning" style={{ display: 'block', marginBottom: 4 }}>
+                    AI 生成，请人工复核后入库
+                  </Typography.Text>
                   <div>{q.content}</div>
                   <div style={{ color: '#888', fontSize: 12 }}>选项：{q.options?.join(' / ')}　答案：{q.answer?.join(',')}</div>
                   <Button size="small" onClick={async () => {
