@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Col, Row, Statistic, Table, Tag, Typography } from 'antd';
+import { Button, Card, Col, Input, Modal, Row, Statistic, Table, Tag, Typography } from 'antd';
 import { App } from 'antd';
 import { monitorAPI } from '../../services/monitor';
 import type { ComplianceDailySummary, ComplianceTrends, ReviewQueueItem } from '../../types';
@@ -21,11 +21,25 @@ export default function Monitor() {
 
   const maxDay = Math.max(1, ...(trends?.time_series ?? []).map(t => t.count));
 
+  const handleFreeze = (r: ReviewQueueItem) => {
+    let reason = '';
+    Modal.confirm({
+      title: `冻结分身「${r.name}」`,
+      content: <Input.TextArea rows={3} placeholder="冻结理由（必填）" onChange={e => (reason = e.target.value)} />,
+      onOk: async () => {
+        if (!reason.trim()) { message.warning('请填写冻结理由'); return Promise.reject(); }
+        await monitorAPI.freeze(r.specialist_id, reason.trim());
+        message.success('已冻结');
+        setRefresh(x => x + 1);
+      },
+    });
+  };
+
   return (
     <div>
       <Row gutter={16}>
         <Col span={6}><Card><Statistic title="近 7 天拦截总量" value={summary?.total ?? 0} /></Card></Col>
-        <Col span={6}><Card><Statistic title="待复核代表数" value={queue.length} /></Card></Col>
+        <Col span={6}><Card><Statistic title="待复核分身数" value={queue.length} /></Card></Col>
         <Col span={12}><Card title="违规趋势（近 30 天）" extra={<Button size="small" onClick={() => setRefresh(r => r + 1)}>刷新</Button>}>
           {(trends?.time_series ?? []).map(t => (
             <div key={t.date} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -41,14 +55,14 @@ export default function Monitor() {
 
       <Card title="待复核冻结流（24h 拦截 ≥5 次，人工确认后冻结）" style={{ marginTop: 16 }}>
         <Table<ReviewQueueItem>
-          rowKey="user_id"
+          rowKey="specialist_id"
           dataSource={queue}
           pagination={false}
           columns={[
-            { title: '代表', dataIndex: 'rep_name' },
-            { title: '手机号', dataIndex: 'rep_phone' },
+            { title: '分身名', dataIndex: 'name' },
+            { title: '代表', dataIndex: 'rep_name', render: v => (v ?? <Tag>官方</Tag>) },
             { title: '近 24h 拦截', dataIndex: 'block_count', render: v => <Tag color="red">{v} 次</Tag> },
-            { title: '操作', render: (_, r) => <Button size="small" type="primary" danger onClick={() => message.info(`人工冻结流程：请到「分身监控」页对 ${r.rep_name} 的分身执行冻结（跳转见侧栏）`)}>待复核</Button> },
+            { title: '操作', render: (_, r) => <Button size="small" type="primary" danger onClick={() => handleFreeze(r)}>冻结</Button> },
           ]}
         />
       </Card>

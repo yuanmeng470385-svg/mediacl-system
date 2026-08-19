@@ -337,9 +337,9 @@ export interface ComplianceTrends {
 }
 
 export interface ReviewQueueItem {
-  user_id: number;
-  rep_name: string;
-  rep_phone: string;
+  specialist_id: number;
+  name: string;
+  rep_name: string | null;
   block_count: number;
   window_hours: number;
   threshold: number;

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ProTable } from '@ant-design/pro-components';
+import { ProTable, ModalForm, ProFormText } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { App, Button, Input, Modal, Space, Tag } from 'antd';
 import { monitorAPI } from '../../services/monitor';
@@ -20,7 +20,7 @@ const HEALTH_TEXT: Record<string, { color: string; text: string }> = {
 export default function MonitorList() {
   const actionRef = useRef<ActionType>();
   const { message } = App.useApp();
-  const [refresh, setRefresh] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const columns: ProColumns<SpecialistMonitor>[] = [
     { title: '名称', dataIndex: 'name' },
@@ -60,24 +60,56 @@ export default function MonitorList() {
     },
   ];
 
+  const handleCreateFinish = async (values: Record<string, unknown>) => {
+    try {
+      await monitorAPI.createOfficial({
+        name: String(values.name),
+        product_id: Number(values.product_id),
+      });
+      message.success('官方分身已创建');
+      setCreateOpen(false);
+      actionRef.current?.reload();
+      return true;
+    } catch {
+      return false; // 失败 toast 由全局拦截器统一弹
+    }
+  };
+
   return (
-    <ProTable<SpecialistMonitor>
-      headerTitle="分身监控与官方分身管理"
-      actionRef={actionRef}
-      rowKey="id"
-      search={{ labelWidth: 80 }}
-      params={{ t: refresh }}
-      columns={columns}
-      request={async (params) => {
-        const res = await monitorAPI.specialistMonitor({
-          page: params.current || 1, page_size: params.pageSize || 10,
-          status: params.status, official: params.official,
-        });
-        return { data: res.data.data.items, total: res.data.data.total, success: true };
-      }}
-      toolBarRender={() => [
-        <Button type="primary" key="new" onClick={() => setRefresh(r => r + 1)}>新建官方分身</Button>,
-      ]}
-    />
+    <>
+      <ProTable<SpecialistMonitor>
+        headerTitle="分身监控与官方分身管理"
+        actionRef={actionRef}
+        rowKey="id"
+        search={{ labelWidth: 80 }}
+        columns={columns}
+        request={async (params) => {
+          const res = await monitorAPI.specialistMonitor({
+            page: params.current || 1, page_size: params.pageSize || 10,
+            status: params.status, official: params.official,
+          });
+          return { data: res.data.data.items, total: res.data.data.total, success: true };
+        }}
+        toolBarRender={() => [
+          <Button type="primary" key="new" onClick={() => setCreateOpen(true)}>新建官方分身</Button>,
+        ]}
+      />
+      <ModalForm
+        title="新建官方分身"
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onFinish={handleCreateFinish}
+        modalProps={{ destroyOnHidden: true }}
+      >
+        <ProFormText name="name" label="分身名称" rules={[{ required: true, message: '请输入分身名称' }]} />
+        <ProFormText
+          name="product_id"
+          label="关联产品 ID"
+          rules={[{ required: true, message: '请输入产品 ID' }]}
+          placeholder="对应产品表的数字 ID"
+          fieldProps={{ type: 'number' }}
+        />
+      </ModalForm>
+    </>
   );
 }
