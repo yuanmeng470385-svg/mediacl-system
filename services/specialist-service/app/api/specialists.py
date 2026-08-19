@@ -115,6 +115,142 @@ async def get_live_status(
     return success({"items": items, "summary": summary})
 
 
+# ==================== 分身监控统计（web 分身监控页） ====================
+
+@router.get("/monitor")
+async def monitor_specialists(
+    page: int = 1,
+    page_size: int = 20,
+    status: str = None,
+    official: bool = None,
+    current_user: dict = Depends(require_roles("admin", "manager", "compliance", "medical")),
+    db: Session = Depends(get_db),
+):
+    """分身监控列表（分页，含统计字段）。
+
+    在 Specialist.to_dict() 基础上附加（分批聚合，避免 N+1）：
+    - today_services: 今日对话数（role='user'，created_at >= 今日 0 点）
+    - avg_latency_ms: assistant 行 latency_ms 非空的平均值（无则 None）
+    - service_doctors: doctor_twin_subscriptions 中 status='subscribed' 的 distinct doctor_id 数
+    - added_count: doctor_twin_subscriptions 中该分身的行数
+    - compliance_health: 近 30 天 assistant 对话中 compliance_result.blocked=true 占比
+      （<5% → green，5-15% → yellow，>15% → red；无对话按 green）
+    - approval_rate: conversation_feedback 中 rating=1 占比（0-1 float，无反馈 None）
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import func, case
+    from app.models.conversation import Conversation
+    from app.models.feedback import ConversationFeedback
+    from shared.models.doctor import DoctorTwinSubscription
+
+    p = PaginationParams(page=page, page_size=page_size)
+    q = db.query(Specialist)
+    if status:
+        q = q.filter(Specialist.status == status)
+    if official is not None:
+        q = q.filter(Specialist.is_official == official)
+    total = q.count()
+    specialists = q.order_by(Specialist.id.asc()).offset(p.offset).limit(p.limit).all()
+    ids = [s.id for s in specialists]
+
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    thirty_days_ago = now - timedelta(days=30)
+
+    stats = {sid: {} for sid in ids}
+
+    if ids:
+        # today_services
+        rows = db.query(
+            Conversation.specialist_id, func.count(Conversation.id),
+        ).filter(
+            Conversation.specialist_id.in_(ids),
+            Conversation.role == "user",
+            Conversation.created_at >= today_start,
+        ).group_by(Conversation.specialist_id).all()
+        for sid, cnt in rows:
+            stats[sid]["today_services"] = cnt or 0
+
+        # avg_latency_ms
+        rows = db.query(
+            Conversation.specialist_id, func.avg(Conversation.latency_ms),
+        ).filter(
+            Conversation.specialist_id.in_(ids),
+            Conversation.role == "assistant",
+            Conversation.latency_ms.isnot(None),
+        ).group_by(Conversation.specialist_id).all()
+        for sid, avg in rows:
+            stats[sid]["avg_latency_ms"] = int(round(avg)) if avg is not None else None
+
+        # service_doctors
+        rows = db.query(
+            DoctorTwinSubscription.twin_id,
+            func.count(func.distinct(DoctorTwinSubscription.doctor_id)),
+        ).filter(
+            DoctorTwinSubscription.twin_id.in_(ids),
+            DoctorTwinSubscription.status == "subscribed",
+        ).group_by(DoctorTwinSubscription.twin_id).all()
+        for sid, cnt in rows:
+            stats[sid]["service_doctors"] = cnt or 0
+
+        # added_count
+        rows = db.query(
+            DoctorTwinSubscription.twin_id, func.count(DoctorTwinSubscription.id),
+        ).filter(
+            DoctorTwinSubscription.twin_id.in_(ids),
+        ).group_by(DoctorTwinSubscription.twin_id).all()
+        for sid, cnt in rows:
+            stats[sid]["added_count"] = cnt or 0
+
+        # compliance_health（compliance_result 是 JSONB，跨方言用 Python 端解析）
+        rows = db.query(
+            Conversation.specialist_id, Conversation.compliance_result,
+        ).filter(
+            Conversation.specialist_id.in_(ids),
+            Conversation.role == "assistant",
+            Conversation.created_at >= thirty_days_ago,
+        ).all()
+        health_agg = {sid: {"blocked": 0, "total": 0} for sid in ids}
+        for sid, cr in rows:
+            health_agg[sid]["total"] += 1
+            if isinstance(cr, dict) and cr.get("blocked"):
+                health_agg[sid]["blocked"] += 1
+        for sid, agg in health_agg.items():
+            if agg["total"] == 0:
+                stats[sid]["compliance_health"] = "green"
+            else:
+                ratio = agg["blocked"] / agg["total"]
+                stats[sid]["compliance_health"] = (
+                    "red" if ratio > 0.15 else ("yellow" if ratio >= 0.05 else "green")
+                )
+
+        # approval_rate
+        positive_expr = func.sum(case((ConversationFeedback.rating == 1, 1), else_=0))
+        rows = db.query(
+            ConversationFeedback.specialist_id,
+            func.count(ConversationFeedback.id),
+            positive_expr,
+        ).filter(
+            ConversationFeedback.specialist_id.in_(ids),
+        ).group_by(ConversationFeedback.specialist_id).all()
+        for sid, cnt, positive in rows:
+            stats[sid]["approval_rate"] = round((positive or 0) / cnt, 4) if cnt else None
+
+    items = []
+    for s in specialists:
+        d = s.to_dict()
+        st = stats.get(s.id, {})
+        d["today_services"] = st.get("today_services", 0)
+        d["avg_latency_ms"] = st.get("avg_latency_ms")
+        d["service_doctors"] = st.get("service_doctors", 0)
+        d["added_count"] = st.get("added_count", 0)
+        d["compliance_health"] = st.get("compliance_health", "green")
+        d["approval_rate"] = st.get("approval_rate")
+        items.append(d)
+
+    return success(paginate(items, total=total, page=p.page, page_size=p.page_size))
+
+
 @router.get("/{specialist_id}")
 async def get_specialist(
     specialist_id: int,

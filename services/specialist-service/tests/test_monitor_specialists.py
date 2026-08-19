@@ -144,3 +144,49 @@ def test_create_specialist_with_representative():
     body = resp.json()
     assert body["code"] == 0
     assert body["data"]["representative_id"] == 1
+
+
+def test_monitor_requires_admin():
+    _add_specialist(id=1)
+    resp = client.get("/api/v1/specialists/monitor", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_monitor_returns_stats(fresh_state):
+    _add_specialist(id=1)
+    now = datetime.utcnow()
+    db = TestSession()
+    db.add_all([
+        Conversation(id=1, specialist_id=1, user_id=1, role="user", content="问题",
+                     created_at=now),
+        Conversation(id=2, specialist_id=1, user_id=1, role="assistant", content="回答",
+                     latency_ms=500, created_at=now),
+        Conversation(id=3, specialist_id=1, user_id=1, role="assistant", content="被拦截",
+                     compliance_result={"blocked": True}, created_at=now),
+        DoctorTwinSubscription(id=1, doctor_id=1, twin_id=1, status="subscribed",
+                               consent_version="1.0", consent_at=now),
+    ])
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/specialists/monitor", headers=_token(2, "admin"))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    item = data["items"][0]
+    assert item["today_services"] == 1
+    assert item["avg_latency_ms"] == 500
+    assert item["service_doctors"] == 1
+    assert item["added_count"] == 1
+    assert "approval_rate" in item
+
+
+def test_monitor_filters_official(fresh_state):
+    _add_specialist(id=1, name="官方专员", is_official=True)
+    _add_specialist(id=2, name="普通专员", is_official=False)
+    resp = client.get("/api/v1/specialists/monitor", params={"official": True},
+                      headers=_token(2, "admin"))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["name"] == "官方专员"
+    assert data["items"][0]["is_official"] is True
