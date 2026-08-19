@@ -12,6 +12,7 @@ from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
 from shared.models.academic import AcademicCard, CardPushRecord, Notification
 
+from app.models.feedback import ConversationFeedback
 from app.services.audit_client import write_audit_log
 
 logger = logging.getLogger(__name__)
@@ -85,9 +86,22 @@ async def submit_feedback(
     rec = db.query(CardPushRecord).filter(CardPushRecord.id == push_id).first()
     if not rec or rec.doctor_id != current_user["id"]:
         raise BusinessError("推送记录不存在", code=4001)
+    was_useful = rec.feedback == "useful"
     rec.feedback = feedback
     if feedback in ("useful", "useless"):
         rec.read_status = "favorited" if feedback == "useful" else "read"
+    # 有用反馈：累加该分身好评计数，同步至管理后台统计（spec 6.3）
+    # monitor 的 approval_rate 按 conversation_feedback.rating==1 聚合，此处写一条
+    # 卡片好评记录（rating=1，comment='学术卡片有用'），无需改 monitor。同一 push 仅
+    # 首次 useful 写入，重复 useful 不重复累加。
+    if feedback == "useful" and rec.specialist_id and not was_useful:
+        db.add(ConversationFeedback(
+            conversation_id=None,
+            user_id=rec.doctor_id,
+            specialist_id=rec.specialist_id,
+            rating=1,
+            comment="学术卡片有用",
+        ))
     db.commit()
     db.refresh(rec)
     # 通知回流代表

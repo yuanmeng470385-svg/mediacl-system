@@ -31,6 +31,8 @@ from shared.models.doctor import DoctorTwinSubscription
 
 import app.api.academic_cards as ac_api
 from app.main import app
+from app.models.conversation import Conversation
+from app.models.feedback import ConversationFeedback
 
 
 @compiles(BigInteger, "sqlite")
@@ -66,7 +68,8 @@ def _token(user_id: int, role: str) -> dict:
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
     tables = [User.__table__, Specialist.__table__, Product.__table__, AcademicCard.__table__,
-              CardPushRecord.__table__, Notification.__table__, DoctorTwinSubscription.__table__]
+              CardPushRecord.__table__, Notification.__table__, DoctorTwinSubscription.__table__,
+              Conversation.__table__, ConversationFeedback.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -106,6 +109,7 @@ def test_push_creates_records(fresh_state):
     rec = db.query(CardPushRecord).filter_by(card_id=1, doctor_id=2).first()
     assert rec is not None
     assert rec.read_status == "unread"
+    assert rec.specialist_id == 1
     db.close()
 
 
@@ -158,7 +162,8 @@ def test_track_read(fresh_state):
 
 def test_feedback_useful_notifies_rep(fresh_state):
     db = TestSession()
-    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2, read_status="read"))
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2,
+                          specialist_id=1, read_status="read"))
     db.commit()
     db.close()
 
@@ -171,6 +176,29 @@ def test_feedback_useful_notifies_rep(fresh_state):
     db = TestSession()
     n = db.query(Notification).filter_by(user_id=1, type="card_feedback").first()
     assert n is not None
+    # 有用反馈：累加分身好评计数（写 conversation_feedback rating=1，同步管理后台统计）
+    fb = db.query(ConversationFeedback).filter_by(specialist_id=1, rating=1).first()
+    assert fb is not None
+    assert fb.user_id == 2
+    assert fb.comment == "学术卡片有用"
+    db.close()
+
+
+def test_feedback_useful_duplicate_not_duplicated(fresh_state):
+    db = TestSession()
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2,
+                          specialist_id=1, read_status="read"))
+    db.commit()
+    db.close()
+
+    for _ in range(2):
+        resp = client.post("/api/v1/card-pushes/1/feedback", json={"feedback": "useful"},
+                           headers=_token(2, "doctor"))
+        assert resp.json()["code"] == 0
+
+    db = TestSession()
+    rows = db.query(ConversationFeedback).filter_by(specialist_id=1, rating=1).all()
+    assert len(rows) == 1
     db.close()
 
 

@@ -252,6 +252,7 @@ async def push_card(
             representative_id=current_user["id"],
             card_id=card_id,
             doctor_id=doctor_id,
+            specialist_id=sub.twin_id,
             read_status="unread",
         ))
         db.add(Notification(
