@@ -280,6 +280,8 @@ async def submit_exam(
     q_ids = [a.get("question_id") for a in answers if isinstance(a, dict)]
     if not q_ids:
         raise ParamError("answers 缺少 question_id")
+    if len(q_ids) != len(set(q_ids)):
+        raise ParamError("存在重复作答的题目")
     rows = db.query(ExamQuestion).filter(ExamQuestion.id.in_(q_ids)).all()
     by_id = {q.id: q for q in rows}
     if len(rows) != len(set(q_ids)):

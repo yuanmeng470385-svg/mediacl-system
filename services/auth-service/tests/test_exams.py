@@ -307,6 +307,16 @@ def test_submit_unknown_question_rejected():
     assert resp.json()["code"] == 4001
 
 
+def test_submit_rejects_duplicate_question():
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+        {"question_id": 1, "selected": [0]},
+    ]}, headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
 def test_records_me_and_admin_list():
     db = TestSession()
     db.add(ExamRecord(id=1, representative_id=1, question_count=2, correct_count=2, score=100, passed=True))
