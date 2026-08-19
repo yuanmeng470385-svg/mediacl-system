@@ -148,7 +148,11 @@ export default function TrainingList() {
             />
             <Modal title="AI 出题" open={questionModal} onCancel={() => setQuestionModal(false)} footer={null} destroyOnHidden>
               <Form form={questionForm} layout="vertical" onFinish={async (values) => {
-                const res = await trainingAPI.aiGenerate(values);
+                const res = await trainingAPI.aiGenerate({
+                  material_id: values.material_id,
+                  question_type: values.question_type,
+                  count: values.count != null ? Number(values.count) : 5,
+                });
                 setAiQuestions(res.data.data);
                 message.success(`生成 ${res.data.data.length} 道草稿`);
               }}>
