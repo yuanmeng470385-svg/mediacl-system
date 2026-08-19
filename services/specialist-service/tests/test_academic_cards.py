@@ -139,3 +139,27 @@ def test_list_my_cards():
     assert body["code"] == 0
     assert body["data"]["total"] == 1
     assert body["data"]["items"][0]["title"] == "卡1"
+
+
+def test_stats_requires_admin():
+    resp = client.get("/api/v1/academic-cards/stats", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_stats_aggregates(fresh_state):
+    db = TestSession()
+    db.add(AcademicCard(id=1, representative_id=1, title="卡1", content={"conclusion": "x"}, is_ai_generated=True))
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2, read_status="read", tracked_seconds=10))
+    db.add(CardPushRecord(id=2, representative_id=1, card_id=1, doctor_id=3, read_status="unread"))
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/academic-cards/stats", headers=_token(3, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["total_pushes"] == 2
+    assert data["total_reads"] == 1
+    assert data["read_rate"] == 0.5
+    assert data["rep_ranking"][0]["representative_id"] == 1
+    assert data["rep_ranking"][0]["reads"] == 1

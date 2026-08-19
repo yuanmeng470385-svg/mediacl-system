@@ -164,6 +164,45 @@ async def list_my_cards(
     return success(paginate([c.to_dict() for c in rows], total, p.page, p.page_size))
 
 
+@router.get("/stats")
+async def card_stats(
+    days: int = 30,
+    _admin: dict = Depends(require_roles("admin", "manager", "compliance", "medical")),
+    db: Session = Depends(get_db),
+):
+    """学术内容触达统计（需求 3.7(1)）：点击人次/点击率/代表排名"""
+    from datetime import datetime, timedelta
+    from sqlalchemy import case, func as sqlfunc
+
+    since = datetime.utcnow() - timedelta(days=days)
+    q = db.query(CardPushRecord).filter(CardPushRecord.created_at >= since)
+    total_pushes = q.count()
+    total_reads = q.filter(CardPushRecord.read_status != "unread").count()
+    read_rate = round(total_reads / total_pushes, 4) if total_pushes else 0.0
+
+    rep_rows = (
+        db.query(
+            CardPushRecord.representative_id,
+            sqlfunc.count(CardPushRecord.id),
+            sqlfunc.sum(case((CardPushRecord.read_status != "unread", 1), else_=0)),
+        )
+        .filter(CardPushRecord.created_at >= since)
+        .group_by(CardPushRecord.representative_id)
+        .order_by(sqlfunc.count(CardPushRecord.id).desc())
+        .limit(10)
+        .all()
+    )
+    return success({
+        "days": days,
+        "total_pushes": total_pushes,
+        "total_reads": total_reads,
+        "read_rate": read_rate,
+        "rep_ranking": [{
+            "representative_id": rid, "pushes": p, "reads": r or 0,
+        } for rid, p, r in rep_rows],
+    })
+
+
 @router.post("/{card_id}/push")
 async def push_card(
     card_id: int,

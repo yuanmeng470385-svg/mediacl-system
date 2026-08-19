@@ -27,6 +27,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from shared.models.base import Base
+from shared.models.academic import Notification
 from shared.models.digital_specialist import Specialist
 from shared.models.doctor import ShareLink
 from shared.models.nightly_briefing import NightlyBriefing
@@ -68,6 +69,7 @@ TABLES = [
     ShareLink.__table__,
     NightlyBriefing.__table__,
     Conversation.__table__,
+    Notification.__table__,
 ]
 
 TARGET = date(2026, 8, 18)

@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.common.db_session import SessionLocal
+from shared.models.academic import Notification
 from shared.models.doctor import ShareLink
 from shared.models.digital_specialist import Specialist
 from shared.models.nightly_briefing import NightlyBriefing
@@ -177,6 +178,13 @@ def generate_for_date(db: Session, target_date: date) -> dict:
                     row.status = "ready"
             generated += 1
             generated_rows.append(row)
+            db.add(Notification(
+                user_id=rep_id,
+                type="briefing_ready",
+                title="你的夜间简报已生成",
+                content="查看医生提问汇总与需跟进事项",
+                link="/briefings",
+            ))
 
     generated_links = [
         {
