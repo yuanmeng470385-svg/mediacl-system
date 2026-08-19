@@ -69,11 +69,14 @@ CREATE TABLE IF NOT EXISTS digital_specialists (
     bailian_app_id VARCHAR(100),
     prompt_version VARCHAR(20),
     status VARCHAR(20) DEFAULT 'draft',     -- draft / intern / active / disabled
+    is_official BOOLEAN NOT NULL DEFAULT FALSE,
+    representative_id BIGINT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_specialists_product ON digital_specialists(product_id);
 CREATE INDEX IF NOT EXISTS idx_specialists_status ON digital_specialists(status);
+CREATE INDEX IF NOT EXISTS idx_ds_official ON digital_specialists(is_official);
 
 -- 4. 医生档案表 (HCP = Health Care Professional)
 CREATE TABLE IF NOT EXISTS hcps (

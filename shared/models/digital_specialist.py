@@ -4,7 +4,7 @@ specialist-service 与 visit-service 共用：visit_records.specialist_id 外键
 digital_specialists 表，visit-service 侧必须注册本模型才能解析 FK 元数据。
 """
 
-from sqlalchemy import Column, String, BigInteger, ForeignKey
+from sqlalchemy import Column, String, BigInteger, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from shared.models.base import Base, TimestampMixin
 
@@ -20,6 +20,8 @@ class Specialist(Base, TimestampMixin):
     bailian_app_id = Column(String(100))
     prompt_version = Column(String(20))
     status = Column(String(20), default="draft")
+    is_official = Column(Boolean, nullable=False, default=False)
+    representative_id = Column(BigInteger, ForeignKey("users.id"))
 
     def to_dict(self):
         return {
@@ -32,5 +34,7 @@ class Specialist(Base, TimestampMixin):
             "compliance_level": self.compliance_level,
             "bailian_app_id": self.bailian_app_id,
             "status": self.status,
+            "is_official": self.is_official,
+            "representative_id": self.representative_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
