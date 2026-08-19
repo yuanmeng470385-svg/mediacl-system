@@ -5,6 +5,7 @@ from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Intege
 from sqlalchemy.dialects.postgresql import JSONB
 
 from shared.models.base import Base, TimestampMixin
+import shared.models.digital_specialist  # noqa: F401 注册 FK 元数据（card_push_records.specialist_id）
 
 
 class AcademicCard(Base, TimestampMixin):
@@ -37,6 +38,7 @@ class CardPushRecord(Base, TimestampMixin):
     representative_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
     card_id = Column(BigInteger, ForeignKey("academic_cards.id"), nullable=False)
     doctor_id = Column(BigInteger, ForeignKey("users.id"), nullable=False)
+    specialist_id = Column(BigInteger, ForeignKey("digital_specialists.id"))
     read_status = Column(String(20), default="unread")
     read_at = Column(DateTime)
     tracked_seconds = Column(Integer, default=0)
@@ -48,6 +50,7 @@ class CardPushRecord(Base, TimestampMixin):
             "representative_id": self.representative_id,
             "card_id": self.card_id,
             "doctor_id": self.doctor_id,
+            "specialist_id": self.specialist_id,
             "read_status": self.read_status,
             "read_at": self.read_at.isoformat() if self.read_at else None,
             "tracked_seconds": self.tracked_seconds,

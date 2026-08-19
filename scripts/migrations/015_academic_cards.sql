@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS card_push_records (
     representative_id BIGINT NOT NULL REFERENCES users(id),
     card_id BIGINT NOT NULL REFERENCES academic_cards(id),
     doctor_id BIGINT NOT NULL REFERENCES users(id),
+    specialist_id BIGINT REFERENCES digital_specialists(id),  -- 该医生订阅的代表分身（推送时记录）
     read_status VARCHAR(20) NOT NULL DEFAULT 'unread',  -- unread/read/favorited/forwarded
     read_at TIMESTAMP,
     tracked_seconds INTEGER NOT NULL DEFAULT 0,
