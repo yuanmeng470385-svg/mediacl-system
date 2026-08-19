@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS exam_records (
     score INTEGER NOT NULL,
     passed BOOLEAN NOT NULL,
     submitted_at TIMESTAMP DEFAULT NOW(),
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_er_rep ON exam_records(representative_id);
