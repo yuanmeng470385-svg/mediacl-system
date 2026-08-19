@@ -118,7 +118,10 @@ async def create_card(
         logger.warning(f"卡片合规预检失败: {exc}")
         raise BusinessError("合规检查失败，请稍后重试", code=6001)
     if comp.get("blocked"):
-        raise ParamError(f"内容未通过合规检查：{comp.get('rule_code', 'R999')}")
+        violations = comp.get("violations") or []
+        first = violations[0] if violations else {}
+        rule_code = first.get("rule_code") or "R999"
+        raise ParamError(f"内容未通过合规检查：{rule_code}")
 
     card = AcademicCard(
         representative_id=current_user["id"],

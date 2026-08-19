@@ -115,13 +115,16 @@ def test_create_card_blocked_fails_closed(fresh_state, monkeypatch):
         "citations": [],
     }
     monkeypatch.setattr(ac_api, "_generate_card_content", AsyncMock(return_value=fake_card))
-    monkeypatch.setattr(ac_api, "check_compliance", AsyncMock(return_value={"blocked": True, "rule_code": "R001"}))
+    monkeypatch.setattr(ac_api, "check_compliance", AsyncMock(return_value={
+        "blocked": True, "violations": [{"rule_code": "R001", "rule_name": "保证疗效"}],
+    }))
 
     resp = client.post("/api/v1/academic-cards", json={"title": "违规卡", "topic": "疗效"},
                        headers=_token(1, "rep"))
     assert resp.status_code == 400
     assert resp.json()["code"] == 1000
     assert "合规" in resp.json()["message"]
+    assert "R001" in resp.json()["message"]
 
 
 def test_list_my_cards():
