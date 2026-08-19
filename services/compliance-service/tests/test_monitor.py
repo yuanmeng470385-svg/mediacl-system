@@ -102,12 +102,15 @@ def test_daily_summary_aggregates():
     _add_block(id=1, rule_code="R001")
     _add_block(id=2, rule_code="R001")
     _add_block(id=3, rule_code="R009")
+    # warn 只记录在案不拦截 —— 不计入拦截总量/规则聚合
+    _add_block(id=4, rule_code="R005", action="warn")
     resp = client.get("/api/v1/compliance/daily-summary", headers=_token(3, "compliance"))
     body = resp.json()
     assert body["code"] == 0
     by_rule = {r["rule_code"]: r["count"] for r in body["data"]["by_rule"]}
     assert by_rule["R001"] == 2
     assert by_rule["R009"] == 1
+    assert "R005" not in by_rule
     assert body["data"]["total"] == 3
 
 

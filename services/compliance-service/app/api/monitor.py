@@ -34,9 +34,16 @@ async def daily_summary(
     _admin: dict = Depends(require_roles(*MONITOR_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """拦截聚合日报：按天 × 按规则 × 按 action 聚合（风控看板数据源）"""
+    """拦截聚合日报：按天 × 按规则 × 按 action 聚合（风控看板数据源）。
+
+    拦截口径 = action='reject'；warn/log 不在拦截计数内。
+    """
     since = datetime.utcnow() - timedelta(days=days)
-    base = db.query(ComplianceBlock).filter(ComplianceBlock.blocked_at >= since)
+    base = (
+        db.query(ComplianceBlock)
+        .filter(ComplianceBlock.blocked_at >= since)
+        .filter(ComplianceBlock.action == "reject")
+    )
 
     by_rule_rows = (
         base.with_entities(
@@ -68,7 +75,10 @@ async def compliance_trends(
     _admin: dict = Depends(require_roles(*MONITOR_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """违规趋势分析（需求 3.2(4)）：时间曲线 + 代表排名 + 敏感词（规则）频率"""
+    """违规趋势分析（需求 3.2(4)）：时间曲线 + 代表排名 + 敏感词（规则）频率。
+
+    拦截口径 = action='reject'；warn/log 不在拦截计数内。
+    """
     since = datetime.utcnow() - timedelta(days=days)
 
     time_rows = (
@@ -77,6 +87,7 @@ async def compliance_trends(
             sqlfunc.count(ComplianceBlock.id),
         )
         .filter(ComplianceBlock.blocked_at >= since)
+        .filter(ComplianceBlock.action == "reject")
         .group_by(sqlfunc.date(ComplianceBlock.blocked_at))
         .all()
     )
@@ -87,6 +98,7 @@ async def compliance_trends(
         )
         .outerjoin(User, ComplianceBlock.user_id == User.id)
         .filter(ComplianceBlock.blocked_at >= since)
+        .filter(ComplianceBlock.action == "reject")
         .group_by(User.id, User.full_name)
         .order_by(sqlfunc.count(ComplianceBlock.id).desc())
         .limit(10)
@@ -98,6 +110,7 @@ async def compliance_trends(
             sqlfunc.count(ComplianceBlock.id),
         )
         .filter(ComplianceBlock.blocked_at >= since)
+        .filter(ComplianceBlock.action == "reject")
         .group_by(ComplianceBlock.rule_code, ComplianceBlock.rule_name)
         .order_by(sqlfunc.count(ComplianceBlock.id).desc())
         .all()
