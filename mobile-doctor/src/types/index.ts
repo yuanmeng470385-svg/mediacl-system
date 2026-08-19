@@ -315,6 +315,54 @@ export interface ContentItem {
   tags?: string[];
 }
 
+// ========== 学术触达（二期 G） ==========
+
+/** 学术卡片引用来源 —— 后端 academic_cards.content.citations 元素 */
+export interface AcademicCitation {
+  doc_name?: string;
+  version?: string;
+  section?: string;
+  file_url?: string;
+}
+
+/** 学术卡片正文 —— AcademicCard.content（JSONB） */
+export interface AcademicCardContent {
+  conclusion: string;
+  key_points: string[];
+  summary: string;
+  citations: AcademicCitation[];
+}
+
+/** 学术卡片 —— 后端 AcademicCard.to_dict 同形状 */
+export interface AcademicCard {
+  id: number;
+  representative_id: number;
+  title: string;
+  content: AcademicCardContent;
+  is_ai_generated: boolean;
+  compliance_status: string;
+  status: string;
+  created_at?: string;
+}
+
+/** 推送记录阅读状态（后端 card_pushes.VALID_STATUS） */
+export type CardReadStatus = 'unread' | 'read' | 'favorited' | 'forwarded';
+
+/** 卡片推送记录 —— 后端 CardPushRecord.to_dict + inbox 额外 join 的 card */
+export interface CardPushRecord {
+  id: number;
+  representative_id: number;
+  card_id: number;
+  doctor_id: number;
+  read_status: CardReadStatus;
+  read_at?: string | null;
+  tracked_seconds: number;
+  feedback?: string | null;
+  created_at?: string;
+  /** 收件箱接口额外携带的卡片对象（卡片被删时可能为 null） */
+  card?: AcademicCard | null;
+}
+
 // ========== 医生端（一期 B） ==========
 
 /** 执业资质 —— 后端 DoctorCertification.to_dict 同形状（auth-service doctors.py） */

@@ -24,4 +24,8 @@ export type RootStackParamList = {
   TwinChat: { twinId: number; twinName: string };
   // 资质上传
   CertUpload: undefined;
+  // 学术卡片收件箱
+  Inbox: undefined;
+  // 学术卡片详情（按推送记录 id 上报阅读/反馈）
+  CardDetail: { pushId: number };
 };

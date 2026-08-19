@@ -104,6 +104,22 @@ export default function ProfileScreen() {
           ))}
         </View>
 
+        {/* 学术卡片入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Inbox')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={FeatureIcons.content} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>学术卡片</Text>
+            <Text style={styles.desc}>查看医药代表推送的学术内容</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
         {/* 医师资格认证入口 */}
         <TouchableOpacity
           style={[styles.card, Shadow.card, styles.entryRow]}

@@ -20,6 +20,8 @@ import ProfileScreen from '../screens/Profile/ProfileScreen';
 import TwinActivateScreen from '../screens/TwinActivate/TwinActivateScreen';
 import TwinChatScreen from '../screens/TwinChat/TwinChatScreen';
 import CertUploadScreen from '../screens/CertUpload/CertUploadScreen';
+import InboxScreen from '../screens/Inbox/InboxScreen';
+import CardDetailScreen from '../screens/Inbox/CardDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -164,6 +166,16 @@ export default function AppNavigator() {
             <Stack.Screen
               name="CertUpload"
               component={CertUploadScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="Inbox"
+              component={InboxScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="CardDetail"
+              component={CardDetailScreen}
               options={{ animation: 'slide_from_right' }}
             />
           </>
