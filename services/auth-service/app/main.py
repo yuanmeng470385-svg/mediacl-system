@@ -92,6 +92,9 @@ app.include_router(training_materials_router)
 from app.api.exams import router as exams_router
 app.include_router(exams_router)
 
+from app.api.commitment import router as commitment_router
+app.include_router(commitment_router)
+
 
 @app.get("/health")
 async def health():
