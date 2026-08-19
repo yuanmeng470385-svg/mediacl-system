@@ -282,3 +282,40 @@ export interface ServiceHealth {
   name: string;
   status: 'up' | 'down';
 }
+
+// ========== 合规培训考试 ==========
+// 字段与 auth-service TrainingMaterial.to_dict 对齐
+export interface TrainingMaterial {
+  id: number;
+  title: string;
+  material_type: 'regulation' | 'rdpac' | 'internal';
+  content: string;
+  version: string;
+  status: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// 字段与 auth-service ExamQuestion.to_dict 对齐（列表默认不返回 answer，仅 AI 草稿预览用）
+export interface ExamQuestion {
+  id: number;
+  material_id: number | null;
+  question_type: 'single' | 'multiple' | 'judge';
+  content: string;
+  options: string[];
+  answer?: number[];
+  review_status: 'pending' | 'approved' | 'rejected';
+  review_reason: string | null;
+  created_at: string | null;
+}
+
+// 字段与 auth-service ExamRecord.to_dict 对齐
+export interface ExamRecord {
+  id: number;
+  representative_id: number;
+  question_count: number;
+  correct_count: number;
+  score: number;
+  passed: boolean;
+  submitted_at: string | null;
+}
