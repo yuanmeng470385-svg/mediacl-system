@@ -12,16 +12,22 @@ import {
   FileProtectOutlined,
   IdcardOutlined,
   ReadOutlined,
+  RadarChartOutlined,
+  SearchOutlined,
+  MonitorOutlined,
 } from '@ant-design/icons';
 import type { MenuDataItem } from '@ant-design/pro-components';
 
 export const menuConfig: MenuDataItem[] = [
   { path: '/dashboard', name: '仪表盘', icon: <DashboardOutlined /> },
   { path: '/specialist/list', name: '数字专员', icon: <RobotOutlined /> },
+  { path: '/specialist/monitor', name: '分身监控', icon: <MonitorOutlined /> },
   { path: '/visit/list', name: '拜访管理', icon: <CalendarOutlined /> },
   { path: '/knowledge/list', name: '知识库', icon: <BookOutlined /> },
   { path: '/compliance/list', name: '合规规则', icon: <SafetyOutlined /> },
   { path: '/compliance/blocks', name: '拦截记录', icon: <StopOutlined /> },
+  { path: '/compliance/monitor', name: '合规风控', icon: <RadarChartOutlined /> },
+  { path: '/compliance/conv-search', name: '对话检索', icon: <SearchOutlined /> },
   { path: '/audit/list', name: '审计查询', icon: <AuditOutlined /> },
   { path: '/doctor/list', name: '医生管理', icon: <UserOutlined /> },
   { path: '/user/list', name: '用户管理', icon: <TeamOutlined /> },

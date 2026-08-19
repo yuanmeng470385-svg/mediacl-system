@@ -13,6 +13,9 @@ const VisitList = lazy(() => import('./pages/Visit/VisitList'));
 const KnowledgeList = lazy(() => import('./pages/Knowledge/KnowledgeList'));
 const ComplianceList = lazy(() => import('./pages/Compliance/ComplianceList'));
 const ComplianceBlocks = lazy(() => import('./pages/Compliance/Blocks'));
+const ComplianceMonitor = lazy(() => import('./pages/Compliance/Monitor'));
+const ConvSearch = lazy(() => import('./pages/Compliance/ConvSearch'));
+const SpecialistMonitorList = lazy(() => import('./pages/Specialist/MonitorList'));
 const AuditList = lazy(() => import('./pages/Audit/AuditList'));
 const DoctorList = lazy(() => import('./pages/Doctor/DoctorList'));
 const DoctorDetail = lazy(() => import('./pages/Doctor/DoctorDetail'));
@@ -55,11 +58,14 @@ export default function App() {
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<Dashboard />} />
                   <Route path="specialist/list" element={<SpecialistList />} />
+                  <Route path="specialist/monitor" element={<SpecialistMonitorList />} />
                   {/* /specialist/create 已删除：新增/编辑专员均在列表页 Modal 内完成（SpecialistList 内置表单） */}
                   <Route path="visit/list" element={<VisitList />} />
                   <Route path="knowledge/list" element={<KnowledgeList />} />
                   <Route path="compliance/list" element={<ComplianceList />} />
                   <Route path="compliance/blocks" element={<ComplianceBlocks />} />
+                  <Route path="compliance/monitor" element={<ComplianceMonitor />} />
+                  <Route path="compliance/conv-search" element={<ConvSearch />} />
                   <Route path="audit/list" element={<AuditList />} />
                   <Route path="doctor/list" element={<DoctorList />} />
                   <Route path="doctor/:id" element={<DoctorDetail />} />

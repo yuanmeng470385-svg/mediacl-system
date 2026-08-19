@@ -319,3 +319,56 @@ export interface ExamRecord {
   passed: boolean;
   submitted_at: string | null;
 }
+
+// ========== 合规风控看板（二期 E）==========
+// 字段与 compliance-service daily-summary / trends / review-queue 对齐
+export interface ComplianceDailySummary {
+  total: number;
+  by_rule: { rule_code: string; count: number }[];
+  by_action: { action: string; count: number }[];
+  by_day: { date: string; count: number }[];
+  days: number;
+}
+
+export interface ComplianceTrends {
+  time_series: { date: string; count: number }[];
+  rep_ranking: { user_id: number; rep_name: string; count: number }[];
+  rule_frequency: { rule_code: string; rule_name: string; count: number }[];
+}
+
+export interface ReviewQueueItem {
+  user_id: number;
+  rep_name: string;
+  rep_phone: string;
+  block_count: number;
+  window_hours: number;
+  threshold: number;
+}
+
+// 字段与 conversations-service search 对齐
+export interface ConvSearchItem {
+  id: number;
+  user_id: number;
+  specialist_id: number;
+  session_id: string;
+  role: string;
+  content: string;
+  blocked: boolean;
+  created_at: string | null;
+  context: { role: string; content: string; blocked: boolean }[];
+}
+
+// 字段与 specialist-service /specialists/monitor 对齐（avg_latency_ms 后端可能为 null）
+export interface SpecialistMonitor {
+  id: number;
+  name: string;
+  status: string;
+  is_official: boolean;
+  representative_id: number | null;
+  today_services: number;
+  avg_latency_ms: number | null;
+  service_doctors: number;
+  compliance_health: 'green' | 'yellow' | 'red';
+  added_count: number;
+  approval_rate: number | null;
+}
