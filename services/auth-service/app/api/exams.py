@@ -114,7 +114,7 @@ async def list_questions(
         query = query.filter(ExamQuestion.content.ilike(f"%{keyword}%"))
     total = query.count()
     rows = query.order_by(ExamQuestion.id.desc()).offset(p.offset).limit(p.limit).all()
-    return success(paginate([q.to_dict() for q in rows], total, p.page, p.page_size))
+    return success(paginate([q.to_dict(expose_answer=True) for q in rows], total, p.page, p.page_size))
 
 
 @router.put("/questions/{question_id}")
@@ -190,7 +190,7 @@ async def review_question(
         after_value={"review_status": q.review_status, "review_reason": q.review_reason},
         request_id=get_request_id() or None,
     )
-    return success(q.to_dict())
+    return success(q.to_dict(expose_answer=True))
 
 
 from app.services.qwen_client import QwenExamClient

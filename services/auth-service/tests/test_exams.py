@@ -137,7 +137,16 @@ def test_list_questions_filters_status():
     assert body["code"] == 0
     assert body["data"]["total"] == 1
     assert body["data"]["items"][0]["id"] == 2
-    assert "answer" not in body["data"]["items"][0]
+    assert body["data"]["items"][0]["answer"] == [1]  # 审核人可见答案
+
+
+def test_list_questions_exposes_answer_to_admin():
+    _add_q(id=1, question_type="multiple", content="多选", options=["A", "B", "C"], answer=[0, 2], review_status="approved")
+    resp = client.get("/api/v1/exams/questions", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["answer"] == [0, 2]
 
 
 def test_review_approve(fresh_state):
