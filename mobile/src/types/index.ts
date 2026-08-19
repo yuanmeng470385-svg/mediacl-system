@@ -302,6 +302,32 @@ export interface ComplianceRule {
   version: number;
 }
 
+// ========== 合规培训考试（二期 F）==========
+export interface TrainingMaterial {
+  id: number;
+  title: string;
+  /** regulation=办法 / rdpac=RDPAC / internal=内部政策 */
+  material_type: string;
+  version: string;
+  content: string;
+}
+
+export interface ExamQuestion {
+  id: number;
+  content: string;
+  /** single=单选 / multiple=多选 / judge=判断 */
+  question_type: 'single' | 'multiple' | 'judge';
+  options: string[];
+}
+
+export interface ExamRecord {
+  score: number;
+  passed: boolean;
+  correct_count: number;
+  question_count: number;
+  submitted_at: string;
+}
+
 // ========== 学术内容 ==========
 export interface ContentItem {
   id: number;

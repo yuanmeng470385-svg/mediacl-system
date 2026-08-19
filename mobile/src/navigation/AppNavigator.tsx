@@ -28,6 +28,9 @@ import ComplianceScreen from '../screens/Compliance/ComplianceScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
 import SettingsScreen from '../screens/Settings/SettingsScreen';
 import ComplianceCenterScreen from '../screens/Compliance/ComplianceCenterScreen';
+import TrainingMaterialScreen from '../screens/Compliance/TrainingMaterialScreen';
+import ExamScreen from '../screens/Compliance/ExamScreen';
+import CommitmentScreen from '../screens/Compliance/CommitmentScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
@@ -186,6 +189,10 @@ export default function AppNavigator() {
             {/* 辅助页面 */}
             <Stack.Screen name="Settings" component={SettingsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="ComplianceCenter" component={ComplianceCenterScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 合规培训考试（二期 F） */}
+            <Stack.Screen name="TrainingMaterial" component={TrainingMaterialScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="Exam" component={ExamScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="Commitment" component={CommitmentScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="HelpCenter" component={HelpCenterScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="VisitDetail" component={VisitDetailScreen} options={{ animation: 'slide_from_right' }} />

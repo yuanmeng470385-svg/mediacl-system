@@ -32,6 +32,10 @@ export type RootStackParamList = {
   ContentDetail: { contentId: number };
   // 合规
   ComplianceManual: undefined;
+  // 合规培训考试（二期 F）
+  TrainingMaterial: undefined;
+  Exam: undefined;
+  Commitment: undefined;
   // 任务 & 收藏
   TaskList: undefined;
   Favorites: undefined;

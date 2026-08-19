@@ -203,6 +203,23 @@ export default function ComplianceCenterScreen() {
           </TouchableOpacity>
           <Text style={styles.footnote}>提交后由医学部/合规部人工审核；重新提交将回到待审核状态</Text>
         </View>
+
+        {/* 合规培训与承诺（二期 F） */}
+        <View style={[styles.card, Shadow.card]}>
+          <Text style={styles.cardTitle}>合规培训与承诺</Text>
+          <TouchableOpacity style={styles.entryRow} onPress={() => navigation.navigate('TrainingMaterial')} activeOpacity={0.7}>
+            <Icon name="book-open-variant" size={18} color={Colors.primary} />
+            <Text style={styles.entryText}>培训材料</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.entryRow} onPress={() => navigation.navigate('Exam')} activeOpacity={0.7}>
+            <Icon name="clipboard-text" size={18} color={Colors.primary} />
+            <Text style={styles.entryText}>合规考试</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.entryRow} onPress={() => navigation.navigate('Commitment')} activeOpacity={0.7}>
+            <Icon name="file-sign" size={18} color={Colors.primary} />
+            <Text style={styles.entryText}>签署年度承诺书{qual?.commitment_signed ? '（已签）' : ''}</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );
@@ -234,6 +251,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.border, borderRadius: BorderRadius.sm, padding: Spacing.sm,
   },
   pickText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
+  entryRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: Spacing.md },
+  entryText: { flex: 1, fontSize: FontSize.md, color: Colors.textPrimary },
   submitBtn: {
     marginTop: Spacing.lg, backgroundColor: Colors.primary, borderRadius: BorderRadius.sm,
     padding: Spacing.md, alignItems: 'center',
