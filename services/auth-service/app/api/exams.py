@@ -1,4 +1,5 @@
 """题库与考试（需求文档 3.4(2)(3)）：医学部/合规部人工审核题目；代表端在线考试"""
+import asyncio
 import logging
 import random
 from datetime import datetime
@@ -12,7 +13,7 @@ from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, PermissionError, success
-from shared.models.training_exam import ExamQuestion, ExamRecord
+from shared.models.training_exam import ExamQuestion, ExamRecord, TrainingMaterial
 
 from app.services.audit_client import write_audit_log
 
@@ -186,3 +187,44 @@ async def review_question(
         request_id=get_request_id() or None,
     )
     return success(q.to_dict())
+
+
+from app.services.qwen_client import QwenExamClient
+
+
+@router.post("/questions/ai-generate")
+async def ai_generate_questions(
+    payload: dict,
+    current_user: dict = Depends(require_roles(*EXAM_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """AI 出题草稿（不落库）。管理端预览确认后走正常入库 + 人工审核。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    material_id = payload.get("material_id")
+    mat = db.query(TrainingMaterial).filter(TrainingMaterial.id == material_id).first() if material_id else None
+    if not mat or mat.status != "active":
+        raise BusinessError("培训材料不存在", code=4001)
+    count = payload.get("count") or 5
+    if not isinstance(count, int) or not (1 <= count <= 20):
+        raise ParamError("count 必须是 1-20 的整数")
+    qtype = payload.get("question_type") or "single"
+    if qtype not in VALID_TYPES:
+        raise ParamError("question_type 不合法")
+    try:
+        result = await asyncio.to_thread(
+            QwenExamClient().generate_questions, mat.content, count, qtype
+        )
+    except Exception as exc:  # 出题失败不阻塞人工录入
+        logger.warning(f"AI 出题失败: {exc}")
+        raise BusinessError(f"AI 出题失败：{exc}", code=6001)
+    questions = result.get("questions", []) if isinstance(result, dict) else []
+    drafts = []
+    for raw in questions:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            drafts.append(_validate_question(raw))
+        except ParamError:
+            continue  # 单条草稿不合规跳过，不整体失败
+    return success(drafts)

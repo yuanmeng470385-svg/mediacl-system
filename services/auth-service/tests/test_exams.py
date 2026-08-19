@@ -189,3 +189,36 @@ def test_update_rejected_resets_to_pending():
     assert body["code"] == 0
     assert body["data"]["review_status"] == "pending"
     assert body["data"]["review_reason"] is None
+
+
+def test_ai_generate_returns_drafts(fresh_state, monkeypatch):
+    from app.services import qwen_client as qc
+
+    fake = {
+        "questions": [
+            {"question_type": "single", "content": "AI 生成的题目？",
+             "options": ["A", "B", "C", "D"], "answer": [2]},
+        ]
+    }
+    monkeypatch.setattr(qc.QwenExamClient, "generate_questions", lambda self, *a, **k: fake)
+
+    db = TestSession()
+    db.add(TrainingMaterial(id=1, title="办法", material_type="regulation", content="正文", status="active"))
+    db.commit()
+    db.close()
+
+    resp = client.post("/api/v1/exams/questions/ai-generate",
+                       json={"material_id": 1, "count": 1, "question_type": "single"},
+                       headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert isinstance(body["data"], list)
+    assert body["data"][0]["content"] == "AI 生成的题目？"
+    assert body["data"][0]["answer"] == [2]
+
+
+def test_ai_generate_rejects_rep():
+    resp = client.post("/api/v1/exams/questions/ai-generate",
+                       json={"material_id": 1}, headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
