@@ -112,6 +112,9 @@ app.include_router(card_pushes_router)
 from app.api.skill_packages import router as skill_packages_router
 app.include_router(skill_packages_router)
 
+from app.api.practices import router as practices_router
+app.include_router(practices_router)
+
 
 @app.get("/health")
 async def health():
