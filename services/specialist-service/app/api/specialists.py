@@ -1,5 +1,6 @@
 """数字专员服务 API 路由"""
 import logging
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from shared.common.response import success, ParamError, BusinessError
@@ -249,6 +250,73 @@ async def monitor_specialists(
         items.append(d)
 
     return success(paginate(items, total=total, page=p.page, page_size=p.page_size))
+
+
+# 待复核阈值（需求 3.2(3)：24 小时内拦截 ≥5 次标记待复核，可配置；与 compliance 同口径）
+REVIEW_BLOCK_THRESHOLD = int(os.getenv("REVIEW_BLOCK_THRESHOLD", "5"))
+REVIEW_WINDOW_HOURS = int(os.getenv("REVIEW_WINDOW_HOURS", "24"))
+
+
+@router.get("/review-queue")
+async def review_queue(
+    current_user: dict = Depends(require_roles("admin", "manager", "compliance")),
+    db: Session = Depends(get_db),
+):
+    """待复核名单（分身维度，人工裁决不做自动冻结）。
+
+    按 conversations.compliance_result 中 blocked=true 且 created_at 在窗口内，
+    以 specialist_id 聚合计数，count >= REVIEW_BLOCK_THRESHOLD 进入待复核——
+    与 freeze/unfreeze 同为分身维度，待复核 → 冻结在同一页闭环。
+    代表归属用 digital_specialists.representative_id join users；官方分身（无归属）rep_name 为 null。
+    """
+    from datetime import datetime, timedelta
+    from app.models.conversation import Conversation
+    from shared.models.user import User
+
+    since = datetime.utcnow() - timedelta(hours=REVIEW_WINDOW_HOURS)
+    rows = db.query(
+        Conversation.specialist_id, Conversation.compliance_result,
+    ).filter(
+        Conversation.role == "assistant",
+        Conversation.created_at >= since,
+        Conversation.compliance_result.isnot(None),
+    ).all()
+
+    counts = {}
+    for sid, cr in rows:
+        if isinstance(cr, dict) and cr.get("blocked"):
+            counts[sid] = counts.get(sid, 0) + 1
+
+    high_ids = [sid for sid, cnt in counts.items() if cnt >= REVIEW_BLOCK_THRESHOLD]
+    if not high_ids:
+        return success({
+            "items": [], "threshold": REVIEW_BLOCK_THRESHOLD, "window_hours": REVIEW_WINDOW_HOURS,
+        })
+
+    specialists = db.query(Specialist).filter(Specialist.id.in_(high_ids)).all()
+    spec_by_id = {s.id: s for s in specialists}
+    rep_ids = [s.representative_id for s in specialists if s.representative_id]
+    rep_name_map = {}
+    if rep_ids:
+        rep_name_map = {
+            uid: name
+            for uid, name in db.query(User.id, User.full_name).filter(User.id.in_(rep_ids)).all()
+        }
+
+    items = []
+    for sid in sorted(high_ids, key=lambda x: counts[x], reverse=True):
+        s = spec_by_id.get(sid)
+        items.append({
+            "specialist_id": sid,
+            "name": s.name if s else "未知分身",
+            "rep_name": rep_name_map.get(s.representative_id) if (s and s.representative_id) else None,
+            "block_count": counts[sid],
+            "window_hours": REVIEW_WINDOW_HOURS,
+            "threshold": REVIEW_BLOCK_THRESHOLD,
+        })
+    return success({
+        "items": items, "threshold": REVIEW_BLOCK_THRESHOLD, "window_hours": REVIEW_WINDOW_HOURS,
+    })
 
 
 @router.get("/{specialist_id}")

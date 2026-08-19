@@ -190,3 +190,56 @@ def test_monitor_filters_official(fresh_state):
     assert data["total"] == 1
     assert data["items"][0]["name"] == "官方专员"
     assert data["items"][0]["is_official"] is True
+
+
+def _add_conv(**kw):
+    db = TestSession()
+    defaults = dict(
+        id=kw.pop("id", 1), user_id=1, specialist_id=1, session_id="s1",
+        role="assistant", content="回答", citations=None,
+        compliance_result={"blocked": True}, created_at=datetime.utcnow(),
+    )
+    defaults.update(kw)
+    db.add(Conversation(**defaults))
+    db.commit()
+    db.close()
+    return defaults["id"]
+
+
+def test_review_queue_requires_admin():
+    resp = client.get("/api/v1/specialists/review-queue", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_review_queue_marks_high_blockers():
+    _add_specialist(id=1, name="心内科专员", representative_id=1)
+    for i in range(6):
+        _add_conv(id=i + 1, specialist_id=1)
+    resp = client.get("/api/v1/specialists/review-queue", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    items = body["data"]["items"]
+    assert any(item["specialist_id"] == 1 for item in items)
+    assert items[0]["block_count"] >= 5
+    assert items[0]["rep_name"] == "张代表"
+
+
+def test_review_queue_below_threshold_excluded():
+    _add_specialist(id=1)
+    _add_conv(id=1, specialist_id=1)
+    _add_conv(id=2, specialist_id=1)
+    resp = client.get("/api/v1/specialists/review-queue", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["items"] == []
+
+
+def test_review_queue_official_specialist_rep_name_null():
+    _add_specialist(id=1, name="官方心内科专员", is_official=True)
+    for i in range(5):
+        _add_conv(id=i + 1, specialist_id=1)
+    resp = client.get("/api/v1/specialists/review-queue", headers=_token(2, "admin"))
+    body = resp.json()
+    items = body["data"]["items"]
+    assert items[0]["specialist_id"] == 1
+    assert items[0]["rep_name"] is None
