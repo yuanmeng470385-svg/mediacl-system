@@ -54,6 +54,9 @@ app.include_router(report_api.router)
 from app.api import metrics as metrics_api
 app.include_router(metrics_api.router)
 
+from app.api.monitor import router as monitor_router
+app.include_router(monitor_router)
+
 
 @app.get("/health")
 async def health():
