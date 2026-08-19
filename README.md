@@ -5,32 +5,43 @@
 
 ## 项目简介
 
-数字员工系统是一套面向医药代表日常工作场景的智能助手系统。
-给每个代表配一个懂产品、懂医生、懂合规的随身数字专员。
+MedAgent 数字员工系统是一套面向医药代表、医生与药企管理方的 AI 数字员工平台。
+三端架构：Web 管理后台（药企市场部/医学部/合规部）+ 代表端 APP（医药代表）+ 医生端 APP（临床医生），
+数据互通、统一合规管控。给每个代表配一个懂产品、懂医生、懂合规的随身数字专员。
 
 ### 核心模块
 
 | 模块 | 服务 | 端口 | 说明 |
 |------|------|------|------|
-| 数字学术专员 | specialist-service | 8001 | 每个产品一个 AI 专员，学术问答，多轮对话 |
-| 陪访助手 | visit-service | 8002 | 拜访前准备、拜访中实时辅助、拜访后自动记录 |
+| 数字学术专员 | specialist-service | 8001 | 每个产品一个 AI 专员，学术问答、多轮对话、医学问答 |
+| 陪访助手 | visit-service | 8002 | 拜访前准备、拜访中实时辅助（语音转写）、拜访后自动记录 |
 | 知识库 | knowledge-service | 8003 | 文档解析、向量化、混合检索 |
 | 合规审核 | compliance-service | 8004 | 三层审核引擎（关键词+正则+LLM语义） |
 | 审计留痕 | audit-service | 8005 | 不可篡改审计日志、监管报告导出 |
 | 医生管理 | hcp-service | 8006 | 医生档案、画像、互动历史 |
-| 认证服务 | auth-service | 8007 | 手机验证码/密码登录、用户管理、JWT 签发 |
+| 认证服务 | auth-service | 8007 | 手机验证码/密码登录、用户管理、JWT 签发、备案/医师认证审核 |
 | API 网关 | gateway | 8000 | 统一入口、路由转发、认证限流 |
+
+### 三端与一期功能矩阵（2026-08-17 一期 MVP 完成）
+
+| 端 | 载体 | 已交付能力 |
+|------|------|------|
+| 管理后台 | web/（React + Ant Design Pro） | 仪表盘、数字专员、拜访管理、知识库、合规规则/拦截记录、审计查询、医生管理、用户管理、备案管理、医生认证、系统配置、3D 数字员工办公室 |
+| 代表端 | mobile/（React Native） | 登录、数字专员对话（流式）、拜访全流程（语音转写/异议/报告）、语音笔记、医生档案、知识库/资讯、合规手册、任务/收藏、**备案资质提交与个人合规中心**、**分身分享链接**、**分身夜间简报** |
+| 医生端 | mobile-doctor/（React Native） | 登录、医师资格认证上传、医学 AI 问答（带引用与免责声明）、分身订阅（知情同意弹窗）、分身对话、深链激活 |
+
+一期四个子系统（备案资质、医生端、22 项禁止行为映射、分身分享+夜间简报）均已在 CLAUDE.md 完整记录（端点/表/基线/挂账）。
 
 ### 技术栈
 
 - **后端**: Python FastAPI
 - **大模型**: 通义千问 (Qwen-Max/Plus/Turbo)
 - **业务编排**: 阿里云百炼
-- **语音**: 通义听悟 (ASR/TTS)
+- **语音**: 通义听悟 / 阿里云 NLS (ASR/TTS)
 - **向量检索**: 阿里云 DashVector
-- **数据库**: PostgreSQL 15 + Redis 7
+- **数据库**: PostgreSQL 15 + Redis 7（20 张表，见 scripts/init_db.sql）
 - **对象存储**: 阿里云 OSS
-- **移动端**: React Native (iOS + Android)
+- **移动端**: React Native 0.75（mobile 代表端 + mobile-doctor 医生端）
 - **Web 后台**: React + Ant Design Pro
 - **监控**: 阿里云 ARMS / SLS
 
@@ -53,20 +64,22 @@ cd medagent
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入阿里云 AccessKey、百炼 API Key 等
+# 编辑 .env，填入阿里云 AccessKey、百炼 API Key、JWT_SECRET、INTERNAL_API_KEY 等
+# 首次启动前设置管理员密码：
+python scripts/seed_admin.py
 ```
 
 ### 4. 启动开发环境
 
 ```bash
-# 启动所有服务（PostgreSQL + Redis + 8 个微服务）
+# 启动基础设施（PostgreSQL + Redis）
+docker-compose up -d postgres redis
+# 首次初始化数据库
+docker exec -i medagent-postgres psql -U medagent medagent < scripts/init_db.sql
+# 旧库升级需按序执行 scripts/migrations/ 下的迁移（009/010/011/012 见各文件头注释）
+
+# 启动全部服务（本机 Docker Hub 不可达时按下方"本地开发"直跑）
 docker-compose up -d
-
-# 查看日志
-docker-compose logs -f
-
-# 查看运行状态
-docker-compose ps
 ```
 
 ### 5. 验证
@@ -91,15 +104,32 @@ curl http://localhost:8007/health  # auth
 # 1. 启动 PostgreSQL 和 Redis（可以用 Docker 只启这两个）
 docker-compose up -d postgres redis
 
-# 2. 安装 Python 依赖
-pip install -r services/specialist-service/requirements.txt
+# 2. 安装 Python 依赖（每个服务目录下）
+pip install -r services/auth-service/requirements.txt
 # ... 依此类推
 
-# 3. 逐个启动服务（8 个服务同样方式，端口见模块表）
-cd services/specialist-service && python -m app.main
-cd services/visit-service && python -m app.main
-cd services/auth-service && python -m app.main
-# ...
+# 3. 逐个启动服务（端口见模块表）
+cd services/auth-service && python -m uvicorn app.main:app --port 8007
+cd services/gateway && python -m uvicorn app.main:app --port 8000
+# ... 依此类推
+```
+
+### 7. 前端
+
+```bash
+# Web 管理后台（web/）
+cd web && npm install && npm run dev        # http://localhost:3000
+# 验证门：cd web && npm run build
+
+# 代表端（mobile/，Android 构建）
+cd mobile && npm install
+cd mobile/android && ./gradlew assembleDebug
+# 测试：cd mobile && npx jest
+
+# 医生端（mobile-doctor/，Android 构建）
+cd mobile-doctor && npm install
+cd mobile-doctor/android && ./gradlew assembleDebug
+# 测试：cd mobile-doctor && npx jest
 ```
 
 ## 项目结构
@@ -107,24 +137,25 @@ cd services/auth-service && python -m app.main
 ```
 medagent/
 ├── services/                  # 微服务
-│   ├── specialist-service/    # 数字学术专员
+│   ├── specialist-service/    # 数字学术专员（含医学问答/分身订阅/分享/简报）
 │   ├── visit-service/         # 陪访助手
 │   ├── knowledge-service/     # 知识库
-│   ├── compliance-service/    # 合规审核
+│   ├── compliance-service/    # 合规审核（11 条规则 R001-R011，见 docs/compliance-2026-22items-matrix.md）
 │   ├── audit-service/         # 审计留痕
 │   ├── hcp-service/           # 医生管理
-│   ├── auth-service/          # 认证服务（验证码/密码登录、JWT）
+│   ├── auth-service/          # 认证服务（登录/JWT/备案资质/医师认证）
 │   └── gateway/               # API 网关
-├── mobile/                    # 移动端 (React Native)
-├── web/                       # Web 后台 (React + Ant Design Pro)
+├── mobile/                    # 代表端 (React Native)
+├── mobile-doctor/             # 医生端 (React Native，2026-08-17 一期 B)
+├── web/                       # Web 管理后台 (React + Ant Design Pro)
 ├── shared/                    # 共享代码
 │   ├── common/                # 通用工具 (响应格式、JWT、分页)
 │   ├── models/                # 数据模型基类
 │   ├── prompts/               # 数字专员话术模板
-│   └── compliance-rules/      # 合规规则文件
+│   └── compliance-rules/      # 合规规则文件（rules.yaml）
 ├── knowledge-base/            # 知识库原始资料
-├── scripts/                   # 运维脚本 & 数据库初始化
-├── docs/                      # 文档
+├── scripts/                   # 运维脚本 & 数据库初始化 & 迁移
+├── docs/                      # 文档（含各实施计划、22 项映射矩阵）
 ├── .env.example               # 环境变量模板
 ├── docker-compose.yml         # 本地开发编排
 └── README.md
@@ -137,7 +168,7 @@ medagent/
 - 协议: HTTP/HTTPS
 - 格式: JSON
 - 编码: UTF-8
-- 认证: JWT (Authorization: Bearer <token>)
+- 认证: JWT (Authorization: Bearer <token>)；内部接口另需 X-Internal-Key
 - 前缀: `/api/v1/`
 - 请求 ID: `X-Request-ID` (UUID)
 
@@ -163,9 +194,13 @@ medagent/
 | 5000-5999 | 系统错误 |
 | 6000-6999 | 第三方服务错误 |
 
+### 角色
+
+`admin` / `manager` / `rep`（医药代表）/ `compliance` / `medical` / `finance` / `doctor`（医生端，2026-08-17 新增）。
+角色与账号状态以库为准（token 只是登录快照），停用/降级即时生效。
+
 ### Git 规范
 
-- 分支: `feature/xxx`, `fix/xxx`, `refactor/xxx`
 - Commit: `feat(module):`, `fix(module):`, `docs:`, `refactor:`, `test:`
 - 示例: `feat(specialist): add multi-round conversation support`
 
@@ -192,6 +227,7 @@ ECS 上 crontab 配置（每天 02:00，需先 pip install oss2 并把 .env 的 
 
 - [完整方案文档](./AI数字员工系统-完整方案.md)
 - [5人任务分配清单](./MedAgent-任务分配.md)
+- [开发/运维细节（端点、表、基线、已知缺口）](./CLAUDE.md)
 
 ## 团队
 
