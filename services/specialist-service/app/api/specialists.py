@@ -3,7 +3,7 @@ import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from shared.common.response import success, ParamError, BusinessError
+from shared.common.response import success, ParamError, BusinessError, PermissionError
 from shared.common.auth import get_current_user, require_roles
 from shared.common.pagination import PaginationParams, paginate
 from app.services.audit_client import write_audit_log
@@ -659,6 +659,133 @@ async def unfreeze_specialist(
         request_id=get_request_id() or None,
     )
     return success(spec.to_dict())
+
+
+# ==================== 分身管理（风格设置/启停/风格测试生成） ====================
+
+VALID_STYLE_KEYS = {"formal_level", "reply_length", "opening_mode"}
+VALID_FORMAL = ("非常严谨", "标准学术", "略带亲和力")
+VALID_LENGTH = ("简洁", "标准", "详尽")
+VALID_OPENING = ("直切主题", "先寒暄再进入")
+
+
+def _validate_style(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    style = {}
+    if "formal_level" in payload:
+        v = payload["formal_level"]
+        if v not in VALID_FORMAL:
+            raise ParamError("formal_level 必须是 非常严谨/标准学术/略带亲和力")
+        style["formal_level"] = v
+    if "reply_length" in payload:
+        v = payload["reply_length"]
+        if v not in VALID_LENGTH:
+            raise ParamError("reply_length 必须是 简洁/标准/详尽")
+        style["reply_length"] = v
+    if "opening_mode" in payload:
+        v = payload["opening_mode"]
+        if v not in VALID_OPENING:
+            raise ParamError("opening_mode 必须是 直切主题/先寒暄再进入")
+        style["opening_mode"] = v
+    if not style:
+        raise ParamError("至少设置一个风格参数")
+    return style
+
+
+def _assert_twin_owner(spec: Specialist, current_user: dict):
+    """分身归属校验：代表本人或 admin/manager（管理端代理操作）"""
+    if current_user["role"] in ("admin", "manager"):
+        return
+    if spec.representative_id != current_user["id"]:
+        raise PermissionError("只能操作本人分身")
+
+
+@router.put("/{specialist_id}/style")
+async def set_twin_style(
+    specialist_id: int,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """分身风格设置（需求 4.3(2)）：写 persona.style"""
+    spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not spec:
+        raise BusinessError("分身不存在", code=4001)
+    _assert_twin_owner(spec, current_user)
+    style = _validate_style(payload)
+    persona = dict(spec.persona) if spec.persona else {}
+    persona["style"] = {**(persona.get("style") or {}), **style}
+    spec.persona = persona
+    db.commit()
+    db.refresh(spec)
+    return success(spec.to_dict())
+
+
+@router.post("/{specialist_id}/pause")
+async def pause_twin(
+    specialist_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """暂停本人分身（4.3(5)）：status→paused"""
+    spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not spec:
+        raise BusinessError("分身不存在", code=4001)
+    _assert_twin_owner(spec, current_user)
+    if spec.status != "active":
+        raise BusinessError("仅工作中的分身可暂停", code=4001)
+    spec.status = "paused"
+    db.commit()
+    db.refresh(spec)
+    return success(spec.to_dict())
+
+
+@router.post("/{specialist_id}/resume")
+async def resume_twin(
+    specialist_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """启用本人分身：paused→active"""
+    spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
+    if not spec:
+        raise BusinessError("分身不存在", code=4001)
+    _assert_twin_owner(spec, current_user)
+    if spec.status != "paused":
+        raise BusinessError("仅已暂停的分身可启用", code=4001)
+    spec.status = "active"
+    db.commit()
+    db.refresh(spec)
+    return success(spec.to_dict())
+
+
+@router.post("/style-test")
+async def style_test_generate(
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """分身生成（4.3(1)）：风格测试 5 题 → 生成 persona 风格画像 → 建分身（prompt/检索级个性化，非微调）"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    answers = payload.get("answers")
+    if not isinstance(answers, list) or len(answers) != 5 or not all(isinstance(a, int) for a in answers):
+        raise ParamError("answers 必须是 5 个 0-2 的选项索引数组")
+    # 简化映射：均值 → 正式度/长度/开场白（prompt/检索级个性化口径）
+    avg = sum(max(0, min(2, a)) for a in answers) / 5
+    formal = "非常严谨" if avg < 0.67 else "标准学术" if avg < 1.34 else "略带亲和力"
+    length = "简洁" if avg < 0.67 else "标准" if avg < 1.34 else "详尽"
+    opening = "直切主题" if avg < 1.0 else "先寒暄再进入"
+    persona = {"style": {"formal_level": formal, "reply_length": length, "opening_mode": opening}}
+    twin = Specialist(
+        name=f"{current_user.get('username')}的分身", product_id=None,
+        persona=persona, status="active", representative_id=current_user["id"],
+    )
+    db.add(twin)
+    db.commit()
+    db.refresh(twin)
+    return success(twin.to_dict())
 
 
 # ==================== 专员 CRUD（S6：仅 admin） ====================
