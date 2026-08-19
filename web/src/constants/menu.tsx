@@ -15,6 +15,7 @@ import {
   RadarChartOutlined,
   SearchOutlined,
   MonitorOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import type { MenuDataItem } from '@ant-design/pro-components';
 
@@ -28,6 +29,7 @@ export const menuConfig: MenuDataItem[] = [
   { path: '/compliance/blocks', name: '拦截记录', icon: <StopOutlined /> },
   { path: '/compliance/monitor', name: '合规风控', icon: <RadarChartOutlined /> },
   { path: '/compliance/conv-search', name: '对话检索', icon: <SearchOutlined /> },
+  { path: '/compliance/card-stats', name: '触达统计', icon: <BarChartOutlined /> },
   { path: '/audit/list', name: '审计查询', icon: <AuditOutlined /> },
   { path: '/doctor/list', name: '医生管理', icon: <UserOutlined /> },
   { path: '/user/list', name: '用户管理', icon: <TeamOutlined /> },

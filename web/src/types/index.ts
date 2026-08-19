@@ -372,3 +372,14 @@ export interface SpecialistMonitor {
   added_count: number;
   approval_rate: number | null;
 }
+
+// ========== 学术触达（二期 G）==========
+// 字段与 specialist-service GET /academic-cards/stats 对齐
+export interface CardStats {
+  days: number;
+  total_pushes: number;
+  total_reads: number;
+  /** 后端返回 0-1 小数（round(total_reads / total_pushes, 4)），展示时需 ×100 转百分数 */
+  read_rate: number;
+  rep_ranking: { representative_id: number; pushes: number; reads: number }[];
+}
