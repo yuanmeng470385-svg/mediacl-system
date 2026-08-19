@@ -11,7 +11,9 @@ from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, PermissionError, success
-from shared.models.academic import AcademicCard
+from shared.models.academic import AcademicCard, CardPushRecord, Notification
+from shared.models.doctor import DoctorTwinSubscription
+from shared.models.digital_specialist import Specialist
 
 from app.api.medical import _retrieve
 from app.services.qwen_client import QwenClient
@@ -160,3 +162,65 @@ async def list_my_cards(
     total = query.count()
     rows = query.order_by(AcademicCard.id.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([c.to_dict() for c in rows], total, p.page, p.page_size))
+
+
+@router.post("/{card_id}/push")
+async def push_card(
+    card_id: int,
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """rep 推送卡片给订阅了其分身且 status='subscribed' 的医生。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    doctor_ids = payload.get("doctor_ids")
+    if not isinstance(doctor_ids, list) or not doctor_ids:
+        raise ParamError("doctor_ids 必须是医生 ID 数组")
+    if len(doctor_ids) > 50:
+        raise ParamError("一次最多推送 50 位医生")
+
+    card = db.query(AcademicCard).filter(
+        AcademicCard.id == card_id,
+        AcademicCard.representative_id == current_user["id"],
+        AcademicCard.status == "active",
+    ).first()
+    if not card:
+        raise BusinessError("卡片不存在", code=4001)
+
+    # 该代表的全部分身
+    my_twins = db.query(Specialist.id).filter(Specialist.representative_id == current_user["id"]).all()
+    twin_ids = [t[0] for t in my_twins]
+    if not twin_ids:
+        raise BusinessError("请先生成分身再推送", code=4001)
+
+    pushed = 0
+    skipped = 0
+    for doctor_id in doctor_ids:
+        sub = db.query(DoctorTwinSubscription).filter(
+            DoctorTwinSubscription.doctor_id == doctor_id,
+            DoctorTwinSubscription.twin_id.in_(twin_ids),
+            DoctorTwinSubscription.status == "subscribed",
+        ).first()
+        if not sub:
+            skipped += 1
+            continue
+        existing = db.query(CardPushRecord).filter_by(card_id=card_id, doctor_id=doctor_id).first()
+        if existing:
+            skipped += 1
+            continue
+        db.add(CardPushRecord(
+            representative_id=current_user["id"],
+            card_id=card_id,
+            doctor_id=doctor_id,
+            read_status="unread",
+        ))
+        db.add(Notification(
+            user_id=doctor_id,
+            type="card_new",
+            title=f"收到学术卡片：{card.title}",
+            link=f"/card-pushes",
+        ))
+        pushed += 1
+    db.commit()
+    return success({"pushed": pushed, "skipped": skipped})

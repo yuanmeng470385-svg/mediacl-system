@@ -106,6 +106,9 @@ app.include_router(briefings_router)
 from app.api.academic_cards import router as academic_cards_router
 app.include_router(academic_cards_router)
 
+from app.api.card_pushes import router as card_pushes_router
+app.include_router(card_pushes_router)
+
 
 @app.get("/health")
 async def health():
