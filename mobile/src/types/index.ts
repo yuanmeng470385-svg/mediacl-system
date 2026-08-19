@@ -353,6 +353,32 @@ export interface ShareLinkItem {
   created_at?: string;
 }
 
+// ========== 学术卡片（二期 G）==========
+export interface AcademicCardCitation {
+  doc_name: string;
+  version?: string;
+  section?: string;
+  file_url?: string | null;
+}
+
+export interface AcademicCardContent {
+  conclusion: string;
+  key_points: string[];
+  summary: string;
+  citations: AcademicCardCitation[];
+}
+
+export interface AcademicCard {
+  id: number;
+  representative_id: number;
+  title: string;
+  content: AcademicCardContent;
+  is_ai_generated: boolean;
+  compliance_status: string;
+  status: string;
+  created_at: string | null;
+}
+
 // ========== 夜间简报 ==========
 export interface NightlyBriefing {
   id: number;

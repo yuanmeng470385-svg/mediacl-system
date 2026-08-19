@@ -154,6 +154,8 @@ ROUTE_MAP = {
     "/api/v1/twin-subscriptions": settings.SPECIALIST_SERVICE_URL,  # 医生端分身订阅（一期 B）
     "/api/v1/share-links": settings.SPECIALIST_SERVICE_URL,  # 医生端分享链接激活（一期 B）
     "/api/v1/briefings": settings.SPECIALIST_SERVICE_URL,  # 代表端夜间简报查询（一期 C）
+    "/api/v1/academic-cards": settings.SPECIALIST_SERVICE_URL,  # 学术卡片（二期 G）
+    "/api/v1/card-pushes": settings.SPECIALIST_SERVICE_URL,  # 卡片推送/通知（二期 G）
 }
 
 

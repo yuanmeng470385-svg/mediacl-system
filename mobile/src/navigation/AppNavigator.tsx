@@ -39,6 +39,8 @@ import FavoritesScreen from '../screens/Favorites/FavoritesScreen';
 import ShareScreen from '../screens/Share/ShareScreen';
 import BriefingListScreen from '../screens/Briefing/BriefingListScreen';
 import BriefingDetailScreen from '../screens/Briefing/BriefingDetailScreen';
+import CardCreateScreen from '../screens/Academic/CardCreateScreen';
+import CardListScreen from '../screens/Academic/CardListScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -200,6 +202,9 @@ export default function AppNavigator() {
             <Stack.Screen name="Share" component={ShareScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="BriefingList" component={BriefingListScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="BriefingDetail" component={BriefingDetailScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 学术卡片（二期 G） */}
+            <Stack.Screen name="AcademicCardCreate" component={CardCreateScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="AcademicCardList" component={CardListScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen

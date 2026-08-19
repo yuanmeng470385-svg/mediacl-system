@@ -48,6 +48,9 @@ export type RootStackParamList = {
   Share: undefined;
   BriefingList: undefined;
   BriefingDetail: { briefingId: number };
+  // 学术卡片（二期 G）
+  AcademicCardCreate: undefined;
+  AcademicCardList: undefined;
 };
 
 // ========== 路由参数类型导出 ==========
