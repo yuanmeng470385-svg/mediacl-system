@@ -86,6 +86,9 @@ app.include_router(qualifications_router)
 from app.api.doctors import router as doctors_router
 app.include_router(doctors_router)
 
+from app.api.training_materials import router as training_materials_router
+app.include_router(training_materials_router)
+
 
 @app.get("/health")
 async def health():
