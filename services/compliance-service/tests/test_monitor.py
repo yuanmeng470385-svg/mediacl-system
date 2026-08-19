@@ -122,29 +122,3 @@ def test_trends_rep_ranking():
     assert body["data"]["rep_ranking"][0]["rep_name"] == "张代表"
     assert body["data"]["rep_ranking"][0]["count"] == 1
     assert body["data"]["time_series"]  # 至少一个数据点
-
-
-def test_review_queue_requires_admin():
-    resp = client.get("/api/v1/compliance/review-queue", headers=_token(1, "rep"))
-    assert resp.status_code == 403
-
-
-def test_review_queue_marks_high_blockers():
-    # 同一 user 近窗口内 ≥ 阈值条拦截 → 进入待复核
-    for i in range(6):
-        _add_block(id=i + 1, user_id=1, rule_code="R001")
-    resp = client.get("/api/v1/compliance/review-queue", headers=_token(3, "compliance"))
-    body = resp.json()
-    assert body["code"] == 0
-    items = body["data"]["items"]
-    assert any(item["user_id"] == 1 for item in items)
-    assert items[0]["block_count"] >= 5
-
-
-def test_review_queue_below_threshold_excluded():
-    _add_block(id=1, user_id=1)
-    _add_block(id=2, user_id=1)
-    resp = client.get("/api/v1/compliance/review-queue", headers=_token(3, "compliance"))
-    body = resp.json()
-    assert body["code"] == 0
-    assert body["data"]["items"] == []

@@ -1,10 +1,11 @@
-"""合规监控（二期 E，需求 3.2(3)(4)）：聚合日报 / 违规趋势 / 待复核名单。
+"""合规监控（二期 E，需求 3.2(3)(4)）：聚合日报 / 违规趋势。
+
+待复核名单已迁移至 specialist-service 的 /specialists/review-queue（按分身聚合
+conversations.compliance_result.blocked=true，与冻结端点同维度）。
 拦截聚合基于 compliance_blocks（同库直连 users 取代表姓名，与 blocks/stats 同口径）。
 """
 import logging
-import os
 from datetime import datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func as sqlfunc
@@ -12,8 +13,7 @@ from sqlalchemy.orm import Session
 
 from shared.common.auth import require_roles
 from shared.common.db_session import get_db
-from shared.common.pagination import PaginationParams, paginate
-from shared.common.response import ParamError, success
+from shared.common.response import success
 from shared.models.compliance import ComplianceBlock
 from shared.models.user import User
 
@@ -22,10 +22,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/compliance", tags=["compliance-monitor"])
 
 MONITOR_ADMIN_ROLES = ("admin", "manager", "compliance")
-
-# 待复核阈值（需求 3.2(3)：24 小时内拦截 ≥5 次标记待复核，可配置）
-REVIEW_THRESHOLD = int(os.getenv("REVIEW_BLOCK_THRESHOLD", "5"))
-REVIEW_WINDOW_HOURS = int(os.getenv("REVIEW_WINDOW_HOURS", "24"))
 
 
 @router.get("/daily-summary")
@@ -120,30 +116,3 @@ async def compliance_trends(
         "rep_ranking": [{"user_id": uid, "rep_name": name or "未知", "count": c} for name, uid, c in rep_rows],
         "rule_frequency": [{"rule_code": rc, "rule_name": rn or rc, "count": c} for rc, rn, c in rule_rows],
     })
-
-
-@router.get("/review-queue")
-async def review_queue(
-    _admin: dict = Depends(require_roles(*MONITOR_ADMIN_ROLES)),
-    db: Session = Depends(get_db),
-):
-    """待复核名单：同一代表（user）近窗口内拦截计数超阈值 → 标记待复核（不做自动冻结）"""
-    since = datetime.utcnow() - timedelta(hours=REVIEW_WINDOW_HOURS)
-    rows = (
-        db.query(
-            ComplianceBlock.user_id, User.full_name, User.phone,
-            sqlfunc.count(ComplianceBlock.id).label("block_count"),
-        )
-        .outerjoin(User, ComplianceBlock.user_id == User.id)
-        .filter(ComplianceBlock.blocked_at >= since)
-        .group_by(ComplianceBlock.user_id, User.full_name, User.phone)
-        .having(sqlfunc.count(ComplianceBlock.id) >= REVIEW_THRESHOLD)
-        .order_by(sqlfunc.count(ComplianceBlock.id).desc())
-        .all()
-    )
-    items = [{
-        "user_id": uid, "rep_name": name or "未知", "rep_phone": phone or "",
-        "block_count": cnt, "window_hours": REVIEW_WINDOW_HOURS,
-        "threshold": REVIEW_THRESHOLD,
-    } for uid, name, phone, cnt in rows]
-    return success({"items": items, "threshold": REVIEW_THRESHOLD, "window_hours": REVIEW_WINDOW_HOURS})
