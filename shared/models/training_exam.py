@@ -54,6 +54,8 @@ class ExamQuestion(Base, TimestampMixin):
             "options": self.options,
             "review_status": self.review_status,
             "review_reason": self.review_reason,
+            "reviewed_by": self.reviewed_by,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
