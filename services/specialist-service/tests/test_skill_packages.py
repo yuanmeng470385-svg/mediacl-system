@@ -254,3 +254,77 @@ def test_mine_returns_own_skills(fresh_state):
 def test_mine_requires_rep():
     resp = client.get("/api/v1/skill-packages/mine", headers=_token(2, "admin"))
     assert resp.status_code == 403
+
+
+def test_asset_list_includes_rep_skill_with_creator(fresh_state):
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="代表风格", creator_id=1, is_public=True, is_anonymous=False,
+                        audit_status="pending", description="心内科", content="素材",
+                        style_tags=["严谨"], heat=0, skill_weights={}))
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/skill-packages/asset-list", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    item = body["data"]["items"][0]
+    assert item["name"] == "代表风格"
+    assert item["creator_name"] == "张代表"
+    assert item["creator_role"] == "rep"
+    assert "content" not in item
+    assert "skill_weights" not in item
+
+
+def test_asset_list_filters_off_shelf(fresh_state):
+    db = TestSession()
+    db.add_all([
+        SkillPackage(id=1, name="正常", creator_id=3, is_public=True, is_anonymous=False,
+                     audit_status="approved", style_tags=[], heat=0, skill_weights={}),
+        SkillPackage(id=2, name="已下架", creator_id=3, is_public=True, is_anonymous=False,
+                     audit_status="approved", style_tags=[], heat=0, skill_weights={},
+                     off_shelf_status="off_shelved", off_shelf_reason="违规", off_shelf_type="compliance"),
+    ])
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/skill-packages/asset-list", params={"off_shelf_status": "off_shelved"},
+                      headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["id"] == 2
+
+
+def test_detail_exposes_content_and_writes_view_audit(fresh_state):
+    _add_skill(id=1, audit_status="approved", content="话术素材")
+    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["content"] == "话术素材"
+    assert body["data"]["skill_weights"] == {"formal_level": "标准学术"}
+    audit_mock = fresh_state
+    audit_mock.assert_awaited()
+    args, kwargs = audit_mock.call_args
+    assert kwargs.get("action") == "skill_detail_view"
+
+
+def test_public_excludes_off_shelved(fresh_state):
+    db = TestSession()
+    db.add_all([
+        SkillPackage(id=1, name="正常", creator_id=1, is_public=True, is_anonymous=False,
+                     audit_status="approved", style_tags=[], heat=0, skill_weights={}),
+        SkillPackage(id=2, name="下架", creator_id=1, is_public=True, is_anonymous=False,
+                     audit_status="approved", style_tags=[], heat=0, skill_weights={},
+                     off_shelf_status="off_shelved", off_shelf_type="author", off_shelf_reason="作者申请"),
+    ])
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/skill-packages/public", headers=_token(1, "rep"))
+    assert resp.json()["data"]["total"] == 1
+    assert resp.json()["data"]["items"][0]["id"] == 1
+
+
+def test_load_excludes_off_shelved(fresh_state):
+    _add_skill(id=1, is_public=True, audit_status="approved",
+               off_shelf_status="off_shelved", off_shelf_type="author", off_shelf_reason="作者申请")
+    resp = client.post("/api/v1/skill-packages/1/load", json={}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001

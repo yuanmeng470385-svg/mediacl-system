@@ -13,6 +13,7 @@ from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
 from shared.models.skill import SkillAudit, SkillPackage
+from shared.models.user import User
 
 from app.services.audit_client import write_audit_log
 
@@ -121,6 +122,7 @@ async def public_plaza(
     q = db.query(SkillPackage).filter(
         SkillPackage.is_public == True,  # noqa: E712
         SkillPackage.audit_status == "approved",
+        SkillPackage.off_shelf_status == "active",
     )
     if keyword:
         q = q.filter(SkillPackage.name.ilike(f"%{keyword}%"))
@@ -172,6 +174,46 @@ async def my_skills(
     return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
 
 
+@router.get("/asset-list")
+async def asset_list(
+    page: int = 1,
+    page_size: int = 20,
+    audit_status: Optional[str] = None,
+    off_shelf_status: Optional[str] = None,
+    keyword: Optional[str] = None,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """三期 J：Skill 资产公共列表（含代表发布，元数据 + 创建者姓名/角色）。
+    绝不含 content/skill_weights（隐私边界附录B-1）。"""
+    if audit_status and audit_status not in VALID_AUDIT:
+        raise ParamError("audit_status 不合法")
+    if off_shelf_status and off_shelf_status not in ("active", "off_shelved"):
+        raise ParamError("off_shelf_status 不合法")
+    p = PaginationParams(page=page, page_size=page_size)
+    q = db.query(SkillPackage).outerjoin(User, SkillPackage.creator_id == User.id)
+    if audit_status:
+        q = q.filter(SkillPackage.audit_status == audit_status)
+    if off_shelf_status:
+        q = q.filter(SkillPackage.off_shelf_status == off_shelf_status)
+    if keyword:
+        q = q.filter(SkillPackage.name.ilike(f"%{keyword}%"))
+    total = q.count()
+    rows = (
+        q.order_by(SkillPackage.id.desc())
+        .offset(p.offset).limit(p.limit)
+        .with_entities(SkillPackage, User.full_name, User.role)
+        .all()
+    )
+    items = []
+    for sk, creator_name, creator_role in rows:
+        d = sk.to_dict()
+        d["creator_name"] = creator_name
+        d["creator_role"] = creator_role
+        items.append(d)
+    return success(paginate(items, total, p.page, p.page_size))
+
+
 @router.get("/{skill_id}/detail")
 async def skill_detail(
     skill_id: int,
@@ -182,6 +224,12 @@ async def skill_detail(
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
         raise BusinessError("Skill 不存在", code=4001)
+    await write_audit_log(
+        action="skill_detail_view", user_id=current_user["id"],
+        resource_type="skill_package", resource_id=str(sk.id),
+        after_value={"name": sk.name},
+        request_id=get_request_id() or None,
+    )
     return success(sk.to_dict(expose_weights=True))
 
 
@@ -234,14 +282,15 @@ async def load_skill(
     current_user: dict = Depends(require_roles("rep")),
     db: Session = Depends(get_db),
 ):
-    """代表加载 Skill 到陪练场：仅 approved+is_public 可加载；heat++"""
+    """代表加载 Skill 到陪练场：仅 approved+is_public+active 可加载；heat++"""
     sk = db.query(SkillPackage).filter(
         SkillPackage.id == skill_id,
         SkillPackage.is_public == True,  # noqa: E712
         SkillPackage.audit_status == "approved",
+        SkillPackage.off_shelf_status == "active",
     ).first()
     if not sk:
-        raise BusinessError("该 Skill 不可加载（未上架或未通过审核）", code=4001)
+        raise BusinessError("该 Skill 不可加载（已下架或未通过审核）", code=4001)
     sk.heat = (sk.heat or 0) + 1
     db.commit()
     db.refresh(sk)
