@@ -39,6 +39,13 @@ MedAgent 数字员工系统是一套面向医药代表、医生与药企管理�
 | 管理后台 | web/（React + Ant Design Pro） | Skill 资产列表（含代表发布，creator_name/creator_role）、资产审核、Skill 下架（合规下架/作者申请下架双类） |
 | 代表端 | mobile/（React Native） | Skill 发布（代表发布到公共空间 → 审核）、我的 Skill（审核状态/热度/好评率/下架状态） |
 
+### 三期 M 患教专区审核流（2026-08-20）
+
+| 端 | 载体 | 已交付能力 |
+|------|------|------|
+| 管理后台 | web/（React + Ant Design Pro） | 患教内容审核（审核队列 + approve/reject，驳回必填原因） |
+| 医生端 | mobile-doctor/（React Native） | 患教分享到专区（→ 审核流）、撤回分享、患教专区浏览（仅审核通过内容） |
+
 ### 技术栈
 
 - **后端**: Python FastAPI
