@@ -1,7 +1,7 @@
 import client from './client';
 import type {
   ApiResponse, PaginatedResponse, ComplianceRule, ComplianceStats, RuleTestResult,
-  ComplianceBlock, BlocksHeatmapStats,
+  ComplianceBlock, BlocksHeatmapStats, DataAssetCategory,
 } from '../types';
 
 export const complianceAPI = {
@@ -35,4 +35,7 @@ export const complianceAPI = {
   /** 热力图聚合（区域 × 近 N 天拦截量），维度失败时后端自动降级为 service */
   blocksStats: (params?: { days?: number }) =>
     client.get<ApiResponse<BlocksHeatmapStats>>('/compliance/blocks/stats', { params }),
+
+  dataAssets: () =>
+    client.get<ApiResponse<DataAssetCategory[]>>('/compliance/data-assets'),
 };

@@ -455,3 +455,34 @@ export interface TwinRankingItem {
   added_count: number;
   approval_rate: number | null;
 }
+
+// ========== 三期 K：MAH 全景 / 数据分类 / 导出审批 ==========
+export interface MahOverview {
+  total_reps: number;
+  filing: { not_filed: number; valid: number; expired: number; pending_review: number; rejected: number };
+  training_completed_rate: number;
+  commitment_signed_rate: number;
+  compliance_pass_rate: number;
+}
+
+export interface DataAssetCategory {
+  category: string;
+  level: string;
+  tables: string[];
+}
+
+export interface ExportRequest {
+  id: number;
+  requester_id: number;
+  requester_name?: string | null;
+  export_type: string;
+  reason: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  approver_id: number | null;
+  approve_reason: string | null;
+  file_url: string | null;
+  expires_at: string | null;
+  responded_at: string | null;
+  created_at: string | null;
+  sla_overdue?: boolean;
+}

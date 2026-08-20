@@ -16,6 +16,9 @@ const ComplianceBlocks = lazy(() => import('./pages/Compliance/Blocks'));
 const ComplianceMonitor = lazy(() => import('./pages/Compliance/Monitor'));
 const CardStats = lazy(() => import('./pages/Compliance/CardStats'));
 const ConvSearch = lazy(() => import('./pages/Compliance/ConvSearch'));
+const MahOverview = lazy(() => import('./pages/Compliance/MahOverview'));
+const DataAssets = lazy(() => import('./pages/Compliance/DataAssets'));
+const DataExports = lazy(() => import('./pages/Compliance/DataExports'));
 const SpecialistMonitorList = lazy(() => import('./pages/Specialist/MonitorList'));
 const AuditList = lazy(() => import('./pages/Audit/AuditList'));
 const DoctorList = lazy(() => import('./pages/Doctor/DoctorList'));
@@ -72,6 +75,9 @@ export default function App() {
                   <Route path="compliance/monitor" element={<ComplianceMonitor />} />
                   <Route path="compliance/card-stats" element={<CardStats />} />
                   <Route path="compliance/conv-search" element={<ConvSearch />} />
+                  <Route path="compliance/mah-overview" element={<MahOverview />} />
+                  <Route path="data/assets" element={<DataAssets />} />
+                  <Route path="data/exports" element={<DataExports />} />
                   <Route path="audit/list" element={<AuditList />} />
                   <Route path="doctor/list" element={<DoctorList />} />
                   <Route path="doctor/:id" element={<DoctorDetail />} />

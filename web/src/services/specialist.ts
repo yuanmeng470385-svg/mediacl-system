@@ -1,5 +1,5 @@
 import client from './client';
-import type { ApiResponse, LiveStatus, PaginatedResponse, Specialist, SpecialistStats } from '../types';
+import type { ApiResponse, LiveStatus, MahOverview, PaginatedResponse, Specialist, SpecialistStats } from '../types';
 
 /** 创建/更新专员的可提交字段（后端白名单 SPECIALIST_UPDATE_FIELDS） */
 export type SpecialistPayload = Partial<Pick<
@@ -34,6 +34,9 @@ export const specialistAPI = {
 
   liveStatus: () =>
     client.get<ApiResponse<LiveStatus>>('/specialists/live-status'),
+
+  mahOverview: () =>
+    client.get<ApiResponse<MahOverview>>('/specialists/mah-overview'),
 };
 
 /** 专员反馈明细（后端 GET /specialists/{id}/feedback 列表项） */
