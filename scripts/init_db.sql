@@ -583,6 +583,7 @@ CREATE TABLE IF NOT EXISTS practice_sessions (
     status VARCHAR(20) NOT NULL DEFAULT 'in_progress',  -- in_progress/completed
     scores JSONB,                            -- 评分 {evidence_accuracy, objection_handling, communication_logic, overall}
     turn_count INTEGER NOT NULL DEFAULT 0,
+    transcript JSONB,                        -- 三期 N：逐轮 Q&A [{turn, role(rep|ai), content}]
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

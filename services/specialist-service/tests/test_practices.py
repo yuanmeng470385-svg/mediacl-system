@@ -353,3 +353,15 @@ def test_practice_turn_allowed_for_author_off_shelved(fresh_state, monkeypatch):
     resp = client.post("/api/v1/practices/1/turn", json={"message": "您好"},
                        headers=_token(1, "rep"))
     assert resp.json()["code"] == 0
+
+
+def test_to_dict_includes_transcript():
+    db = TestSession()
+    s = PracticeSession(id=9, representative_id=1, scenario="x", status="in_progress", turn_count=2,
+                        transcript=[{"turn": 1, "role": "rep", "content": "您好"}, {"turn": 1, "role": "ai", "content": "医生回应"}])
+    db.add(s)
+    db.commit()
+    d = s.to_dict()
+    assert d["transcript"][0]["content"] == "您好"
+    assert d["transcript"][1]["role"] == "ai"
+    db.close()

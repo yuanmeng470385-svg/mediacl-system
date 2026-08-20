@@ -14,6 +14,7 @@ class PracticeSession(Base, TimestampMixin):
     status = Column(String(20), default="in_progress")
     scores = Column(JSONB)
     turn_count = Column(Integer, default=0)
+    transcript = Column(JSONB)   # 三期 N：逐轮 Q&A [{turn, role(rep|ai), content}]
 
     def to_dict(self) -> dict:
         return {
@@ -24,6 +25,7 @@ class PracticeSession(Base, TimestampMixin):
             "status": self.status,
             "scores": self.scores,
             "turn_count": self.turn_count,
+            "transcript": self.transcript,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
