@@ -8,5 +8,7 @@ export const dataExportAPI = {
     client.post<ApiResponse<ExportRequest>>('/data-exports/requests', data),
   review: (id: number, data: { verdict: 'approve' | 'reject'; reason?: string }) =>
     client.post<ApiResponse<ExportRequest>>(`/data-exports/requests/${id}/review`, data),
-  downloadUrl: (id: number) => `/api/v1/data-exports/requests/${id}/download`,
+  /** 鉴权下载：走 axios 带 JWT（window.open 直开不带 Authorization 会 401） */
+  download: (id: number) =>
+    client.get<Blob>(`/data-exports/requests/${id}/download`, { responseType: 'blob' }),
 };

@@ -19,11 +19,39 @@ export default function DataExports() {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   const openReview = (row: ExportRequest) => {
     setCurrent(row);
     setVerdict('approve');
     setReason('');
+  };
+
+  const handleDownload = async (row: ExportRequest) => {
+    setDownloadingId(row.id);
+    try {
+      const res = await dataExportAPI.download(row.id);
+      const blob = res.data;
+      if (!(blob instanceof Blob) || blob.size === 0) {
+        message.error('下载失败，请稍后重试');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const cd = res.headers?.['content-disposition'] ?? '';
+      const m = /filename="?([^";]+)"?/.exec(cd);
+      const filename = m?.[1] || `export_${row.id}.xlsx`;
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      /* HTTP 错误已由全局拦截器统一弹 toast，此处不重复弹（避免双弹） */
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const submitReview = async () => {
@@ -78,7 +106,9 @@ export default function DataExports() {
           {r.status === 'pending' ? (
             <a onClick={() => openReview(r)}>审批</a>
           ) : r.status === 'approved' ? (
-            <a onClick={() => window.open(dataExportAPI.downloadUrl(r.id))}>下载</a>
+            <a onClick={() => handleDownload(r)}>
+              {downloadingId === r.id ? '下载中…' : '下载'}
+            </a>
           ) : (
             <span style={{ color: '#999' }}>已驳回</span>
           )}
