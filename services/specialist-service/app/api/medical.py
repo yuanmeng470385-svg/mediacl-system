@@ -174,6 +174,17 @@ async def medical_qa(
         ai_prompt=prompt, ai_response=answer,
         compliance_result=post, request_id=get_request_id() or None,
     )
+
+    # 落库供偏好引擎学习（仅 user 行，记录问题 + 引用；不落 assistant 行避免膨胀）。
+    # session_id 固定 "medical_qa" 区分分身 chat 历史（偏好学习仅取本人 user_id 行）。
+    from app.models.conversation import Conversation
+    db.add(Conversation(
+        user_id=current_user["id"], specialist_id=None,
+        session_id="medical_qa", role="user",
+        content=question, citations=citations,
+    ))
+    db.commit()
+
     return success({
         "answer": answer, "citations": citations, "disclaimer": DISCLAIMER,
         "blocked": bool(post.get("blocked")), "violations": post.get("violations", []),

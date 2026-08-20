@@ -116,10 +116,13 @@ def test_close_personalization(fresh_state):
 
 def test_learn_from_history(fresh_state):
     db = TestSession()
-    db.add(Conversation(id=1, user_id=2, specialist_id=None, session_id="s1", role="user",
-                        content="高血压指南推荐什么？", citations=[{"doc_type": "guideline"}]))
-    db.add(Conversation(id=2, user_id=2, specialist_id=None, session_id="s1", role="user",
-                        content="糖尿病如何管理？", citations=[{"doc_type": "guideline"}]))
+    # citations 用真实形状（{title,url,doc_id}，无 doc_type）；doc_type 由问题文本关键词推断
+    db.add(Conversation(id=1, user_id=2, specialist_id=None, session_id="medical_qa", role="user",
+                        content="高血压指南推荐什么？",
+                        citations=[{"title": "高血压防治指南", "url": "http://a", "doc_id": "d1"}]))
+    db.add(Conversation(id=2, user_id=2, specialist_id=None, session_id="medical_qa", role="user",
+                        content="糖尿病如何管理？",
+                        citations=[{"title": "糖尿病诊疗指南", "url": "http://b", "doc_id": "d2"}]))
     db.commit()
     db.close()
 

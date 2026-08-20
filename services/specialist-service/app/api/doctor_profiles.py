@@ -31,16 +31,19 @@ _AREA_KEYWORDS = {
 
 
 def _infer_doc_type(history: list) -> Optional[str]:
-    types = {}
+    """从问题文本关键词推断文献类型偏好（citations 无 doc_type 字段，不可靠）"""
+    counts = {}
     for row in history:
-        citations = row.citations or []
-        for c in citations:
-            t = c.get("doc_type") if isinstance(c, dict) else None
-            if t and t in VALID_DOC_TYPES:
-                types[t] = types.get(t, 0) + 1
-    if not types:
+        text = (row.content or "")
+        if any(k in text for k in ("指南", "共识", "指导原则")):
+            counts["guideline"] = counts.get("guideline", 0) + 1
+        if any(k in text for k in ("临床试验", "研究", "RCT", "随机")):
+            counts["rct"] = counts.get("rct", 0) + 1
+        if any(k in text for k in ("真实世界", "病例报告", "个案")):
+            counts["real_world"] = counts.get("real_world", 0) + 1
+    if not counts:
         return None
-    return max(types, key=types.get)
+    return max(counts, key=counts.get)
 
 
 def _infer_interest_areas(history: list) -> list:

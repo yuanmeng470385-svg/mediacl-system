@@ -2,19 +2,43 @@
 
 打桩模式同 test_answer_generator_phases.py：monkeypatch app.api.medical 模块内的
 check_compliance / write_audit_log / _retrieve / _qwen_json；get_current_user / get_db
-经 dependency_overrides 注入假值（端点不落库、不起真实数据库）。
+经 dependency_overrides 注入假值。medical_qa 生成成功后会落库一条 Conversation（供偏好
+引擎学习），故 get_db 改用内存 SQLite 真会话（BigInteger/JSONB 编译垫片），不再返回 None。
 """
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import BigInteger, create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.main import app
+from app.models.conversation import Conversation
 from shared.common.auth import get_current_user
 from shared.common.db_session import get_db
+from shared.models.base import Base
+
+
+@compiles(BigInteger, "sqlite")
+def _compile_bigint_for_sqlite(type_, compiler, **kw):
+    return "INTEGER"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_for_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+
+_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+_SessionLocal = sessionmaker(bind=_engine, autocommit=False, autoflush=False)
 
 
 @pytest.fixture
 def client():
-    app.dependency_overrides[get_db] = lambda: None
+    Base.metadata.drop_all(_engine, tables=[Conversation.__table__])
+    Base.metadata.create_all(_engine, tables=[Conversation.__table__])
+    app.dependency_overrides[get_db] = lambda: _SessionLocal()
     app.dependency_overrides[get_current_user] = lambda: {"id": 7, "role": "rep"}
     yield TestClient(app)
     app.dependency_overrides.pop(get_db, None)
