@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ProTable, ModalForm, ProFormText } from '@ant-design/pro-components';
+import { ProTable, ModalForm, ProFormText, ProFormSwitch } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { App, Button, Descriptions, Drawer, Input, Radio, Space, Tag, Typography } from 'antd';
 import { skillAPI } from '../../services/skill';
@@ -111,6 +111,8 @@ export default function SkillList() {
                 reply_length: values.reply_length,
                 opening_mode: values.opening_mode,
               },
+              // 官方模版默认上架代表侧广场（后端 create 已支持 is_public；审核通过后 approved+is_public 才生效）
+              is_public: values.is_public !== false,
             });
             message.success('已创建，待审核');
             setCreateOpen(false);
@@ -128,6 +130,7 @@ export default function SkillList() {
         <ProFormText name="formal_level" label="正式程度" initialValue="标准学术" />
         <ProFormText name="reply_length" label="回复长度" initialValue="标准" />
         <ProFormText name="opening_mode" label="开场白模式" initialValue="直切主题" />
+        <ProFormSwitch name="is_public" label="上架代表广场" initialValue tooltip="开启后审核通过即上架广场并可在陪练场加载" />
       </ModalForm>
       <Drawer title="Skill 审核" width={520} open={!!current} onClose={() => setCurrent(null)} destroyOnHidden>
         {current && (
