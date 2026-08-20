@@ -387,3 +387,55 @@ def test_turn_persists_transcript(fresh_state, monkeypatch):
         {"turn": 1, "role": "ai", "content": "医生：请介绍下这款药。"},
     ]
     db.close()
+
+
+# ============ 三期 N Task 3：LLM 深度评分 + 失败降级基线 ============
+
+def test_complete_uses_llm_scores(fresh_state, monkeypatch):
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="x",
+                           status="in_progress", turn_count=2,
+                           transcript=[{"turn": 1, "role": "rep", "content": "您好"},
+                                       {"turn": 1, "role": "ai", "content": "医生回应"},
+                                       {"turn": 2, "role": "rep", "content": "这款药降压平稳"},
+                                       {"turn": 2, "role": "ai", "content": "医生再回应"}]))
+    db.commit()
+    db.close()
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        captured = {"messages": messages}
+        captured["user"] = messages[1]["content"]
+        return {"content": '{"evidence_accuracy":0.8,"objection_handling":0.7,"communication_logic":0.9,'
+                           '"overall":0.8,"per_turn":[{"turn":1,"evidence_accuracy":0.8,"objection_handling":0.7,'
+                           '"communication_logic":0.9,"feedback":"开场清晰，可加强循证引用"}],'
+                           '"summary":"整体流畅，注意引用数据"}', "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    scores = body["data"]["scores"]
+    assert scores["overall"] == 0.8
+    assert scores["evidence_accuracy"] == 0.8
+    assert len(scores["per_turn"]) == 1
+    assert scores["per_turn"][0]["feedback"] == "开场清晰，可加强循证引用"
+    assert scores["summary"] == "整体流畅，注意引用数据"
+
+
+def test_complete_falls_back_on_llm_error(fresh_state, monkeypatch):
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="x",
+                           status="in_progress", turn_count=2,
+                           transcript=[{"turn": 1, "role": "rep", "content": "您好"},
+                                       {"turn": 1, "role": "ai", "content": "医生回应"}]))
+    db.commit()
+    db.close()
+    from app.services import qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "not json", "usage": {}})
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    scores = body["data"]["scores"]
+    assert scores["overall"] == round(min(0.9, 0.45 + 2 * 0.1), 2)  # 确定性基线
+    assert body["data"]["status"] == "completed"
