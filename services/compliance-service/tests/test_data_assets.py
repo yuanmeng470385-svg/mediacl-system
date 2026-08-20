@@ -79,4 +79,6 @@ def test_data_assets_returns_three_categories(fresh_state):
     assert {"个人信息", "业务数据", "合规留存数据"} <= cats
     personal = next(c for c in body["data"] if c["category"] == "个人信息")
     assert "users" in personal["tables"]
+    assert "representative_qualifications" in personal["tables"]
+    assert "doctor_certifications" in personal["tables"]
     assert personal["level"] == "敏感"

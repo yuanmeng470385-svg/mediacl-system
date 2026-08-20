@@ -8,7 +8,7 @@ from shared.common.response import success
 router = APIRouter(prefix="/api/v1/compliance", tags=["data-assets"])
 
 ASSETS = [
-    {"category": "个人信息", "level": "敏感", "tables": ["users", "doctor_profiles", "doctor_twin_subscriptions", "doctor_consents"]},
+    {"category": "个人信息", "level": "敏感", "tables": ["users", "doctor_profiles", "doctor_twin_subscriptions", "doctor_consents", "representative_qualifications", "doctor_certifications"]},
     {"category": "业务数据", "level": "内部", "tables": ["conversations", "academic_cards", "card_push_records", "edu_content_records", "visit_records"]},
     {"category": "合规留存数据", "level": "审计留存", "tables": ["audit_logs", "compliance_blocks", "compliance_rules", "skill_audits"]},
 ]

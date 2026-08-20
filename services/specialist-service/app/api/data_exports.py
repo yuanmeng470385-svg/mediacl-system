@@ -32,6 +32,14 @@ DOWNLOAD_EXPIRE_DAYS = 7
 ROW_CAP = 50000
 
 
+def _sanitize_cell(value):
+    """防止 xlsx 公式注入：openpyxl 会把以 = + - @ \\t \\r 开头的字符串当作公式，
+    导出文件在 Excel 打开时会执行公式（如 =HYPERLINK(...)/=cmd|...）。加前导单引号强制存为文本。"""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def _build_conversations_xlsx(request_id: int, rows: list, out_dir: str = os.path.join("logs", "exports")) -> str:
     """把对话明细行写入 xlsx，返回文件路径。rows 为 dict 列表（已脱敏/受限字段）。"""
     from openpyxl import Workbook
@@ -42,8 +50,10 @@ def _build_conversations_xlsx(request_id: int, rows: list, out_dir: str = os.pat
     ws.append(["id", "user_id", "specialist_id", "session_id", "role", "content", "blocked", "created_at"])
     for r in rows:
         ws.append([
-            r.get("id"), r.get("user_id"), r.get("specialist_id"), r.get("session_id"),
-            r.get("role"), r.get("content"), r.get("blocked"), r.get("created_at"),
+            _sanitize_cell(r.get("id")), _sanitize_cell(r.get("user_id")),
+            _sanitize_cell(r.get("specialist_id")), _sanitize_cell(r.get("session_id")),
+            _sanitize_cell(r.get("role")), _sanitize_cell(r.get("content")),
+            _sanitize_cell(r.get("blocked")), _sanitize_cell(r.get("created_at")),
         ])
     path = os.path.join(out_dir, f"export_{request_id}.xlsx")
     wb.save(path)

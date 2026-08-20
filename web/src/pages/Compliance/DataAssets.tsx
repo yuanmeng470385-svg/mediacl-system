@@ -4,9 +4,9 @@ import { complianceAPI } from '../../services/compliance';
 import type { DataAssetCategory } from '../../types';
 
 const LEVEL_MAP: Record<string, { color: string; text: string }> = {
-  sensitive: { color: 'red', text: '敏感' },
-  internal: { color: 'orange', text: '内部' },
-  public: { color: 'green', text: '公开' },
+  敏感: { color: 'red', text: '敏感' },
+  内部: { color: 'orange', text: '内部' },
+  审计留存: { color: 'blue', text: '审计留存' },
 };
 
 export default function DataAssets() {

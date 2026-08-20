@@ -88,10 +88,15 @@ export default function DataExports() {
       title: '状态', dataIndex: 'status', width: 140,
       valueEnum: { pending: '待审批', approved: '已通过', rejected: '已驳回' },
       render: (_, r) => {
-        if (r.status === 'pending' && r.sla_overdue) {
-          return <Tag color="red">超 SLA</Tag>;
-        }
         const m = STATUS_MAP[r.status] || { color: 'default', text: r.status };
+        if (r.status === 'pending' && r.sla_overdue) {
+          return (
+            <>
+              <Tag color={m.color}>{m.text}</Tag>
+              <Tag color="red">超 SLA</Tag>
+            </>
+          );
+        }
         return <Tag color={m.color}>{m.text}</Tag>;
       },
     },

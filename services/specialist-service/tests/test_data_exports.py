@@ -135,6 +135,24 @@ def test_list_exports_filters_status(fresh_state):
     assert body["data"]["items"][0]["requester_name"] == "管理员"
 
 
+def test_build_conversations_xlsx_escapes_formulas(tmp_path):
+    from openpyxl import load_workbook
+    from app.api.data_exports import _build_conversations_xlsx
+    path = _build_conversations_xlsx(
+        99,
+        [{"id": 1, "user_id": 1, "specialist_id": 1, "session_id": "s",
+          "role": "user", "content": "=HYPERLINK(\"http://evil\")", "blocked": False, "created_at": None}],
+        str(tmp_path),
+    )
+    wb = load_workbook(path)
+    ws = wb.active
+    content = ws.cell(row=2, column=6).value
+    assert isinstance(content, str)
+    assert content.startswith("'")
+    assert content == "'=HYPERLINK(\"http://evil\")"
+    wb.close()
+
+
 def test_review_approve_generates_xlsx(fresh_state, monkeypatch, tmp_path):
     db = TestSession()
     db.add(ExportRequest(id=1, requester_id=2, export_type="conversations", reason="监管自查", status="pending"))
