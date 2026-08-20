@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool
 from shared.common.auth import create_token
 from shared.common.db_session import get_db
 from shared.models.base import Base
-from shared.models.skill import SkillAudit, SkillPackage
+from shared.models.skill import SkillAudit, SkillPackage, SkillOffShelf
 from shared.models.user import User
 
 import app.api.skill_packages as sp_api
@@ -60,7 +60,7 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, SkillPackage.__table__, SkillAudit.__table__]
+    tables = [User.__table__, SkillPackage.__table__, SkillAudit.__table__, SkillOffShelf.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -177,3 +177,24 @@ def test_load_increments_heat(fresh_state):
 def test_plaza_rejects_admin():
     resp = client.get("/api/v1/skill-packages/public", headers=_token(2, "admin"))
     assert resp.status_code == 403
+
+
+def test_to_dict_hides_content_weights_by_default():
+    db = TestSession()
+    sk = SkillPackage(
+        id=99, name="测试", creator_id=1, description="心内科", content="话术素材",
+        is_public=True, is_anonymous=False, audit_status="pending",
+        style_tags=["严谨"], heat=0, skill_weights={"formal_level": "标准学术"},
+        off_shelf_status="active",
+    )
+    db.add(sk)
+    db.commit()
+    d = sk.to_dict()
+    assert d["description"] == "心内科"
+    assert d["off_shelf_status"] == "active"
+    assert "content" not in d
+    assert "skill_weights" not in d
+    d2 = sk.to_dict(expose_weights=True)
+    assert d2["content"] == "话术素材"
+    assert d2["skill_weights"] == {"formal_level": "标准学术"}
+    db.close()

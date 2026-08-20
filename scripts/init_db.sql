@@ -539,11 +539,19 @@ CREATE TABLE IF NOT EXISTS skill_packages (
     heat INTEGER NOT NULL DEFAULT 0,          -- 加载热度
     approval_rate DECIMAL(5,4),              -- 好评率（陪练评分汇总）
     skill_weights JSONB,       -- 沟通风格参数（正式度/回复长度/开场白）—— 任何 API 不返回
+    description VARCHAR(200),      -- 治疗领域/一句话说明（元数据，公共列表展示）
+    content TEXT,                  -- 话术素材（内容，仅审核人受控查看）
+    off_shelf_status VARCHAR(20) NOT NULL DEFAULT 'active',  -- active/off_shelved
+    off_shelf_reason VARCHAR(500),
+    off_shelf_type VARCHAR(20),    -- compliance/author
+    off_shelf_by BIGINT REFERENCES users(id),
+    off_shelf_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_sp_public ON skill_packages(is_public, audit_status);
 CREATE INDEX IF NOT EXISTS idx_sp_tags ON skill_packages(style_tags);
+CREATE INDEX IF NOT EXISTS idx_sp_off ON skill_packages(off_shelf_status);
 
 CREATE TABLE IF NOT EXISTS skill_audits (
     id BIGSERIAL PRIMARY KEY,
@@ -555,6 +563,17 @@ CREATE TABLE IF NOT EXISTS skill_audits (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_sa_skill ON skill_audits(skill_id);
+
+CREATE TABLE IF NOT EXISTS skill_off_shelves (
+    id BIGSERIAL PRIMARY KEY,
+    skill_id BIGINT NOT NULL REFERENCES skill_packages(id),
+    operator_id BIGINT NOT NULL REFERENCES users(id),
+    off_shelf_type VARCHAR(20) NOT NULL,   -- compliance/author
+    reason VARCHAR(500),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sos_skill ON skill_off_shelves(skill_id);
 
 CREATE TABLE IF NOT EXISTS practice_sessions (
     id BIGSERIAL PRIMARY KEY,
