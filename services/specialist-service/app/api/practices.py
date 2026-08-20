@@ -91,8 +91,8 @@ async def create_session(
     skill = None
     if skill_id:
         skill = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
-        if not skill or skill.audit_status != "approved" or not skill.is_public:
-            raise BusinessError("Skill 不可用（未上架或未通过审核）", code=4001)
+        if not skill or skill.audit_status != "approved" or not skill.is_public or skill.off_shelf_status != "active":
+            raise BusinessError("Skill 不可用（未上架、未通过审核或已下架）", code=4001)
     session = PracticeSession(
         representative_id=current_user["id"], skill_id=skill_id,
         scenario=scenario, status="in_progress", turn_count=0,
@@ -121,6 +121,11 @@ async def practice_turn(
     if session.status != "in_progress":
         raise BusinessError("会话已结束", code=4001)
 
+    skill = db.query(SkillPackage).filter(SkillPackage.id == session.skill_id).first() if session.skill_id else None
+    if skill and skill.off_shelf_status == "off_shelved" and skill.off_shelf_type == "compliance":
+        # 3.6(3) 合规下架：已加载该 Skill 的陪练场同步禁用并提示原因
+        raise BusinessError(f"该 Skill 因合规原因已下架：{skill.off_shelf_reason or '违规内容'}，陪练已停用", code=4001)
+
     try:
         comp = await check_compliance(message)
     except Exception as exc:
@@ -131,7 +136,6 @@ async def practice_turn(
         rule_code = violations[0].get("rule_code") if violations else "R999"
         raise ParamError(f"内容未通过合规检查：{rule_code}")
 
-    skill = db.query(SkillPackage).filter(SkillPackage.id == session.skill_id).first() if session.skill_id else None
     objections = _approved_objections(db, session.scenario)
     ai_msg = await _doctor_reply(message, skill, session.scenario, [], objections)
     session.turn_count = (session.turn_count or 0) + 1

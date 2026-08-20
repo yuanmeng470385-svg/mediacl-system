@@ -2,6 +2,7 @@
 医学部创建 → 审核（受控查看 skill_weights + 访问审计）→ approved+is_public 上架广场。
 隐私边界（附录B-1）：skill_weights 任何 API 不返回；公共广场仅元数据。"""
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -12,7 +13,7 @@ from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
-from shared.models.skill import SkillAudit, SkillPackage
+from shared.models.skill import SkillAudit, SkillOffShelf, SkillPackage
 from shared.models.user import User
 
 from app.services.audit_client import write_audit_log
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api/v1/skill-packages", tags=["skill-packages"])
 
 SKILL_ADMIN_ROLES = ("admin", "manager", "compliance", "medical")
 VALID_AUDIT = ("pending", "approved", "rejected")
+VALID_OFF_SHELF_TYPE = ("compliance", "author")
 
 
 def _validate_payload(payload: dict) -> dict:
@@ -271,6 +273,51 @@ async def review_skill(
         resource_type="skill_package",
         resource_id=str(sk.id),
         after_value={"audit_status": sk.audit_status, "audit_reason": sk.audit_reason},
+        request_id=get_request_id() or None,
+    )
+    return success(sk.to_dict())
+
+
+@router.post("/{skill_id}/off-shelf")
+async def off_shelf_skill(
+    skill_id: int,
+    payload: dict,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """三期 J：Skill 下架（3.6(3)）。
+    compliance=合规下架（已加载陪练禁用）；author=作者申请（已加载不受影响、新用户不可加载）。
+    下架记录存档 skill_off_shelves + 审计。"""
+    sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
+    if not sk:
+        raise BusinessError("Skill 不存在", code=4001)
+    if sk.off_shelf_status != "active":
+        raise BusinessError("该 Skill 已下架", code=4001)
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    off_type = payload.get("type")
+    if off_type not in VALID_OFF_SHELF_TYPE:
+        raise ParamError("type 必须是 compliance 或 author")
+    reason = (payload.get("reason") or "").strip() if isinstance(payload.get("reason"), str) else ""
+    if not reason:
+        raise ParamError("下架原因必填")
+    if len(reason) > 500:
+        raise ParamError("原因长度不能超过 500 字符")
+    sk.off_shelf_status = "off_shelved"
+    sk.off_shelf_reason = reason
+    sk.off_shelf_type = off_type
+    sk.off_shelf_by = current_user["id"]
+    sk.off_shelf_at = datetime.utcnow()
+    db.add(SkillOffShelf(
+        skill_id=sk.id, operator_id=current_user["id"],
+        off_shelf_type=off_type, reason=reason,
+    ))
+    db.commit()
+    db.refresh(sk)
+    await write_audit_log(
+        action="skill_off_shelf", user_id=current_user["id"],
+        resource_type="skill_package", resource_id=str(sk.id),
+        after_value={"off_shelf_status": sk.off_shelf_status, "off_shelf_type": off_type, "reason": reason},
         request_id=get_request_id() or None,
     )
     return success(sk.to_dict())

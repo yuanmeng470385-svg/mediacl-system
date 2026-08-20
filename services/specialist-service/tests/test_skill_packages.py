@@ -328,3 +328,46 @@ def test_load_excludes_off_shelved(fresh_state):
     resp = client.post("/api/v1/skill-packages/1/load", json={}, headers=_token(1, "rep"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+def test_off_shelf_compliance_fields_and_record(fresh_state):
+    _add_skill(id=1)
+    resp = client.post("/api/v1/skill-packages/1/off-shelf", json={"type": "compliance", "reason": "含敏感信息"},
+                       headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["off_shelf_status"] == "off_shelved"
+    assert data["off_shelf_type"] == "compliance"
+    assert data["off_shelf_reason"] == "含敏感信息"
+    assert data["off_shelf_by"] == 2
+    assert data["off_shelf_at"] is not None
+    fresh_state.assert_awaited_once()
+    db = TestSession()
+    rec = db.query(SkillOffShelf).filter(SkillOffShelf.skill_id == 1).first()
+    assert rec is not None and rec.off_shelf_type == "compliance"
+    assert rec.operator_id == 2
+    db.close()
+
+
+def test_off_shelf_requires_reason(fresh_state):
+    _add_skill(id=1)
+    resp = client.post("/api/v1/skill-packages/1/off-shelf", json={"type": "compliance"},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_off_shelf_requires_type(fresh_state):
+    _add_skill(id=1)
+    resp = client.post("/api/v1/skill-packages/1/off-shelf", json={"reason": "下架"},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 400
+
+
+def test_off_shelf_twice_4001(fresh_state):
+    _add_skill(id=1, off_shelf_status="off_shelved", off_shelf_type="author", off_shelf_reason="作者申请")
+    resp = client.post("/api/v1/skill-packages/1/off-shelf", json={"type": "compliance", "reason": "再下架"},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001

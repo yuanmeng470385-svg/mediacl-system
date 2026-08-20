@@ -306,3 +306,50 @@ def test_progress_empty(fresh_state):
     assert body["data"]["total_sessions"] == 0
     assert body["data"]["avg_overall"] == 0.0
     assert body["data"]["trend"] == []
+
+
+def test_create_session_rejects_off_shelved(fresh_state):
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="已下架", creator_id=3, is_public=True,
+                        audit_status="approved", skill_weights={},
+                        off_shelf_status="off_shelved", off_shelf_type="author", off_shelf_reason="作者申请"))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/practices", json={"skill_id": 1, "scenario": "心内科推广"},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_practice_turn_disabled_for_compliance_off_shelved(fresh_state, monkeypatch):
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="违规下架", creator_id=3, is_public=True,
+                        audit_status="approved", skill_weights={},
+                        off_shelf_status="off_shelved", off_shelf_type="compliance", off_shelf_reason="含敏感信息"))
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=1, scenario="x",
+                           status="in_progress", turn_count=1))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好"},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+    assert "含敏感信息" in resp.json()["message"]
+
+
+def test_practice_turn_allowed_for_author_off_shelved(fresh_state, monkeypatch):
+    # 作者申请下架：已加载用户不受影响（3.6(3)）
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="作者下架", creator_id=1, is_public=True,
+                        audit_status="approved", skill_weights={},
+                        off_shelf_status="off_shelved", off_shelf_type="author", off_shelf_reason="不想发了"))
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=1, scenario="x",
+                           status="in_progress", turn_count=1))
+    db.commit()
+    db.close()
+    from app.services import qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "医生：请介绍下。", "usage": {}})
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
