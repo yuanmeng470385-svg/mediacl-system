@@ -121,6 +121,10 @@ export default function PatientEduScreen() {
   }
 
   const content = card?.content;
+  const canWithdraw =
+    card?.audit_status === 'pending' ||
+    card?.audit_status === 'rejected' ||
+    card?.audit_status === 'approved';
 
   return (
     <View style={styles.container}>
@@ -200,7 +204,7 @@ export default function PatientEduScreen() {
               </TouchableOpacity>
             )}
 
-            {(card.audit_status === 'pending' || card.audit_status === 'rejected') && (
+            {canWithdraw && (
               <TouchableOpacity
                 style={[styles.unpublishBtn, publishing && styles.btnDisabled]}
                 onPress={handleUnpublish}
