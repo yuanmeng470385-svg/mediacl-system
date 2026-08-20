@@ -145,6 +145,12 @@ def test_complete_scores(fresh_state):
     assert body["code"] == 0
     assert body["data"]["status"] == "completed"
     assert body["data"]["scores"]["overall"] > 0
+    # 4.5 后半段：逐句/逐轮反馈 per_turn 数组按轮数生成
+    per_turn = body["data"]["scores"]["per_turn"]
+    assert len(per_turn) == 3
+    assert "evidence_accuracy" in per_turn[0]
+    assert "objection_handling" in per_turn[0]
+    assert "communication_logic" in per_turn[0]
 
 
 # ============ 异议话术库（3.2(5)，终审修复 #3） ============
@@ -264,3 +270,39 @@ def test_turn_no_objection_falls_back(fresh_state, monkeypatch):
     assert resp.json()["code"] == 0
     user_msg = captured["messages"][1]["content"]
     assert "医生异议：优势在哪？" not in user_msg
+
+
+# ============ 进步曲线（4.5 后半段，终审修复 #4） ============
+
+def test_progress_aggregates_completed(fresh_state):
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="x",
+                           status="completed", turn_count=2,
+                           scores={"overall": 0.7, "per_turn": []}))
+    db.add(PracticeSession(id=2, representative_id=1, skill_id=None, scenario="y",
+                           status="completed", turn_count=3,
+                           scores={"overall": 0.8, "per_turn": []}))
+    db.add(PracticeSession(id=3, representative_id=1, skill_id=None, scenario="z",
+                           status="in_progress", turn_count=1, scores=None))
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/practices/progress", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["total_sessions"] == 2
+    assert data["avg_overall"] == 0.75
+    assert len(data["trend"]) == 2
+    assert data["trend"][0]["session_id"] == 1
+    assert data["trend"][0]["overall"] == 0.7
+    assert data["trend"][1]["session_id"] == 2
+
+
+def test_progress_empty(fresh_state):
+    resp = client.get("/api/v1/practices/progress", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total_sessions"] == 0
+    assert body["data"]["avg_overall"] == 0.0
+    assert body["data"]["trend"] == []

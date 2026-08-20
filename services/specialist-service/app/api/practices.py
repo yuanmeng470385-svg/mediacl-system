@@ -151,13 +151,22 @@ async def complete_session(
         raise BusinessError("陪练会话不存在", code=4001)
     if session.status != "in_progress":
         raise BusinessError("会话已结束", code=4001)
-    # 简化评分：基于轮数与确定性基线（完整 LLM 评分见 Task 4 优化）
+    # 简化评分：基于轮数与确定性基线（完整 LLM 评分挂账）；per_turn 逐句/逐轮反馈（4.5 后半段）
     turns = session.turn_count or 0
+    per_turn = [
+        {
+            "evidence_accuracy": round(min(0.9, 0.5 + i * 0.1), 2),
+            "objection_handling": round(min(0.9, 0.4 + i * 0.1), 2),
+            "communication_logic": round(min(0.9, 0.5 + i * 0.1), 2),
+        }
+        for i in range(1, turns + 1)
+    ]
     scores = {
         "evidence_accuracy": round(min(0.9, 0.5 + turns * 0.1), 2),
         "objection_handling": round(min(0.9, 0.4 + turns * 0.1), 2),
         "communication_logic": round(min(0.9, 0.5 + turns * 0.1), 2),
         "overall": round(min(0.9, 0.45 + turns * 0.1), 2),
+        "per_turn": per_turn,
     }
     session.status = "completed"
     session.scores = scores
@@ -186,6 +195,41 @@ async def list_sessions(
     total = q.count()
     rows = q.order_by(PracticeSession.id.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
+
+
+@router.get("/progress")
+async def practice_progress(
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """进步曲线（4.5 后半段）：聚合本人已完成会话的 scores，返回总场次/平均分/趋势。"""
+    rows = (
+        db.query(PracticeSession)
+        .filter(
+            PracticeSession.representative_id == current_user["id"],
+            PracticeSession.status == "completed",
+        )
+        .order_by(PracticeSession.id.asc())
+        .all()
+    )
+    overalls = []
+    trend = []
+    for s in rows:
+        scores = s.scores or {}
+        overall = scores.get("overall")
+        if isinstance(overall, (int, float)):
+            overalls.append(overall)
+        trend.append({
+            "session_id": s.id,
+            "date": s.created_at.isoformat() if s.created_at else None,
+            "overall": overall,
+        })
+    avg_overall = round(sum(overalls) / len(overalls), 2) if overalls else 0.0
+    return success({
+        "total_sessions": len(rows),
+        "avg_overall": avg_overall,
+        "trend": trend,
+    })
 
 
 def _validate_objection_payload(payload: dict) -> dict:
