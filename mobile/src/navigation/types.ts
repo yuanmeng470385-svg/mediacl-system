@@ -56,6 +56,9 @@ export type RootStackParamList = {
   PracticeChat: { sessionId: number };
   Plaza: undefined;
   TwinManage: undefined;
+  // Skill 生态（三期 J）
+  SkillRelease: undefined;
+  MySkillList: undefined;
 };
 
 // ========== 路由参数类型导出 ==========

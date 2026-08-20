@@ -44,4 +44,24 @@ describe('practice/plaza/twin API', () => {
     expect(url).toContain('/api/v1/specialists/style-test');
     expect(JSON.parse(init.body)).toEqual({ answers: [1, 2, 0, 1, 2] });
   });
+
+  it('releaseSkill 发 POST /api/v1/skill-packages/release', async () => {
+    await plazaAPI.releaseSkill({
+      name: '亲和力型', description: '心内科', content: '话术素材',
+      style_tags: ['亲和力'], skill_weights: { formal_level: '标准学术' }, is_anonymous: true,
+    });
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/release');
+    expect(JSON.parse(init.body)).toEqual({
+      name: '亲和力型', description: '心内科', content: '话术素材',
+      style_tags: ['亲和力'], skill_weights: { formal_level: '标准学术' }, is_anonymous: true,
+    });
+  });
+
+  it('mySkills 发 GET /api/v1/skill-packages/mine', async () => {
+    await plazaAPI.mySkills();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/mine');
+    expect(init.method).toBe('GET');
+  });
 });

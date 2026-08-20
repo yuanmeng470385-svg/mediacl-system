@@ -30,6 +30,8 @@ const menuItems = [
   { icon: 'robot-outline', label: 'AI 陪练', route: 'PracticeList' as const },
   { icon: 'storefront-outline', label: 'Skill 广场', route: 'Plaza' as const },
   { icon: 'account-tie-outline', label: '分身管理', route: 'TwinManage' as const },
+  { icon: 'creation-outline', label: 'Skill 发布', route: 'SkillRelease' as const },
+  { icon: 'clipboard-list-outline', label: '我的 Skill', route: 'MySkillList' as const },
   // 「我的统计」已移除：无对应页面，此前误路由到 Settings
   { icon: 'bell-outline', label: '通知设置', route: 'NotificationSettings' as const },
   { icon: 'shield-check-outline', label: '合规手册', route: 'ComplianceManual' as const },

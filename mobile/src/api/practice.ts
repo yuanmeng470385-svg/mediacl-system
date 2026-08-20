@@ -20,6 +20,12 @@ export const plazaAPI = {
     apiClient.request<any>('GET', '/api/v1/skill-packages/public', params),
   load: (skillId: number) =>
     apiClient.request<any>('POST', `/api/v1/skill-packages/${skillId}/load`, {}),
+  releaseSkill: (payload: {
+    name: string; description: string; content: string;
+    style_tags?: string[]; skill_weights: Record<string, string>; is_anonymous?: boolean;
+  }) => apiClient.request<any>('POST', '/api/v1/skill-packages/release', payload),
+  mySkills: (params?: { page?: number; page_size?: number }) =>
+    apiClient.request<any>('GET', '/api/v1/skill-packages/mine', params),
 };
 
 export const twinAPI = {

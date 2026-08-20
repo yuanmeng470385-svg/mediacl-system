@@ -45,6 +45,8 @@ import PracticeListScreen from '../screens/Practice/PracticeListScreen';
 import PracticeChatScreen from '../screens/Practice/PracticeChatScreen';
 import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import TwinManageScreen from '../screens/Twin/TwinManageScreen';
+import SkillReleaseScreen from '../screens/Skill/SkillReleaseScreen';
+import MySkillListScreen from '../screens/Skill/MySkillListScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -214,6 +216,9 @@ export default function AppNavigator() {
             <Stack.Screen name="PracticeChat" component={PracticeChatScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="Plaza" component={PlazaScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="TwinManage" component={TwinManageScreen} options={{ animation: 'slide_from_right' }} />
+            {/* Skill 生态（三期 J） */}
+            <Stack.Screen name="SkillRelease" component={SkillReleaseScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="MySkillList" component={MySkillListScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen
