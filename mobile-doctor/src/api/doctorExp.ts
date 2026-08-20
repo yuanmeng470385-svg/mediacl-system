@@ -59,6 +59,10 @@ export const doctorExpAPI = {
   unpublishEdu: (recordId: number) =>
     apiClient.request<EduCard>('POST', `/api/v1/patient-edu/${recordId}/unpublish`, {}),
 
+  /** 患教专区（仅 shared + approved，按 id 倒序分页） */
+  zoneList: () =>
+    apiClient.request<PaginatedResponse<EduCard>>('GET', '/api/v1/patient-edu/zone'),
+
   /** 官方公共数字员工广场（is_official + active，item 带 added_count） */
   plazaList: () =>
     apiClient.request<PaginatedResponse<PlazaTwin>>('GET', '/api/v1/doctor-plaza'),

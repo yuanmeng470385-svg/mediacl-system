@@ -70,4 +70,11 @@ describe('doctorExp API', () => {
     expect(url).toContain('/api/v1/patient-edu/1/unpublish');
     expect(init.method).toBe('POST');
   });
+
+  it('zoneList 发 GET /api/v1/patient-edu/zone', async () => {
+    await doctorExpAPI.zoneList();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/patient-edu/zone');
+    expect(init.method).toBe('GET');
+  });
 });

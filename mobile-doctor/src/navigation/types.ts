@@ -34,6 +34,8 @@ export type RootStackParamList = {
   DoctorPlaza: undefined;
   // 患教工具
   PatientEdu: undefined;
+  // 患教专区（三期 M：仅 shared + approved 内容）
+  PatientEduZone: undefined;
   // 收藏历史
   Favorites: undefined;
 };

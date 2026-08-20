@@ -15,11 +15,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon, { FeatureIcons } from '../../components/Icon';
 import { doctorExpAPI } from '../../api/doctorExp';
 import type { PatientEduTemplate, EduCard } from '../../types';
+import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 /** 疾病领域徽标色 */
 const AREA_BADGE: Record<string, { bg: string; color: string }> = {
@@ -32,6 +36,7 @@ const AREA_BADGE: Record<string, { bg: string; color: string }> = {
 const AREA_BADGE_FALLBACK = { bg: Colors.backgroundAlt, color: Colors.textSecondary };
 
 export default function PatientEduScreen() {
+  const navigation = useNavigation<Nav>();
   const [templates, setTemplates] = useState<PatientEduTemplate[]>([]);
   const [card, setCard] = useState<EduCard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -129,7 +134,17 @@ export default function PatientEduScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>患教工具</Text>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.headerTitle}>患教工具</Text>
+          <TouchableOpacity
+            style={styles.zoneEntry}
+            onPress={() => navigation.navigate('PatientEduZone')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.zoneEntryText}>患教专区</Text>
+            <Icon name="chevron-right" size={16} color={Colors.textWhite} />
+          </TouchableOpacity>
+        </View>
         <Text style={styles.headerSubtitle}>选择模板生成患者教育卡片</Text>
       </View>
 
@@ -292,7 +307,19 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     paddingBottom: Spacing.xl,
   },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { color: Colors.textWhite, fontSize: FontSize.xl, fontWeight: '700' },
+  zoneEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: 6,
+    paddingLeft: Spacing.md,
+    paddingRight: Spacing.xs,
+    borderRadius: BorderRadius.full,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  zoneEntryText: { color: Colors.textWhite, fontSize: FontSize.sm, fontWeight: '600' },
   headerSubtitle: {
     color: 'rgba(255,255,255,0.7)',
     fontSize: FontSize.sm,

@@ -25,6 +25,7 @@ import CardDetailScreen from '../screens/Inbox/CardDetailScreen';
 import PreferenceScreen from '../screens/Preferences/PreferenceScreen';
 import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
+import PatientEduZoneScreen from '../screens/PatientEdu/PatientEduZoneScreen';
 import FavoritesScreen from '../screens/Profile/FavoritesScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -195,6 +196,11 @@ export default function AppNavigator() {
             <Stack.Screen
               name="PatientEdu"
               component={PatientEduScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="PatientEduZone"
+              component={PatientEduZoneScreen}
               options={{ animation: 'slide_from_right' }}
             />
             <Stack.Screen
