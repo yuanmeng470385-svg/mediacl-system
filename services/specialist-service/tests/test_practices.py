@@ -365,3 +365,25 @@ def test_to_dict_includes_transcript():
     assert d["transcript"][0]["content"] == "您好"
     assert d["transcript"][1]["role"] == "ai"
     db.close()
+
+
+def test_turn_persists_transcript(fresh_state, monkeypatch):
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="x",
+                           status="in_progress", turn_count=0, transcript=[]))
+    db.commit()
+    db.close()
+    from app.services import qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "医生：请介绍下这款药。", "usage": {}})
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    db = TestSession()
+    s = db.query(PracticeSession).filter(PracticeSession.id == 1).first()
+    assert s.turn_count == 1
+    assert s.transcript == [
+        {"turn": 1, "role": "rep", "content": "您好"},
+        {"turn": 1, "role": "ai", "content": "医生：请介绍下这款药。"},
+    ]
+    db.close()

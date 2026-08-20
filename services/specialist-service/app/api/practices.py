@@ -138,7 +138,12 @@ async def practice_turn(
 
     objections = _approved_objections(db, session.scenario)
     ai_msg = await _doctor_reply(message, skill, session.scenario, [], objections)
-    session.turn_count = (session.turn_count or 0) + 1
+    transcript = list(session.transcript or [])
+    turn = (session.turn_count or 0) + 1
+    transcript.append({"turn": turn, "role": "rep", "content": message})
+    transcript.append({"turn": turn, "role": "ai", "content": ai_msg})
+    session.transcript = transcript
+    session.turn_count = turn
     db.commit()
     db.refresh(session)
     return success({"ai_message": ai_msg, "turn_count": session.turn_count})
