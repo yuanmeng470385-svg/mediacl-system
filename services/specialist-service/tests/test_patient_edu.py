@@ -257,3 +257,21 @@ def test_review_not_pending_4001(fresh_state):
                        headers=_token(3, "medical"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+def test_zone_lists_approved_shared(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="approved")
+    _add_record(id=2, visibility="shared", audit_status="pending")
+    _add_record(id=3, visibility="private", audit_status=None)
+    resp = client.get("/api/v1/patient-edu/zone", headers=_token(2, "doctor"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["id"] == 1
+    assert body["data"]["items"][0]["content"]["title"] == "高血压患教"
+
+
+def test_zone_requires_doctor(fresh_state):
+    resp = client.get("/api/v1/patient-edu/zone", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000

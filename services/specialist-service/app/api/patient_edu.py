@@ -193,6 +193,27 @@ async def review_edu(
     return success(rec.to_dict())
 
 
+@router.get("/zone")
+async def edu_zone(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(require_roles("doctor")),
+    db: Session = Depends(get_db),
+):
+    """三期 M：患教专区——仅 shared + approved 内容可见（审核通过后专区可见）。"""
+    p = PaginationParams(page=page, page_size=page_size)
+    q = (
+        db.query(EduContentRecord)
+        .filter(
+            EduContentRecord.visibility == "shared",
+            EduContentRecord.audit_status == "approved",
+        )
+    )
+    total = q.count()
+    rows = q.order_by(EduContentRecord.id.desc()).offset(p.offset).limit(p.limit).all()
+    return success(paginate([r.to_dict() for r in rows], total, p.page, p.page_size))
+
+
 @router.post("/generate")
 async def generate_edu(
     payload: dict,
