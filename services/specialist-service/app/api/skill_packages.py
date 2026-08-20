@@ -36,6 +36,31 @@ def _validate_payload(payload: dict) -> dict:
     return {"name": name, "skill_weights": weights, "style_tags": payload.get("style_tags")}
 
 
+def _validate_release_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    name = (payload.get("name") or "").strip()
+    if not name or len(name) > 100:
+        raise ParamError("名称必填且不超过 100 字符")
+    description = (payload.get("description") or "").strip()
+    if not description or len(description) > 200:
+        raise ParamError("治疗领域/说明必填且不超过 200 字符")
+    content = (payload.get("content") or "").strip()
+    if not content:
+        raise ParamError("Skill 内容（话术素材）不能为空")
+    weights = payload.get("skill_weights")
+    if not isinstance(weights, dict) or not weights:
+        raise ParamError("skill_weights 必须是非空对象（沟通风格参数）")
+    style_tags = payload.get("style_tags")
+    if style_tags is not None and not isinstance(style_tags, list):
+        raise ParamError("style_tags 必须是数组")
+    return {
+        "name": name, "description": description, "content": content,
+        "skill_weights": weights, "style_tags": style_tags,
+        "is_anonymous": bool(payload.get("is_anonymous", False)),
+    }
+
+
 @router.post("")
 async def create_skill(
     payload: dict,
@@ -101,6 +126,49 @@ async def public_plaza(
         q = q.filter(SkillPackage.name.ilike(f"%{keyword}%"))
     total = q.count()
     rows = q.order_by(SkillPackage.heat.desc()).offset(p.offset).limit(p.limit).all()
+    return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
+
+
+@router.post("/release")
+async def release_skill(
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """三期 J：代表发布 Skill 到公共空间 → pending，审核通过后上代表侧广场。
+    is_public=True（发布意图）；/public 广场按 audit_status=approved 过滤，pending 不可见。"""
+    data = _validate_release_payload(payload)
+    sk = SkillPackage(
+        name=data["name"], creator_id=current_user["id"],
+        description=data["description"], content=data["content"],
+        is_public=True, is_anonymous=data["is_anonymous"],
+        audit_status="pending", style_tags=data["style_tags"], heat=0,
+        skill_weights=data["skill_weights"],
+    )
+    db.add(sk)
+    db.commit()
+    db.refresh(sk)
+    await write_audit_log(
+        action="skill_release", user_id=current_user["id"],
+        resource_type="skill_package", resource_id=str(sk.id),
+        after_value={"name": sk.name, "description": sk.description},
+        request_id=get_request_id() or None,
+    )
+    return success(sk.to_dict())
+
+
+@router.get("/mine")
+async def my_skills(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """三期 J：代表查看本人发布 Skill（审核状态 + 热度数据 heat/approval_rate）。"""
+    p = PaginationParams(page=page, page_size=page_size)
+    q = db.query(SkillPackage).filter(SkillPackage.creator_id == current_user["id"])
+    total = q.count()
+    rows = q.order_by(SkillPackage.id.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
 
 

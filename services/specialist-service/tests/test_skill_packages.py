@@ -198,3 +198,59 @@ def test_to_dict_hides_content_weights_by_default():
     assert d2["content"] == "话术素材"
     assert d2["skill_weights"] == {"formal_level": "标准学术"}
     db.close()
+
+
+def test_release_requires_rep():
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+    }, headers=_token(2, "admin"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_release_creates_pending_public(fresh_state):
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "style_tags": ["亲和力"], "skill_weights": {"formal_level": "标准学术"}, "is_anonymous": True,
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["audit_status"] == "pending"
+    assert data["is_public"] is True
+    assert data["is_anonymous"] is True
+    assert data["description"] == "心内科"
+    assert "content" not in data
+    assert "skill_weights" not in data
+    fresh_state.assert_awaited_once()
+
+
+def test_release_requires_description_content_weights():
+    resp = client.post("/api/v1/skill-packages/release", json={"name": "缺内容"},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_mine_returns_own_skills(fresh_state):
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="医学部建的", creator_id=3, is_public=True, is_anonymous=False,
+                        audit_status="approved", style_tags=[], heat=0, skill_weights={}))
+    db.add(SkillPackage(id=2, name="我的", creator_id=1, is_public=True, is_anonymous=False,
+                        audit_status="approved", style_tags=["严谨"], heat=5, skill_weights={}))
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/skill-packages/mine", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    item = body["data"]["items"][0]
+    assert item["id"] == 2
+    assert item["heat"] == 5
+    assert "skill_weights" not in item
+
+
+def test_mine_requires_rep():
+    resp = client.get("/api/v1/skill-packages/mine", headers=_token(2, "admin"))
+    assert resp.status_code == 403
