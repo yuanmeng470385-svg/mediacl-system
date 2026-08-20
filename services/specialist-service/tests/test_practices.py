@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool
 from shared.common.auth import create_token
 from shared.common.db_session import get_db
 from shared.models.base import Base
-from shared.models.practice import PracticeSession
+from shared.models.practice import ObjectionScript, PracticeSession
 from shared.models.skill import SkillPackage
 from shared.models.user import User
 
@@ -61,7 +61,7 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, SkillPackage.__table__, PracticeSession.__table__]
+    tables = [User.__table__, SkillPackage.__table__, PracticeSession.__table__, ObjectionScript.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -145,3 +145,122 @@ def test_complete_scores(fresh_state):
     assert body["code"] == 0
     assert body["data"]["status"] == "completed"
     assert body["data"]["scores"]["overall"] > 0
+
+
+# ============ 异议话术库（3.2(5)，终审修复 #3） ============
+
+def _add_objection(**kw):
+    db = TestSession()
+    defaults = dict(
+        id=kw.pop("id", 1), scenario_type="心内科", objection_content="医生异议：和竞品相比优势在哪？",
+        review_status="pending", version="1.0", created_by=3,
+    )
+    defaults.update(kw)
+    db.add(ObjectionScript(**defaults))
+    db.commit()
+    db.close()
+    return defaults["id"]
+
+
+def test_create_objection_script_requires_admin():
+    resp = client.post("/api/v1/practices/objection-scripts", json={
+        "scenario_type": "心内科", "objection_content": "医生异议：优势在哪？",
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_create_objection_script_sets_pending(fresh_state):
+    resp = client.post("/api/v1/practices/objection-scripts", json={
+        "scenario_type": "心内科", "objection_content": "医生异议：优势在哪？",
+        "response_guidance": "用循证数据回应",
+    }, headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["review_status"] == "pending"
+    assert body["data"]["objection_content"] == "医生异议：优势在哪？"
+    assert body["data"]["response_guidance"] == "用循证数据回应"
+
+
+def test_list_objection_scripts_filters_status(fresh_state):
+    _add_objection(id=1, review_status="approved")
+    _add_objection(id=2, review_status="pending")
+    resp = client.get("/api/v1/practices/objection-scripts", params={"review_status": "approved"},
+                      headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["id"] == 1
+
+
+def test_review_objection_script_approve(fresh_state):
+    _add_objection(id=1)
+    resp = client.post("/api/v1/practices/objection-scripts/1/review", json={"verdict": "approve"},
+                       headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["review_status"] == "approved"
+    assert body["data"]["reviewed_by"] == 2
+
+
+def test_review_objection_script_reject_requires_reason(fresh_state):
+    _add_objection(id=1)
+    resp = client.post("/api/v1/practices/objection-scripts/1/review", json={"verdict": "reject"},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_turn_injects_approved_objection(fresh_state, monkeypatch):
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="严谨学术风", creator_id=3, is_public=True,
+                        audit_status="approved", skill_weights={"formal_level": "标准学术"}))
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=1, scenario="心内科推广",
+                           status="in_progress", turn_count=0))
+    db.add(ObjectionScript(id=1, scenario_type="心内科", objection_content="医生异议：和竞品相比优势在哪？",
+                           review_status="approved"))
+    db.commit()
+    db.close()
+
+    captured = {}
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        captured["messages"] = messages
+        return {"content": "医生：请介绍下这款药的优势。", "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好，这款药降压平稳"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user_msg = captured["messages"][1]["content"]
+    assert "医生异议：和竞品相比优势在哪？" in user_msg
+
+
+def test_turn_no_objection_falls_back(fresh_state, monkeypatch):
+    # 该场景无 approved 话术 → 不注入异议，自由生成（prompt 中无 objection 标记）
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="肿瘤科推广",
+                           status="in_progress", turn_count=0))
+    db.add(ObjectionScript(id=1, scenario_type="心内科", objection_content="医生异议：优势在哪？",
+                           review_status="approved"))
+    db.commit()
+    db.close()
+
+    captured = {}
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        captured["messages"] = messages
+        return {"content": "医生：请介绍下这款药。", "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user_msg = captured["messages"][1]["content"]
+    assert "医生异议：优势在哪？" not in user_msg
