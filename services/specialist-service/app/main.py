@@ -124,6 +124,9 @@ app.include_router(patient_edu_router)
 from app.api.doctor_plaza import router as doctor_plaza_router
 app.include_router(doctor_plaza_router)
 
+from app.api.doctor_stats import router as doctor_stats_router
+app.include_router(doctor_stats_router)
+
 
 @app.get("/health")
 async def health():
