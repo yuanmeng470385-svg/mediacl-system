@@ -38,5 +38,7 @@ export const menuConfig: MenuDataItem[] = [
   { path: '/doctor-cert/list', name: '医生认证', icon: <IdcardOutlined /> },
   { path: '/training/list', name: '合规培训', icon: <ReadOutlined /> },
   { path: '/skill/list', name: 'Skill 管理', icon: <SnippetsOutlined /> },
+  { path: '/patient-edu/list', name: '患教模板', icon: <ReadOutlined /> },
+  { path: '/doctor/stats', name: '运营统计', icon: <BarChartOutlined /> },
   { path: '/system/config', name: '系统配置', icon: <SettingOutlined /> },
 ];

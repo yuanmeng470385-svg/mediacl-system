@@ -25,6 +25,8 @@ const FilingList = lazy(() => import('./pages/Filing/FilingList'));
 const DoctorCertList = lazy(() => import('./pages/DoctorCert/DoctorCertList'));
 const TrainingList = lazy(() => import('./pages/Training/TrainingList'));
 const SkillList = lazy(() => import('./pages/Skill/SkillList'));
+const PatientEduList = lazy(() => import('./pages/PatientEdu/PatientEduList'));
+const DoctorStats = lazy(() => import('./pages/Doctor/DoctorStats'));
 const SystemConfig = lazy(() => import('./pages/System/SystemConfig'));
 
 const Loading = () => (
@@ -77,6 +79,8 @@ export default function App() {
                   <Route path="doctor-cert/list" element={<DoctorCertList />} />
                   <Route path="training/list" element={<TrainingList />} />
                   <Route path="skill/list" element={<SkillList />} />
+                  <Route path="patient-edu/list" element={<PatientEduList />} />
+                  <Route path="doctor/stats" element={<DoctorStats />} />
                   <Route path="system/config" element={<SystemConfig />} />
                 </Route>
               </Routes>

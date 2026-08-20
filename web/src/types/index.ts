@@ -401,3 +401,34 @@ export interface SkillPackage {
   skill_weights?: Record<string, any>;
   created_at: string | null;
 }
+
+// ========== 患教模板库（二期 I）==========
+// 字段与 specialist-service GET /patient-edu/templates 对齐
+export interface PatientEduTemplate {
+  id: number;
+  title: string;
+  disease_area: string;
+  content: string;
+  version: string;
+  review_status: 'pending' | 'approved' | 'rejected';
+  review_reason: string | null;
+  created_by: number | null;
+  created_at: string | null;
+}
+
+// ========== 运营统计（二期 I）==========
+// 字段与 specialist-service /doctor-stats/activity 对齐
+export interface DoctorActivity {
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
+// 字段与 specialist-service /doctor-stats/twin-ranking 对齐
+export interface TwinRankingItem {
+  twin_id: number;
+  name: string;
+  status: string;
+  added_count: number;
+  approval_rate: number | null;
+}
