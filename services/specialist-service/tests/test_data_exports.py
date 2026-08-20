@@ -22,6 +22,8 @@ from shared.common.auth import create_token, get_current_user
 from shared.common.db_session import get_db
 from shared.models.base import Base
 from shared.models.user import User
+from shared.models.qualification import RepresentativeQualification
+from shared.models.digital_specialist import Specialist
 
 from app.main import app
 from app.models.conversation import Conversation
@@ -60,7 +62,8 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, ExportRequest.__table__, Conversation.__table__]
+    tables = [User.__table__, Specialist.__table__, RepresentativeQualification.__table__,
+              ExportRequest.__table__, Conversation.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -169,3 +172,39 @@ def test_download_requires_approved(fresh_state):
     resp = client.get("/api/v1/data-exports/requests/1/download", headers=_token(3, "compliance"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+def test_mah_overview_requires_admin():
+    resp = client.get("/api/v1/specialists/mah-overview", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_mah_overview_aggregates(fresh_state):
+    db = TestSession()
+    # 2 个 rep：一个有效备案+培训完成，一个未备案
+    db.add(User(id=4, username="rep02", full_name="李代表", phone="13800000004", role="rep", status="active"))
+    db.add(RepresentativeQualification(id=1, representative_id=1, education_cert="u1", filing_number="MAH-1",
+                                       audit_status="approved", filing_expire_date=None,
+                                       compliance_training_completed=True, commitment_signed=True))
+    db.add(RepresentativeQualification(id=2, representative_id=4, education_cert="u4", audit_status="pending"))
+    # 对话：1 条 blocked，3 条正常 → 通过率 0.75
+    db.add_all([
+        Conversation(id=1, user_id=1, specialist_id=1, session_id="s1", role="user", content="a", compliance_result=None),
+        Conversation(id=2, user_id=1, specialist_id=1, session_id="s1", role="assistant", content="b", compliance_result={"blocked": False}),
+        Conversation(id=3, user_id=1, specialist_id=1, session_id="s2", role="user", content="c", compliance_result={"blocked": False}),
+        Conversation(id=4, user_id=4, specialist_id=1, session_id="s2", role="assistant", content="d", compliance_result={"blocked": True}),
+    ])
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/specialists/mah-overview", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["total_reps"] == 2
+    assert data["filing"]["valid"] == 1
+    assert data["filing"]["pending_review"] == 1
+    assert data["filing"]["not_filed"] == 0
+    assert data["training_completed_rate"] == 0.5
+    assert data["commitment_signed_rate"] == 0.5
+    assert data["compliance_pass_rate"] == 0.75

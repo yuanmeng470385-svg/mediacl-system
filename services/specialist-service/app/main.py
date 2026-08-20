@@ -82,6 +82,11 @@ app.add_middleware(MetricsMiddleware)
 register_exception_handlers(app)
 
 # 挂载路由
+# mah-overview 必须在 specialists 之前挂载：/api/v1/specialists/{specialist_id}
+# 会把 "mah-overview" 当作 int 路径参数解析，若先注册则 GET /mah-overview 被 422。
+from app.api.mah_overview import router as mah_overview_router
+app.include_router(mah_overview_router)
+
 from app.api.specialists import router as specialists_router
 from app.api import conversations
 app.include_router(specialists_router)
