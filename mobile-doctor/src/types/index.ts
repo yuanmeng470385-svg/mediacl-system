@@ -476,6 +476,8 @@ export interface EduCard {
   content: EduCardContent;
   is_ai_generated: boolean;
   visibility: string;
+  /** 审核状态：null=未分享 / pending=审核中 / approved=已上架 / rejected=未通过 */
+  audit_status?: string | null;
   created_at?: string | null;
 }
 

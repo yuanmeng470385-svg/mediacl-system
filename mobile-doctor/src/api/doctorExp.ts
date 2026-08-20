@@ -51,6 +51,14 @@ export const doctorExpAPI = {
   myEdu: () =>
     apiClient.request<PaginatedResponse<EduCard>>('GET', '/api/v1/patient-edu/mine'),
 
+  /** 分享到患教专区（提交审核，audit_status=pending） */
+  publishEdu: (recordId: number) =>
+    apiClient.request<EduCard>('POST', `/api/v1/patient-edu/${recordId}/publish`, {}),
+
+  /** 撤回分享（audit_status=null，visibility=private） */
+  unpublishEdu: (recordId: number) =>
+    apiClient.request<EduCard>('POST', `/api/v1/patient-edu/${recordId}/unpublish`, {}),
+
   /** 官方公共数字员工广场（is_official + active，item 带 added_count） */
   plazaList: () =>
     apiClient.request<PaginatedResponse<PlazaTwin>>('GET', '/api/v1/doctor-plaza'),

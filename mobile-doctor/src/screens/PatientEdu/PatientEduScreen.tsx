@@ -36,6 +36,7 @@ export default function PatientEduScreen() {
   const [card, setCard] = useState<EduCard | null>(null);
   const [loading, setLoading] = useState(true);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
+  const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -80,6 +81,34 @@ export default function PatientEduScreen() {
         { text: '确认转发', onPress: () => Alert.alert('已转发', '患教卡片已转发') },
       ]
     );
+  };
+
+  const handlePublish = async () => {
+    if (!card || publishing) return;
+    setPublishing(true);
+    try {
+      const updated = await doctorExpAPI.publishEdu(card.id);
+      setCard(updated);
+      Alert.alert('分享成功', '已提交审核，通过后专区可见');
+    } catch (e: any) {
+      Alert.alert('分享失败', e?.message || '请稍后重试');
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handleUnpublish = async () => {
+    if (!card || publishing) return;
+    setPublishing(true);
+    try {
+      const updated = await doctorExpAPI.unpublishEdu(card.id);
+      setCard(updated);
+      Alert.alert('已撤回', '已撤回分享');
+    } catch (e: any) {
+      Alert.alert('撤回失败', e?.message || '请稍后重试');
+    } finally {
+      setPublishing(false);
+    }
   };
 
   if (loading) {
@@ -132,6 +161,21 @@ export default function PatientEduScreen() {
               <View style={styles.aiBadge}>
                 <Text style={styles.aiBadgeText}>AI 生成</Text>
               </View>
+              {card.audit_status === 'pending' && (
+                <View style={[styles.auditBadge, { backgroundColor: Colors.warningLight }]}>
+                  <Text style={[styles.auditBadgeText, { color: Colors.warning }]}>审核中</Text>
+                </View>
+              )}
+              {card.audit_status === 'approved' && (
+                <View style={[styles.auditBadge, { backgroundColor: Colors.successLight }]}>
+                  <Text style={[styles.auditBadgeText, { color: Colors.success }]}>已上架专区</Text>
+                </View>
+              )}
+              {card.audit_status === 'rejected' && (
+                <View style={[styles.auditBadge, { backgroundColor: Colors.dangerLight }]}>
+                  <Text style={[styles.auditBadgeText, { color: Colors.danger }]}>未通过审核</Text>
+                </View>
+              )}
               <Text style={styles.eduMetaText}>仅供患者教育参考</Text>
             </View>
 
@@ -139,6 +183,40 @@ export default function PatientEduScreen() {
               <Icon name="send" size={18} color={Colors.textWhite} />
               <Text style={styles.forwardBtnText}>转发给患者</Text>
             </TouchableOpacity>
+
+            {card.audit_status == null && (
+              <TouchableOpacity
+                style={[styles.publishBtn, publishing && styles.btnDisabled]}
+                onPress={handlePublish}
+                disabled={publishing}
+                activeOpacity={0.7}
+              >
+                {publishing ? (
+                  <ActivityIndicator size="small" color={Colors.textWhite} />
+                ) : (
+                  <Icon name="send" size={18} color={Colors.textWhite} />
+                )}
+                <Text style={styles.publishBtnText}>分享到患教专区</Text>
+              </TouchableOpacity>
+            )}
+
+            {(card.audit_status === 'pending' || card.audit_status === 'rejected') && (
+              <TouchableOpacity
+                style={[styles.unpublishBtn, publishing && styles.btnDisabled]}
+                onPress={handleUnpublish}
+                disabled={publishing}
+                activeOpacity={0.7}
+              >
+                {publishing ? (
+                  <ActivityIndicator size="small" color={Colors.textSecondary} />
+                ) : (
+                  <Icon name="undo" size={18} color={Colors.textSecondary} />
+                )}
+                <Text style={styles.unpublishBtnText}>
+                  {card.audit_status === 'pending' ? '撤回分享' : '撤回'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : null}
 
@@ -254,6 +332,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   aiBadgeText: { fontSize: FontSize.xs, color: Colors.info, fontWeight: '600' },
+  auditBadge: {
+    borderRadius: BorderRadius.sm,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  auditBadgeText: { fontSize: FontSize.xs, fontWeight: '600' },
   eduMetaText: { fontSize: FontSize.xs, color: Colors.textHint },
   forwardBtn: {
     flexDirection: 'row',
@@ -266,6 +350,31 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary,
   },
   forwardBtnText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  publishBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    backgroundColor: Colors.primary,
+  },
+  publishBtnText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  unpublishBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    marginTop: Spacing.sm,
+    paddingVertical: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.white,
+  },
+  unpublishBtnText: { color: Colors.textSecondary, fontSize: FontSize.md, fontWeight: '600' },
+  btnDisabled: { opacity: 0.6 },
   listTitle: {
     fontSize: FontSize.md,
     fontWeight: '600',

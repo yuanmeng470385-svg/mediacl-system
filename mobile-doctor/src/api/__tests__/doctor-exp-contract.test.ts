@@ -56,4 +56,18 @@ describe('doctorExp API', () => {
     expect(url).toContain('/api/v1/doctor-plaza/1/subscribe');
     expect(JSON.parse(init.body)).toEqual({ consent: true });
   });
+
+  it('publishEdu 发 POST /api/v1/patient-edu/1/publish', async () => {
+    await doctorExpAPI.publishEdu(1);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/patient-edu/1/publish');
+    expect(init.method).toBe('POST');
+  });
+
+  it('unpublishEdu 发 POST /api/v1/patient-edu/1/unpublish', async () => {
+    await doctorExpAPI.unpublishEdu(1);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/patient-edu/1/unpublish');
+    expect(init.method).toBe('POST');
+  });
 });
