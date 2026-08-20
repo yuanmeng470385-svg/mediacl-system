@@ -263,6 +263,8 @@ def test_zone_lists_approved_shared(fresh_state):
     _add_record(id=1, visibility="shared", audit_status="approved")
     _add_record(id=2, visibility="shared", audit_status="pending")
     _add_record(id=3, visibility="private", audit_status=None)
+    # rejected 但 visibility=shared 的内容也不应进入专区（只有 approved+shared 可见）
+    _add_record(id=4, visibility="shared", audit_status="rejected")
     resp = client.get("/api/v1/patient-edu/zone", headers=_token(2, "doctor"))
     body = resp.json()
     assert body["code"] == 0

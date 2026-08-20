@@ -43,6 +43,13 @@ describe('doctorExp API', () => {
     expect(JSON.parse(init.body)).toEqual({ template_id: 1 });
   });
 
+  it('myEdu 发 GET /api/v1/patient-edu/mine', async () => {
+    await doctorExpAPI.myEdu();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/patient-edu/mine');
+    expect(init.method).toBe('GET');
+  });
+
   it('plazaList 发 GET /api/v1/doctor-plaza', async () => {
     await doctorExpAPI.plazaList();
     const { url, init } = lastCall();

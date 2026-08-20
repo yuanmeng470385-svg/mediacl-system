@@ -35,23 +35,44 @@ const AREA_BADGE: Record<string, { bg: string; color: string }> = {
 };
 const AREA_BADGE_FALLBACK = { bg: Colors.backgroundAlt, color: Colors.textSecondary };
 
+/** 患教审核状态徽标（我的患教列表） */
+function auditStatusBadge(status: string | null | undefined) {
+  switch (status) {
+    case 'pending':
+      return { label: '审核中', bg: Colors.warningLight, color: Colors.warning };
+    case 'approved':
+      return { label: '已上架专区', bg: Colors.successLight, color: Colors.success };
+    case 'rejected':
+      return { label: '未通过审核', bg: Colors.dangerLight, color: Colors.danger };
+    default:
+      return { label: '未分享', bg: Colors.backgroundAlt, color: Colors.textSecondary };
+  }
+}
+
 export default function PatientEduScreen() {
   const navigation = useNavigation<Nav>();
   const [templates, setTemplates] = useState<PatientEduTemplate[]>([]);
   const [card, setCard] = useState<EduCard | null>(null);
+  const [myEdu, setMyEdu] = useState<EduCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [withdrawingId, setWithdrawingId] = useState<number | null>(null);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     setError('');
     try {
-      const res = await doctorExpAPI.listTemplates();
-      setTemplates(Array.isArray(res?.items) ? res.items : []);
+      const [tplRes, mineRes] = await Promise.all([
+        doctorExpAPI.listTemplates(),
+        doctorExpAPI.myEdu(),
+      ]);
+      setTemplates(Array.isArray(tplRes?.items) ? tplRes.items : []);
+      setMyEdu(Array.isArray(mineRes?.items) ? mineRes.items : []);
     } catch (e: any) {
-      setError(e?.message || '模板加载失败，请检查网络');
+      setError(e?.message || '加载失败，请检查网络');
       setTemplates([]);
+      setMyEdu([]);
     } finally {
       setLoading(false);
     }
@@ -113,6 +134,20 @@ export default function PatientEduScreen() {
       Alert.alert('撤回失败', e?.message || '请稍后重试');
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleWithdraw = async (record: EduCard) => {
+    if (withdrawingId !== null) return;
+    setWithdrawingId(record.id);
+    try {
+      await doctorExpAPI.unpublishEdu(record.id);
+      Alert.alert('已撤回', '该患教内容已从专区撤回');
+      await load();
+    } catch (e: any) {
+      Alert.alert('撤回失败', e?.message || '请稍后重试');
+    } finally {
+      setWithdrawingId(null);
     }
   };
 
@@ -292,6 +327,46 @@ export default function PatientEduScreen() {
             );
           })
         )}
+
+        {/* 我的患教 */}
+        <Text style={styles.listTitle}>我的患教</Text>
+        {myEdu.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyDesc}>暂无患教记录</Text>
+          </View>
+        ) : (
+          myEdu.map((r) => {
+            const badge = auditStatusBadge(r.audit_status);
+            const withdrawing = withdrawingId === r.id;
+            const canWithdraw = r.audit_status != null;
+            return (
+              <View key={r.id} style={[styles.myEduRow, Shadow.card]}>
+                <View style={styles.myEduInfo}>
+                  <Text style={styles.myEduTitle} numberOfLines={1}>
+                    {r.content?.title || '患教卡片'}
+                  </Text>
+                  <View style={[styles.auditBadge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.auditBadgeText, { color: badge.color }]}>{badge.label}</Text>
+                  </View>
+                </View>
+                {canWithdraw && (
+                  <TouchableOpacity
+                    style={[styles.withdrawBtn, withdrawing && styles.btnDisabled]}
+                    onPress={() => handleWithdraw(r)}
+                    disabled={withdrawingId !== null}
+                    activeOpacity={0.7}
+                  >
+                    {withdrawing ? (
+                      <ActivityIndicator size="small" color={Colors.textSecondary} />
+                    ) : (
+                      <Text style={styles.withdrawText}>撤回</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+        )}
       </ScrollView>
     </View>
   );
@@ -440,6 +515,26 @@ const styles = StyleSheet.create({
   },
   areaBadgeText: { fontSize: FontSize.xs, fontWeight: '600' },
   templateDesc: { fontSize: FontSize.xs, color: Colors.textHint },
+  myEduRow: {
+    backgroundColor: Colors.white,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.md,
+    marginBottom: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  myEduInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  myEduTitle: { flex: 1, fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary },
+  withdrawBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.white,
+  },
+  withdrawText: { fontSize: FontSize.sm, color: Colors.textSecondary, fontWeight: '600' },
   empty: { alignItems: 'center', paddingTop: Spacing.xl },
   emptyTitle: {
     fontSize: FontSize.md,
