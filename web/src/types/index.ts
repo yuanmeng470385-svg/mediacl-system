@@ -383,3 +383,21 @@ export interface CardStats {
   read_rate: number;
   rep_ranking: { representative_id: number; pushes: number; reads: number }[];
 }
+
+// ========== AI 陪练 Skill 模版（二期 H）==========
+// 字段与 specialist-service SkillPackage.to_dict 对齐
+export interface SkillPackage {
+  id: number;
+  name: string;
+  creator_id: number | null;
+  is_public: boolean;
+  is_anonymous: boolean;
+  audit_status: 'pending' | 'approved' | 'rejected';
+  audit_reason: string | null;
+  style_tags: string[] | null;
+  heat: number;
+  approval_rate: number | null;
+  /** 沟通风格参数：列表/广场接口不返回（隐私边界），仅审核 detail 接口受控返回 */
+  skill_weights?: Record<string, any>;
+  created_at: string | null;
+}
