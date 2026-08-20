@@ -46,6 +46,12 @@ MedAgent 数字员工系统是一套面向医药代表、医生与药企管理�
 | 管理后台 | web/（React + Ant Design Pro） | 患教内容审核（审核队列 + approve/reject，驳回必填原因） |
 | 医生端 | mobile-doctor/（React Native） | 患教分享到专区（→ 审核流）、撤回分享、患教专区浏览（仅审核通过内容） |
 
+### 三期 N 陪练 LLM 深度评分（2026-08-20）
+
+| 端 | 载体 | 已交付能力 |
+|------|------|------|
+| 代表端 | mobile/（React Native） | 陪练 LLM 逐句反馈与进步曲线（complete 有 transcript 时 LLM 深度评分四维 + per_turn 逐句反馈 + summary 改进建议，失败降级轮数基线） |
+
 ### 技术栈
 
 - **后端**: Python FastAPI
