@@ -51,6 +51,11 @@ export type RootStackParamList = {
   // 学术卡片（二期 G）
   AcademicCardCreate: undefined;
   AcademicCardList: undefined;
+  // AI 陪练 / Skill 广场 / 分身管理（二期 H）
+  PracticeList: undefined;
+  PracticeChat: { sessionId: number };
+  Plaza: undefined;
+  TwinManage: undefined;
 };
 
 // ========== 路由参数类型导出 ==========

@@ -156,6 +156,8 @@ ROUTE_MAP = {
     "/api/v1/briefings": settings.SPECIALIST_SERVICE_URL,  # 代表端夜间简报查询（一期 C）
     "/api/v1/academic-cards": settings.SPECIALIST_SERVICE_URL,  # 学术卡片（二期 G）
     "/api/v1/card-pushes": settings.SPECIALIST_SERVICE_URL,  # 卡片推送/通知（二期 G）
+    "/api/v1/skill-packages": settings.SPECIALIST_SERVICE_URL,  # Skill 模版与广场（二期 H）
+    "/api/v1/practices": settings.SPECIALIST_SERVICE_URL,  # AI 陪练（二期 H）
 }
 
 

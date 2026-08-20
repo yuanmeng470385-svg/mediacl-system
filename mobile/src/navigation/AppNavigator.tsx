@@ -41,6 +41,10 @@ import BriefingListScreen from '../screens/Briefing/BriefingListScreen';
 import BriefingDetailScreen from '../screens/Briefing/BriefingDetailScreen';
 import CardCreateScreen from '../screens/Academic/CardCreateScreen';
 import CardListScreen from '../screens/Academic/CardListScreen';
+import PracticeListScreen from '../screens/Practice/PracticeListScreen';
+import PracticeChatScreen from '../screens/Practice/PracticeChatScreen';
+import PlazaScreen from '../screens/Plaza/PlazaScreen';
+import TwinManageScreen from '../screens/Twin/TwinManageScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -205,6 +209,11 @@ export default function AppNavigator() {
             {/* 学术卡片（二期 G） */}
             <Stack.Screen name="AcademicCardCreate" component={CardCreateScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="AcademicCardList" component={CardListScreen} options={{ animation: 'slide_from_right' }} />
+            {/* AI 陪练 / Skill 广场 / 分身管理（二期 H） */}
+            <Stack.Screen name="PracticeList" component={PracticeListScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="PracticeChat" component={PracticeChatScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="Plaza" component={PlazaScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="TwinManage" component={TwinManageScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen

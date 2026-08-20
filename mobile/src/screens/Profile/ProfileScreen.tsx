@@ -27,6 +27,9 @@ const menuItems = [
   { icon: 'share-variant-outline', label: '分身分享', route: 'Share' as const },
   { icon: 'weather-night', label: '夜间简报', route: 'BriefingList' as const },
   { icon: 'file-document-outline', label: '学术卡片', route: 'AcademicCardCreate' as const },
+  { icon: 'robot-outline', label: 'AI 陪练', route: 'PracticeList' as const },
+  { icon: 'storefront-outline', label: 'Skill 广场', route: 'Plaza' as const },
+  { icon: 'account-tie-outline', label: '分身管理', route: 'TwinManage' as const },
   // 「我的统计」已移除：无对应页面，此前误路由到 Settings
   { icon: 'bell-outline', label: '通知设置', route: 'NotificationSettings' as const },
   { icon: 'shield-check-outline', label: '合规手册', route: 'ComplianceManual' as const },
