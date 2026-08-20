@@ -403,6 +403,17 @@ async def chat_with_specialist(
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在或已停用")
 
+    # 一期 B 挂账收尾：doctor 角色必须先订阅该分身（未订阅不可 chat）
+    if current_user["role"] == "doctor":
+        from shared.models.doctor import DoctorTwinSubscription
+        sub = db.query(DoctorTwinSubscription).filter(
+            DoctorTwinSubscription.doctor_id == current_user["id"],
+            DoctorTwinSubscription.twin_id == specialist_id,
+            DoctorTwinSubscription.status == "subscribed",
+        ).first()
+        if not sub:
+            raise PermissionError("请先添加该分身再对话")
+
     if not specialist.bailian_app_id:
         raise HTTPException(status_code=500, detail="专员尚未配置百炼 App ID")
 

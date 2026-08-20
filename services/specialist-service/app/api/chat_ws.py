@@ -88,6 +88,18 @@ async def chat_ws(
         await websocket.close(code=4404)
         return
 
+    # 一期 B 挂账收尾：doctor 角色必须先订阅该分身（未订阅不可 chat，同 REST 口径）
+    if user.role == "doctor":
+        from shared.models.doctor import DoctorTwinSubscription
+        sub = db.query(DoctorTwinSubscription).filter(
+            DoctorTwinSubscription.doctor_id == user.id,
+            DoctorTwinSubscription.twin_id == specialist_id,
+            DoctorTwinSubscription.status == "subscribed",
+        ).first()
+        if not sub:
+            await websocket.close(code=4403, reason="未订阅该分身")
+            return
+
     send_lock = asyncio.Lock()
 
     async def send(frame: dict):
