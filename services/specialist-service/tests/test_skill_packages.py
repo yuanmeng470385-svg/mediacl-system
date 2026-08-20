@@ -123,16 +123,27 @@ def test_create_skill_public_flag(fresh_state):
     assert "skill_weights" not in body["data"]
 
 
-def test_detail_exposes_weights_to_admin(fresh_state):
-    _add_skill(id=1)
+def test_detail_hides_content_weights_from_admin(fresh_state):
+    _add_skill(id=1, content="话术素材")
     resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(2, "admin"))
     body = resp.json()
     assert body["code"] == 0
-    assert body["data"]["skill_weights"] == {"formal_level": "标准学术"}
-    # rep 无权限查看权重
+    # admin 仅返回元数据，无 content/skill_weights（内容/权重仅审核人可见）
+    assert "content" not in body["data"]
+    assert "skill_weights" not in body["data"]
+    # rep 无权限查看详情
     resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(1, "rep"))
     assert resp.status_code == 403
     assert resp.json()["code"] == 3000
+
+
+def test_detail_exposes_content_to_medical(fresh_state):
+    _add_skill(id=1, content="话术素材")
+    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["content"] == "话术素材"
+    assert body["data"]["skill_weights"] == {"formal_level": "标准学术"}
 
 
 def test_review_approve_sets_public(fresh_state):
@@ -233,6 +244,15 @@ def test_release_requires_description_content_weights():
     assert resp.json()["code"] == 1000
 
 
+def test_release_content_too_long(fresh_state):
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "字" * 10001,
+        "skill_weights": {"formal_level": "标准学术"},
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
 def test_mine_returns_own_skills(fresh_state):
     db = TestSession()
     db.add(SkillPackage(id=1, name="医学部建的", creator_id=3, is_public=True, is_anonymous=False,
@@ -295,7 +315,7 @@ def test_asset_list_filters_off_shelf(fresh_state):
 
 def test_detail_exposes_content_and_writes_view_audit(fresh_state):
     _add_skill(id=1, audit_status="approved", content="话术素材")
-    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(2, "admin"))
+    resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(3, "medical"))
     body = resp.json()
     assert body["code"] == 0
     assert body["data"]["content"] == "话术素材"

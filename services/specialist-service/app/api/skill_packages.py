@@ -51,6 +51,8 @@ def _validate_release_payload(payload: dict) -> dict:
     content = (payload.get("content") or "").strip()
     if not content:
         raise ParamError("Skill 内容（话术素材）不能为空")
+    if len(content) > 10000:
+        raise ParamError("Skill 内容不能超过 10000 字符")
     weights = payload.get("skill_weights")
     if not isinstance(weights, dict) or not weights:
         raise ParamError("skill_weights 必须是非空对象（沟通风格参数）")
@@ -222,7 +224,8 @@ async def skill_detail(
     current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """审核详情：受控查看 skill_weights（仅医学部等管理角色，隐私边界附录B-1）"""
+    """审核详情：受控查看 skill_weights（仅审核人 compliance/medical，隐私边界附录B-1）。
+    admin/manager 仅返回元数据（无 content/skill_weights），访问仍记审计。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
         raise BusinessError("Skill 不存在", code=4001)
@@ -232,7 +235,8 @@ async def skill_detail(
         after_value={"name": sk.name},
         request_id=get_request_id() or None,
     )
-    return success(sk.to_dict(expose_weights=True))
+    expose_weights = current_user["role"] in ("compliance", "medical")
+    return success(sk.to_dict(expose_weights=expose_weights))
 
 
 @router.post("/{skill_id}/review")

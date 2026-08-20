@@ -401,6 +401,7 @@ export interface SkillPackage {
   off_shelf_status: 'active' | 'off_shelved';
   off_shelf_reason: string | null;
   off_shelf_type: 'compliance' | 'author' | null;
+  off_shelf_by: number | null;
   off_shelf_at: string | null;
   creator_name?: string | null;
   creator_role?: string | null;
