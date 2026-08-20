@@ -439,3 +439,30 @@ def test_complete_falls_back_on_llm_error(fresh_state, monkeypatch):
     scores = body["data"]["scores"]
     assert scores["overall"] == round(min(0.9, 0.45 + 2 * 0.1), 2)  # 确定性基线
     assert body["data"]["status"] == "completed"
+
+
+def test_complete_rejects_bool_scores(fresh_state, monkeypatch):
+    # JSON true/false 是 int/bool 子类，会通过 0-1 分数校验落库为 True/False；
+    # 应触发非法字段校验并回退确定性基线，而非污染分数。
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="x",
+                           status="in_progress", turn_count=2,
+                           transcript=[{"turn": 1, "role": "rep", "content": "您好"},
+                                       {"turn": 1, "role": "ai", "content": "医生回应"}]))
+    db.commit()
+    db.close()
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        return {"content": '{"evidence_accuracy":0.8,"objection_handling":0.7,"communication_logic":0.9,'
+                           '"overall":true,"per_turn":[{"turn":1,"evidence_accuracy":0.8,"objection_handling":0.7,'
+                           '"communication_logic":0.9,"feedback":"开场清晰"}],"summary":"整体流畅"}', "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    scores = body["data"]["scores"]
+    assert scores["overall"] == round(min(0.9, 0.45 + 2 * 0.1), 2)  # 回退确定性基线
+    assert scores["overall"] is not True
+    assert body["data"]["status"] == "completed"

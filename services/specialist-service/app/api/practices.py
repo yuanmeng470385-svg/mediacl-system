@@ -90,7 +90,7 @@ def _parse_score_json(text: str) -> dict:
     data = json.loads(cleaned[start:end + 1])
     for key in ("evidence_accuracy", "objection_handling", "communication_logic", "overall"):
         val = data.get(key)
-        if not isinstance(val, (int, float)) or not (0 <= float(val) <= 1):
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or not (0 <= float(val) <= 1):
             raise ValueError(f"评分字段非法: {key}")
     if not isinstance(data.get("per_turn"), list):
         raise ValueError("per_turn 缺失")
@@ -286,7 +286,7 @@ async def practice_progress(
     for s in rows:
         scores = s.scores or {}
         overall = scores.get("overall")
-        if isinstance(overall, (int, float)):
+        if isinstance(overall, (int, float)) and not isinstance(overall, bool):
             overalls.append(overall)
         trend.append({
             "session_id": s.id,
