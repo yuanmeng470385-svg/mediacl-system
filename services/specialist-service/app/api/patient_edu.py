@@ -205,3 +205,57 @@ async def my_edu_records(
     total = q.count()
     rows = q.order_by(EduContentRecord.id.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([r.to_dict() for r in rows], total, p.page, p.page_size))
+
+
+def _get_own_record(db: Session, record_id: int, doctor_id: int) -> EduContentRecord:
+    rec = db.query(EduContentRecord).filter(EduContentRecord.id == record_id).first()
+    if not rec or rec.doctor_id != doctor_id:
+        raise BusinessError("患教记录不存在", code=4001)
+    return rec
+
+
+@router.post("/{record_id}/publish")
+async def publish_edu(
+    record_id: int,
+    current_user: dict = Depends(require_roles("doctor")),
+    db: Session = Depends(get_db),
+):
+    """三期 M：分享到平台患教专区 → visibility=shared + audit_status=pending，进入审核流。
+    本人使用与站外转发不经此（5.5(3)）。"""
+    rec = _get_own_record(db, record_id, current_user["id"])
+    if rec.audit_status is not None:
+        raise BusinessError("该内容已在专区审核流中", code=4001)
+    rec.visibility = "shared"
+    rec.audit_status = "pending"
+    db.commit()
+    db.refresh(rec)
+    await write_audit_log(
+        action="edu_publish", user_id=current_user["id"],
+        resource_type="edu_content_record", resource_id=str(rec.id),
+        after_value={"audit_status": rec.audit_status},
+        request_id=get_request_id() or None,
+    )
+    return success(rec.to_dict())
+
+
+@router.post("/{record_id}/unpublish")
+async def unpublish_edu(
+    record_id: int,
+    current_user: dict = Depends(require_roles("doctor")),
+    db: Session = Depends(get_db),
+):
+    """三期 M：撤回分享（含已审核通过的内容——撤回后专区不可见）。"""
+    rec = _get_own_record(db, record_id, current_user["id"])
+    if rec.audit_status is None:
+        raise BusinessError("该内容未分享", code=4001)
+    rec.visibility = "private"
+    rec.audit_status = None
+    db.commit()
+    db.refresh(rec)
+    await write_audit_log(
+        action="edu_unpublish", user_id=current_user["id"],
+        resource_type="edu_content_record", resource_id=str(rec.id),
+        after_value={"audit_status": rec.audit_status},
+        request_id=get_request_id() or None,
+    )
+    return success(rec.to_dict())

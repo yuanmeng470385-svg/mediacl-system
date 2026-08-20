@@ -154,3 +154,61 @@ def test_to_dict_includes_audit_status():
     assert d["audit_status"] == "pending"
     assert d["visibility"] == "shared"
     db.close()
+
+
+def _add_record(**kw):
+    db = TestSession()
+    defaults = dict(id=kw.pop("id", 1), doctor_id=2, template_id=1,
+                    content={"title": "高血压患教", "body": "低盐饮食", "notes": "监测血压", "seek_care": "头晕就医"},
+                    is_ai_generated=True, visibility="private", audit_status=None)
+    defaults.update(kw)
+    db.add(EduContentRecord(**defaults))
+    db.commit()
+    db.close()
+    return defaults["id"]
+
+
+def test_publish_sets_shared_pending(fresh_state):
+    _add_record(id=1)
+    resp = client.post("/api/v1/patient-edu/1/publish", json={}, headers=_token(2, "doctor"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["visibility"] == "shared"
+    assert body["data"]["audit_status"] == "pending"
+    fresh_state.assert_awaited_once()
+
+
+def test_publish_requires_own_record(fresh_state):
+    # 另一名医生（id=4）非本人 → 4001；rep 会先被 require_roles("doctor") 拦成 403
+    _add_record(id=1)  # doctor_id=2
+    db = TestSession()
+    db.add(User(id=4, username="doctor2", full_name="李医生", phone="13800000004", role="doctor", status="active"))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/patient-edu/1/publish", json={}, headers=_token(4, "doctor"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_publish_already_shared_4001(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="pending")
+    resp = client.post("/api/v1/patient-edu/1/publish", json={}, headers=_token(2, "doctor"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_unpublish_resets_private(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="approved")
+    resp = client.post("/api/v1/patient-edu/1/unpublish", json={}, headers=_token(2, "doctor"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["visibility"] == "private"
+    assert body["data"]["audit_status"] is None
+    fresh_state.assert_awaited_once()
+
+
+def test_unpublish_requires_shared(fresh_state):
+    _add_record(id=1)
+    resp = client.post("/api/v1/patient-edu/1/unpublish", json={}, headers=_token(2, "doctor"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
