@@ -639,7 +639,9 @@ CREATE TABLE IF NOT EXISTS edu_content_records (
     content JSONB NOT NULL,           -- {title, body, notes, seek_care}
     is_ai_generated BOOLEAN NOT NULL DEFAULT TRUE,
     visibility VARCHAR(20) NOT NULL DEFAULT 'private',  -- private/shared
+    audit_status VARCHAR(20),           -- 三期 M：NULL=未分享；pending/approved/rejected
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_ecr_doctor ON edu_content_records(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_ecr_audit ON edu_content_records(audit_status);

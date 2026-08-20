@@ -40,6 +40,7 @@ class EduContentRecord(Base, TimestampMixin):
     content = Column(JSONB, nullable=False)
     is_ai_generated = Column(Boolean, nullable=False, default=True)
     visibility = Column(String(20), default="private")
+    audit_status = Column(String(20))   # 三期 M：NULL=未分享；pending/approved/rejected
 
     def to_dict(self) -> dict:
         return {
@@ -49,5 +50,6 @@ class EduContentRecord(Base, TimestampMixin):
             "content": self.content,
             "is_ai_generated": self.is_ai_generated,
             "visibility": self.visibility,
+            "audit_status": self.audit_status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -139,3 +139,18 @@ def test_generate_rejects_pending_template():
                        headers=_token(2, "doctor"))
     assert resp.status_code == 400
     assert resp.json()["code"] == 1000
+
+
+def test_to_dict_includes_audit_status():
+    db = TestSession()
+    rec = EduContentRecord(
+        id=1, doctor_id=2, template_id=1,
+        content={"title": "高血压患教", "body": "低盐饮食", "notes": "监测血压", "seek_care": "头晕就医"},
+        is_ai_generated=True, visibility="shared", audit_status="pending",
+    )
+    db.add(rec)
+    db.commit()
+    d = rec.to_dict()
+    assert d["audit_status"] == "pending"
+    assert d["visibility"] == "shared"
+    db.close()
