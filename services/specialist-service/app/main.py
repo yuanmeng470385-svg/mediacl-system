@@ -115,6 +115,9 @@ app.include_router(skill_packages_router)
 from app.api.practices import router as practices_router
 app.include_router(practices_router)
 
+from app.api.doctor_profiles import router as doctor_profiles_router
+app.include_router(doctor_profiles_router)
+
 
 @app.get("/health")
 async def health():
