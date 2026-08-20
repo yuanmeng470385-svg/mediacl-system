@@ -646,3 +646,20 @@ CREATE TABLE IF NOT EXISTS edu_content_records (
 );
 CREATE INDEX IF NOT EXISTS idx_ecr_doctor ON edu_content_records(doctor_id);
 CREATE INDEX IF NOT EXISTS idx_ecr_audit ON edu_content_records(audit_status);
+
+CREATE TABLE IF NOT EXISTS export_requests (
+    id BIGSERIAL PRIMARY KEY,
+    requester_id BIGINT NOT NULL REFERENCES users(id),
+    export_type VARCHAR(50) NOT NULL DEFAULT 'conversations',  -- conversations（一期唯一敏感导出物）
+    reason VARCHAR(500),                                      -- 导出目的
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',            -- pending/approved/rejected
+    approver_id BIGINT REFERENCES users(id),
+    approve_reason VARCHAR(500),
+    file_url VARCHAR(500),
+    expires_at TIMESTAMP,
+    responded_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_er_status ON export_requests(status);
+CREATE INDEX IF NOT EXISTS idx_er_requester ON export_requests(requester_id);
