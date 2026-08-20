@@ -22,11 +22,18 @@ interface Msg {
   content: string;
 }
 
+interface PerTurnScore {
+  turn?: number;
+  feedback?: string;
+}
+
 interface Scores {
   evidence_accuracy?: number;
   objection_handling?: number;
   communication_logic?: number;
   overall?: number;
+  summary?: string;
+  per_turn?: PerTurnScore[];
 }
 
 export default function PracticeChatScreen() {
@@ -125,6 +132,26 @@ export default function PracticeChatScreen() {
                 <ScoreCell label="沟通逻辑" value={scores.communication_logic} />
                 <ScoreCell label="综合评分" value={scores.overall} highlight />
               </View>
+
+              {scores.summary ? (
+                <View style={styles.summaryBlock}>
+                  <Text style={styles.summaryLabel}>改进建议</Text>
+                  <Text style={styles.summaryText}>{scores.summary}</Text>
+                </View>
+              ) : null}
+
+              {(scores.per_turn && scores.per_turn.length > 0) ? (
+                <View style={styles.turnBlock}>
+                  <Text style={styles.turnTitle}>逐句反馈</Text>
+                  {scores.per_turn.map((pt, i) => (
+                    <View key={i} style={styles.turnItem}>
+                      <Text style={styles.turnLabel}>第 {pt.turn ?? i + 1} 轮</Text>
+                      <Text style={styles.turnFeedback}>{pt.feedback || '—'}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
               <TouchableOpacity
                 style={styles.backBtn}
                 onPress={() => navigation.goBack()}
@@ -213,6 +240,14 @@ const styles = StyleSheet.create({
     alignItems: 'center', borderWidth: 1, borderColor: Colors.primary,
   },
   backText: { color: Colors.primary, fontSize: FontSize.md, fontWeight: '600' },
+  summaryBlock: { marginTop: Spacing.md, padding: Spacing.md, backgroundColor: Colors.warningLight, borderRadius: BorderRadius.md },
+  summaryLabel: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.warning, marginBottom: 4 },
+  summaryText: { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  turnBlock: { marginTop: Spacing.md },
+  turnTitle: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary, marginBottom: Spacing.sm },
+  turnItem: { backgroundColor: Colors.backgroundAlt, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.sm },
+  turnLabel: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginBottom: 2 },
+  turnFeedback: { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end', padding: Spacing.md, gap: Spacing.sm,
     backgroundColor: Colors.white, ...Shadow.header,
