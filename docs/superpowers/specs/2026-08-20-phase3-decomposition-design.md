@@ -77,7 +77,7 @@
 
 | 功能 | 需求点 | 实现要点 |
 |---|---|---|
-| MAH 合规全景视图 | 3.7(4) | `GET /api/v1/compliance/mah-overview`（compliance-service，require_roles admin/manager/compliance；聚合所有代表）：备案状态分布（valid/expired/not_filed + audit_status 分布）、合规培训完成率（exam 通过 + commitment 签署比例）、合规通过率（1 − conversations.blocked/total，口径=compliance_result.blocked=true，与 review-queue 同口径） |
+| MAH 合规全景视图 | 3.7(4) | `GET /api/v1/specialists/mah-overview`（**specialist-service**，require_roles admin/manager/compliance；**架构修正：conversations 模型在 specialist-service，合规通过率口径（compliance_result.blocked=true）同 review-queue 先例，故与 review-queue 同居 specialist，不走 compliance-service**；聚合所有代表）：备案状态分布（valid/expired/not_filed + audit_status 分布）、合规培训完成率（exam 通过 + commitment 签署比例）、合规通过率（1 − conversations.blocked/total） |
 | 数据分类分级 | 3.8(1) | `GET /api/v1/compliance/data-assets`（只读配置清单：个人信息 users/doctor_profiles/doctor_twin_subscriptions + 业务数据 conversations/academic_cards/edu_content_records/card_push_records + 合规留存 audit_logs/compliance_blocks/compliance_rules；返回类别→表→字段级别说明） |
 | 数据导出审批 | 3.8(3) | 迁移 022 `export_requests` 表（requester_id/export_type/reason/status pending/approved/rejected/approver_id/approve_reason/created_at/responded_at/expires_at；一期 export_type 仅 `conversations` 对话明细一种敏感导出物，报表直出不入表）；`POST /api/v1/data-exports/requests`（**admin/manager 申请**）+ `GET /api/v1/data-exports/requests`（分页/状态过滤）+ `POST /{id}/review`（**合规部审批**=admin/manager/compliance；approve 后生成对话明细 xlsx 落 OSS + 导出记录 + 审计；SLA=created_at+3 自然日，超时未审列表高亮提醒，**不自动放行**）+ `GET /api/v1/data-exports/requests/{id}/download`（审批通过后下载，带 expires_at 过期）；对话明细导出 = specialist-service（同库直读 conversations，仅 approved 后生成，导出列含 代表/医生/分身/时间/内容/compliance_result，绝不含患者诊断信息） |
 | 数据访问审计 | 3.8(2) | Skill 审核查看行为写访问审计（J 计划 skill_detail 补）；本计划确认导出/审批动作全量走既有 audit_client 留痕 |
