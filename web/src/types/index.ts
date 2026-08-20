@@ -426,6 +426,19 @@ export interface PatientEduTemplate {
   created_at: string | null;
 }
 
+// ========== 患教内容记录（三期 M，GET /patient-edu/zone|review-queue）==========
+export interface EduContentRecord {
+  id: number;
+  doctor_id: number;
+  template_id: number | null;
+  content: { title: string; body: string; notes: string; seek_care: string };
+  is_ai_generated: boolean;
+  visibility: 'private' | 'shared';
+  audit_status: 'pending' | 'approved' | 'rejected' | null;
+  doctor_name?: string | null;
+  created_at: string | null;
+}
+
 // ========== 运营统计（二期 I）==========
 // 字段与 specialist-service /doctor-stats/activity 对齐
 export interface DoctorActivity {
