@@ -397,8 +397,17 @@ export interface SkillPackage {
   style_tags: string[] | null;
   heat: number;
   approval_rate: number | null;
+  description: string | null;
+  off_shelf_status: 'active' | 'off_shelved';
+  off_shelf_reason: string | null;
+  off_shelf_type: 'compliance' | 'author' | null;
+  off_shelf_at: string | null;
+  creator_name?: string | null;
+  creator_role?: string | null;
   /** 沟通风格参数：列表/广场接口不返回（隐私边界），仅审核 detail 接口受控返回 */
   skill_weights?: Record<string, any>;
+  /** 话术内容：仅审核 detail 接口受控返回（隐私边界），列表/资产接口不返回 */
+  content?: string;
   created_at: string | null;
 }
 

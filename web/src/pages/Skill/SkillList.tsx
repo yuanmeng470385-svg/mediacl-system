@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { ProTable, ModalForm, ProFormText, ProFormSwitch } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { App, Button, Descriptions, Drawer, Input, Radio, Space, Tag, Typography } from 'antd';
+import { App, Button, Descriptions, Drawer, Input, Radio, Space, Tag, Tooltip, Typography } from 'antd';
 import { skillAPI } from '../../services/skill';
 import type { SkillPackage } from '../../types';
 
@@ -10,6 +10,13 @@ const AUDIT_MAP: Record<string, { color: string; text: string }> = {
   pending: { color: 'orange', text: '待审核' },
   approved: { color: 'green', text: '已通过' },
   rejected: { color: 'red', text: '已驳回' },
+};
+const CREATOR_ROLE_MAP: Record<string, { color: string; text: string }> = {
+  rep: { color: 'blue', text: '代表发布' },
+  admin: { color: 'purple', text: '管理员' },
+  manager: { color: 'geekblue', text: '经理' },
+  compliance: { color: 'cyan', text: '合规' },
+  medical: { color: 'green', text: '医学部' },
 };
 
 export default function SkillList() {
@@ -20,6 +27,10 @@ export default function SkillList() {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [offShelfTarget, setOffShelfTarget] = useState<SkillPackage | null>(null);
+  const [offType, setOffType] = useState<'compliance' | 'author'>('compliance');
+  const [offReason, setOffReason] = useState('');
+  const [offSubmitting, setOffSubmitting] = useState(false);
 
   // 受控查看：列表接口不返回 skill_weights（隐私边界附录B-1），审核前走 detail 拿权重
   const openReview = async (row: SkillPackage) => {
@@ -55,9 +66,47 @@ export default function SkillList() {
     }
   };
 
+  const openOffShelf = (row: SkillPackage) => {
+    setOffShelfTarget(row);
+    setOffType('compliance');
+    setOffReason('');
+  };
+
+  const submitOffShelf = async () => {
+    if (!offShelfTarget) return;
+    if (!offReason.trim()) {
+      message.warning('下架原因必填');
+      return;
+    }
+    setOffSubmitting(true);
+    try {
+      await skillAPI.offShelf(offShelfTarget.id, { type: offType, reason: offReason.trim() });
+      message.success('已下架');
+      setOffShelfTarget(null);
+      actionRef.current?.reload();
+    } catch {
+      /* client.ts 拦截器已弹错误 */
+    } finally {
+      setOffSubmitting(false);
+    }
+  };
+
   const columns: ProColumns<SkillPackage>[] = [
     { title: '名称', dataIndex: 'name' },
     { title: '风格标签', dataIndex: 'style_tags', hideInSearch: true, render: (_, r) => (r.style_tags || []).join(' / ') },
+    {
+      title: '创建者', dataIndex: 'creator_name', hideInSearch: true,
+      render: (_, r) => {
+        if (!r.creator_name) return '-';
+        const m = CREATOR_ROLE_MAP[r.creator_role || ''] || { color: 'default', text: r.creator_role || '官方' };
+        return (
+          <Space size={4}>
+            <span>{r.creator_name}</span>
+            <Tag color={m.color}>{m.text}</Tag>
+          </Space>
+        );
+      },
+    },
     {
       title: '审核状态', dataIndex: 'audit_status', width: 100,
       valueEnum: { pending: '待审核', approved: '已通过', rejected: '已驳回' },
@@ -66,14 +115,30 @@ export default function SkillList() {
         return <Tag color={m.color}>{m.text}</Tag>;
       },
     },
+    {
+      title: '下架状态', dataIndex: 'off_shelf_status', width: 100,
+      valueEnum: { active: '已上架', off_shelved: '已下架' },
+      render: (_, r) => {
+        const off = r.off_shelf_status === 'off_shelved';
+        return (
+          <Tooltip title={off && r.off_shelf_reason ? r.off_shelf_reason : undefined}>
+            <Tag color={off ? 'red' : 'green'}>{off ? '已下架' : '已上架'}</Tag>
+          </Tooltip>
+        );
+      },
+    },
     { title: '热度', dataIndex: 'heat', width: 70, hideInSearch: true },
     { title: '好评率', dataIndex: 'approval_rate', width: 90, hideInSearch: true },
     {
-      title: '操作', width: 80,
-      render: (_, r) =>
-        r.audit_status === 'pending'
-          ? <a onClick={() => openReview(r)}>审核</a>
-          : <span style={{ color: '#999' }}>已处理</span>,
+      title: '操作', width: 140,
+      render: (_, r) => (
+        <Space size="middle">
+          {r.audit_status === 'pending'
+            ? <a onClick={() => openReview(r)}>审核</a>
+            : <span style={{ color: '#999' }}>已处理</span>}
+          {r.off_shelf_status === 'active' && <a onClick={() => openOffShelf(r)}>下架</a>}
+        </Space>
+      ),
     },
   ];
 
@@ -86,7 +151,12 @@ export default function SkillList() {
         search={{ labelWidth: 80 }}
         columns={columns}
         request={async (params) => {
-          const res = await skillAPI.list({ page: params.current || 1, page_size: params.pageSize || 10, audit_status: params.audit_status });
+          const res = await skillAPI.assetList({
+            page: params.current || 1,
+            page_size: params.pageSize || 10,
+            audit_status: params.audit_status,
+            off_shelf_status: params.off_shelf_status,
+          });
           return { data: res.data.data.items, total: res.data.data.total, success: true };
         }}
         toolBarRender={() => [<Button type="primary" key="new" onClick={() => setCreateOpen(true)}>新建官方模版</Button>]}
@@ -163,6 +233,36 @@ export default function SkillList() {
               disabled={current.audit_status !== 'pending'}
             >
               {current.audit_status !== 'pending' ? '当前状态不可审核' : '提交审核'}
+            </Button>
+          </Space>
+        )}
+      </Drawer>
+      <Drawer title="Skill 下架" width={520} open={!!offShelfTarget} onClose={() => setOffShelfTarget(null)} destroyOnHidden>
+        {offShelfTarget && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label="名称">{offShelfTarget.name}</Descriptions.Item>
+              <Descriptions.Item label="创建者">{offShelfTarget.creator_name || '-'}</Descriptions.Item>
+            </Descriptions>
+            <Radio.Group value={offType} onChange={(e) => setOffType(e.target.value)}>
+              <Radio value="compliance">合规下架</Radio>
+              <Radio value="author">作者申请下架</Radio>
+            </Radio.Group>
+            <Input.TextArea
+              rows={4}
+              placeholder="下架原因（必填）"
+              value={offReason}
+              onChange={(e) => setOffReason(e.target.value)}
+              maxLength={500}
+            />
+            <Button
+              type="primary"
+              danger
+              block
+              loading={offSubmitting}
+              onClick={submitOffShelf}
+            >
+              确认下架
             </Button>
           </Space>
         )}
