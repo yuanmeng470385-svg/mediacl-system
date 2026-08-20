@@ -52,7 +52,7 @@ export type RootStackParamList = {
   AcademicCardCreate: undefined;
   AcademicCardList: undefined;
   // AI 陪练 / Skill 广场 / 分身管理（二期 H）
-  PracticeList: undefined;
+  PracticeList: { skillId?: number } | undefined;
   PracticeChat: { sessionId: number };
   Plaza: undefined;
   TwinManage: undefined;

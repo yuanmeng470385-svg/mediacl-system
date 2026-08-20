@@ -50,7 +50,8 @@ export default function PlazaScreen() {
     try {
       await plazaAPI.load(item.id);
       Alert.alert('已加载', `「${item.name || 'Skill'}」已加载到陪练场`);
-      navigation.navigate('PracticeList');
+      // 把已加载 Skill 的 id 带进陪练场，创建会话时写入 skill_id（让 AI 医生按该模版风格陪练）
+      navigation.navigate('PracticeList', { skillId: item.id });
     } catch (err: any) {
       Alert.alert('加载失败', err?.message || '请稍后重试');
     } finally {

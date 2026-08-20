@@ -6,14 +6,16 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import Icon from '../../components/Icon';
 import { practiceAPI } from '../../api/practice';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+type Route = RouteProp<RootStackParamList, 'PracticeList'>;
 
 /** 预置场景（科室 × 性格组合成可选项） */
 const SCENARIOS = [
@@ -37,6 +39,10 @@ interface HistoryItem {
 
 export default function PracticeListScreen() {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<Route>();
+  // 从广场加载后跳转带入的 Skill id（创建会话时写入 skill_id，让 AI 医生按模版风格陪练）；
+  // 直接读 route.params 保证 react-navigation 复用已有实例时参数刷新仍生效
+  const skillId = route.params?.skillId;
   const [scenario, setScenario] = useState(SCENARIOS[0]);
   const [persona, setPersona] = useState(PERSONAS[0]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -63,7 +69,7 @@ export default function PracticeListScreen() {
     setStarting(true);
     try {
       const fullScenario = `${scenario}·${persona}医生`;
-      const session = await practiceAPI.create({ scenario: fullScenario });
+      const session = await practiceAPI.create({ scenario: fullScenario, skill_id: skillId });
       navigation.navigate('PracticeChat', { sessionId: session.id });
     } catch (err: any) {
       Alert.alert('创建失败', err?.message || '无法创建陪练会话，请稍后重试');
@@ -118,6 +124,10 @@ export default function PracticeListScreen() {
               );
             })}
           </View>
+
+          {skillId != null && (
+            <Text style={styles.loadedHint}>已加载官方 Skill 模版（#{skillId}），本次陪练将按其风格进行</Text>
+          )}
 
           <TouchableOpacity
             style={[styles.startBtn, starting && { opacity: 0.6 }]}
@@ -190,6 +200,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center', gap: Spacing.sm,
   },
   startText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  loadedHint: {
+    fontSize: FontSize.xs, color: Colors.info, marginTop: Spacing.sm,
+    backgroundColor: Colors.primarySurface, padding: Spacing.sm, borderRadius: BorderRadius.sm,
+  },
   emptyText: { fontSize: FontSize.sm, color: Colors.textHint, textAlign: 'center', paddingVertical: Spacing.lg },
   historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.md, gap: Spacing.md },
   rowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.divider },
