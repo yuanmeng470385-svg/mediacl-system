@@ -14,6 +14,7 @@ from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
 from shared.models.patient_edu import EduContentRecord, PatientEduTemplate
+from shared.models.user import User
 
 from app.services.audit_client import write_audit_log
 from app.services.compliance_client import check_compliance
@@ -157,6 +158,41 @@ async def review_template(
     return success(t.to_dict())
 
 
+@router.post("/{record_id}/review")
+async def review_edu(
+    record_id: int,
+    payload: dict,
+    current_user: dict = Depends(require_roles(*EDU_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """三期 M：审核患教内容 approve/reject；reject 必填 reason；仅 pending 可审。"""
+    rec = db.query(EduContentRecord).filter(EduContentRecord.id == record_id).first()
+    if not rec:
+        raise BusinessError("患教记录不存在", code=4001)
+    if rec.audit_status != "pending":
+        raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    verdict = payload.get("verdict")
+    if verdict not in ("approve", "reject"):
+        raise ParamError("verdict 必须是 approve 或 reject")
+    reason = (payload.get("reason") or "").strip() if isinstance(payload.get("reason"), str) else ""
+    if verdict == "reject" and not reason:
+        raise ParamError("驳回必须填写原因")
+    if len(reason) > 500:
+        raise ParamError("原因长度不能超过 500 字符")
+    rec.audit_status = "approved" if verdict == "approve" else "rejected"
+    db.commit()
+    db.refresh(rec)
+    await write_audit_log(
+        action="edu_review", user_id=current_user["id"],
+        resource_type="edu_content_record", resource_id=str(rec.id),
+        after_value={"audit_status": rec.audit_status, "reason": reason or None},
+        request_id=get_request_id() or None,
+    )
+    return success(rec.to_dict())
+
+
 @router.post("/generate")
 async def generate_edu(
     payload: dict,
@@ -212,6 +248,34 @@ def _get_own_record(db: Session, record_id: int, doctor_id: int) -> EduContentRe
     if not rec or rec.doctor_id != doctor_id:
         raise BusinessError("患教记录不存在", code=4001)
     return rec
+
+
+@router.get("/review-queue")
+async def edu_review_queue(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(require_roles(*EDU_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """三期 M：管理端患教内容审核队列（audit_status=pending，含医生姓名）。"""
+    p = PaginationParams(page=page, page_size=page_size)
+    q = (
+        db.query(EduContentRecord, User.full_name)
+        .outerjoin(User, EduContentRecord.doctor_id == User.id)
+        .filter(EduContentRecord.audit_status == "pending")
+    )
+    total = q.count()
+    rows = (
+        q.order_by(EduContentRecord.id.desc())
+        .offset(p.offset).limit(p.limit)
+        .all()
+    )
+    items = []
+    for rec, doctor_name in rows:
+        d = rec.to_dict()
+        d["doctor_name"] = doctor_name
+        items.append(d)
+    return success(paginate(items, total, p.page, p.page_size))
 
 
 @router.post("/{record_id}/publish")

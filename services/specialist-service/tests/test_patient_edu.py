@@ -212,3 +212,48 @@ def test_unpublish_requires_shared(fresh_state):
     resp = client.post("/api/v1/patient-edu/1/unpublish", json={}, headers=_token(2, "doctor"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+def test_review_queue_requires_admin():
+    _add_record(id=1, visibility="shared", audit_status="pending")
+    resp = client.get("/api/v1/patient-edu/review-queue", headers=_token(2, "doctor"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_review_queue_lists_pending_with_doctor_name(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="pending")
+    resp = client.get("/api/v1/patient-edu/review-queue", headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    item = body["data"]["items"][0]
+    assert item["doctor_name"] == "王医生"
+    assert item["audit_status"] == "pending"
+    assert item["content"]["title"] == "高血压患教"
+
+
+def test_review_record_approve(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="pending")
+    resp = client.post("/api/v1/patient-edu/1/review", json={"verdict": "approve"},
+                       headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["audit_status"] == "approved"
+    fresh_state.assert_awaited_once()
+
+
+def test_review_reject_requires_reason(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="pending")
+    resp = client.post("/api/v1/patient-edu/1/review", json={"verdict": "reject"},
+                       headers=_token(3, "medical"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_review_not_pending_4001(fresh_state):
+    _add_record(id=1, visibility="shared", audit_status="approved")
+    resp = client.post("/api/v1/patient-edu/1/review", json={"verdict": "reject", "reason": "不合规"},
+                       headers=_token(3, "medical"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
