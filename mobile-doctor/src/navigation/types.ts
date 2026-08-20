@@ -28,4 +28,12 @@ export type RootStackParamList = {
   Inbox: undefined;
   // 学术卡片详情（按推送记录 id 上报阅读/反馈）
   CardDetail: { pushId: number };
+  // 偏好 + 个性化学术简报
+  Preferences: undefined;
+  // 官方广场（官方公共数字员工）
+  DoctorPlaza: undefined;
+  // 患教工具
+  PatientEdu: undefined;
+  // 收藏历史
+  Favorites: undefined;
 };

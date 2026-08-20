@@ -421,3 +421,83 @@ export interface TwinSubscriptionItem extends TwinSubscription {
   twin_name?: string | null;
   twin_status?: string | null;
 }
+
+// ========== 医生端体验（二期 I） ==========
+
+/** 医生偏好画像 —— 后端 DoctorProfile.to_dict 同形状（无画像 getProfile 返回 null） */
+export interface DoctorProfile {
+  id: number;
+  doctor_id: number;
+  interest_areas: string[] | null;
+  preferred_doc_type: string | null;
+  preferred_style: string | null;
+  closed: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** 学术简报条目 —— GET /api/v1/doctor-profiles/briefing items 元素 */
+export interface BriefingItem {
+  area: string;
+  suggestion: string;
+  doc_type: string;
+}
+
+/** 个性化学术简报 —— GET /api/v1/doctor-profiles/briefing */
+export interface DoctorBriefing {
+  items: BriefingItem[];
+  personalized: boolean;
+}
+
+/** 患教模板 —— 后端 PatientEduTemplate.to_dict 同形状 */
+export interface PatientEduTemplate {
+  id: number;
+  title: string;
+  disease_area: string;
+  content: string;
+  version: string;
+  review_status: string;
+  created_at?: string | null;
+}
+
+/** 患教卡片正文 —— EduContentRecord.content（JSONB） */
+export interface EduCardContent {
+  title: string;
+  body: string;
+  notes: string;
+  seek_care: string;
+}
+
+/** 患教内容记录 —— 后端 EduContentRecord.to_dict 同形状 */
+export interface EduCard {
+  id: number;
+  doctor_id: number;
+  template_id: number | null;
+  content: EduCardContent;
+  is_ai_generated: boolean;
+  visibility: string;
+  created_at?: string | null;
+}
+
+/** 官方广场分身 —— Specialist.to_dict + 广场接口补充的 added_count */
+export interface PlazaTwin {
+  id: number;
+  name: string;
+  added_count: number;
+  status: string;
+  is_official: boolean;
+  persona?: any;
+  knowledge_scope?: any;
+  [key: string]: any;
+}
+
+/** 收藏条目 —— GET /api/v1/favorites 列表项（问答快照） */
+export interface FavoriteItem {
+  id: number;
+  conversation_id: number;
+  specialist_id: number;
+  question: string;
+  answer: string;
+  citations?: { title?: string; url?: string }[] | null;
+  created_at?: string | null;
+}

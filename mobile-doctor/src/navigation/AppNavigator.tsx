@@ -22,6 +22,10 @@ import TwinChatScreen from '../screens/TwinChat/TwinChatScreen';
 import CertUploadScreen from '../screens/CertUpload/CertUploadScreen';
 import InboxScreen from '../screens/Inbox/InboxScreen';
 import CardDetailScreen from '../screens/Inbox/CardDetailScreen';
+import PreferenceScreen from '../screens/Preferences/PreferenceScreen';
+import PlazaScreen from '../screens/Plaza/PlazaScreen';
+import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
+import FavoritesScreen from '../screens/Profile/FavoritesScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -176,6 +180,26 @@ export default function AppNavigator() {
             <Stack.Screen
               name="CardDetail"
               component={CardDetailScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="Preferences"
+              component={PreferenceScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="DoctorPlaza"
+              component={PlazaScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="PatientEdu"
+              component={PatientEduScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="Favorites"
+              component={FavoritesScreen}
               options={{ animation: 'slide_from_right' }}
             />
           </>

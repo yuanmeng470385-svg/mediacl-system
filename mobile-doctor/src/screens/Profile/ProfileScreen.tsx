@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import Icon, { FeatureIcons } from '../../components/Icon';
+import Icon, { ActionIcons, FeatureIcons } from '../../components/Icon';
 import { useAuth } from '../../store/AuthContext';
 import { doctorAPI } from '../../api/doctor';
 import type { RootStackParamList } from '../../navigation/types';
@@ -116,6 +116,70 @@ export default function ProfileScreen() {
           <View style={styles.rowText}>
             <Text style={styles.label}>学术卡片</Text>
             <Text style={styles.desc}>查看医药代表推送的学术内容</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
+        {/* 偏好 + 个性化学术简报入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Preferences')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={FeatureIcons.knowledge} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>学术偏好</Text>
+            <Text style={styles.desc}>设置兴趣领域与个性化学术简报</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
+        {/* 官方广场入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('DoctorPlaza')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={FeatureIcons.specialist} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>官方广场</Text>
+            <Text style={styles.desc}>浏览并添加官方公共数字员工</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
+        {/* 患教工具入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('PatientEdu')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={FeatureIcons.content} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>患教工具</Text>
+            <Text style={styles.desc}>选择模板生成患者教育卡片</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
+        {/* 收藏历史入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Favorites')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={ActionIcons.star} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>收藏历史</Text>
+            <Text style={styles.desc}>查看本人收藏的问答</Text>
           </View>
           <Icon name="chevron-right" size={20} color={Colors.textHint} />
         </TouchableOpacity>
