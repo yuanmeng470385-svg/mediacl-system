@@ -40,7 +40,7 @@ def _merge_profile_fields(base: dict, updates: dict) -> dict:
         if key == "tags":
             existing = result.get("tags") or []
             merged_tags = list(existing)
-            for tag in value:
+            for tag in _to_tags(value):
                 if tag not in merged_tags:
                     merged_tags.append(tag)
             result["tags"] = merged_tags
@@ -109,12 +109,14 @@ class HcpRepo:
 
     @staticmethod
     def update(db: Session, hcp: Hcp, data: Dict) -> Hcp:
-        """更新医生档案（仅更新白名单内传入字段）"""
+        """更新医生档案（仅更新白名单内传入字段；显式 null = 清空该可选字段，
+        name/status 非空列除外——跳过 null 只会把清空操作静默变成 no-op）"""
         for key, value in _filter_writable(data).items():
             if key == "tags":
                 value = _to_tags(value)
-            if value is not None:
-                setattr(hcp, key, value)
+            if value is None and key in ("name", "status"):
+                continue
+            setattr(hcp, key, value)
         db.commit()
         db.refresh(hcp)
         return hcp

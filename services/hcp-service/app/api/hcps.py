@@ -247,8 +247,8 @@ async def batch_import_hcps(
 
     表头：姓名(必填) | 医院 | 科室 | 职称 | 专业 | 电话 | 邮箱 | 区域 | 影响力 | 标签
     """
-    if not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise ParamError("仅支持 .xlsx 文件")
+    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
+        raise ParamError("仅支持 .xlsx/.xlsm 文件")
 
     try:
         rows = parse_hcp_excel(file.file)

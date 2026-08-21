@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from shared.common.db_session import get_db
 from shared.common.response import ParamError
+from shared.common.xlsx import sanitize_cell as _sanitize
 from shared.common.auth import require_roles
 from shared.models.compliance import ComplianceBlock, ComplianceRule
 from app.services.audit_client import write_audit_log
@@ -36,26 +37,28 @@ def build_report_workbook(rules: List[Dict], blocks: List[Dict], summary: Dict) 
     ws.title = "规则快照"
     ws.append(["rule_code", "rule_name", "rule_type", "severity", "action", "enabled", "version", "hit_count"])
     for r in rules:
-        ws.append([r["rule_code"], r["rule_name"], r["rule_type"], r["severity"],
-                   r["action"], r["enabled"], r["version"], r["hit_count"]])
+        ws.append([_sanitize(v) for v in
+                   [r["rule_code"], r["rule_name"], r["rule_type"], r["severity"],
+                    r["action"], r["enabled"], r["version"], r["hit_count"]]])
     # ---- Sheet 2: 拦截明细 ----
     ws2 = wb.create_sheet("拦截明细")
     ws2.append(["id", "user_id", "service_name", "content", "rule_code", "rule_name", "severity", "action", "blocked_at"])
     for b in blocks:
-        ws2.append([b["id"], b["user_id"], b["service_name"], b["content"], b["rule_code"],
-                    b["rule_name"], b["severity"], b["action"],
-                    b["blocked_at"].isoformat() if b["blocked_at"] else None])
+        ws2.append([_sanitize(v) for v in
+                    [b["id"], b["user_id"], b["service_name"], b["content"], b["rule_code"],
+                     b["rule_name"], b["severity"], b["action"],
+                     b["blocked_at"].isoformat() if b["blocked_at"] else None]])
     # ---- Sheet 3: 汇总 ----
     ws3 = wb.create_sheet("汇总")
     ws3.append(["统计项", "值"])
     for rule_code, cnt in summary["by_rule"]:
-        ws3.append(["命中规则", f"{rule_code}: {cnt}"])
+        ws3.append(["命中规则", _sanitize(f"{rule_code}: {cnt}")])
     for svc, cnt in summary["by_service"]:
-        ws3.append(["按服务", f"{svc}: {cnt}"])
+        ws3.append(["按服务", _sanitize(f"{svc}: {cnt}")])
     for day, cnt in summary["by_day"]:
-        ws3.append(["按天", f"{day}: {cnt}"])
+        ws3.append(["按天", _sanitize(f"{day}: {cnt}")])
     for action, ratio in summary["action_ratio"].items():
-        ws3.append(["动作占比", f"{action}: {ratio:.1%}"])
+        ws3.append(["动作占比", _sanitize(f"{action}: {ratio:.1%}")])
     return wb
 
 

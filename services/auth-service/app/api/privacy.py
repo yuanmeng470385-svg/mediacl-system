@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.common.auth import require_roles
@@ -288,8 +289,23 @@ async def handle_privacy_request(
             if fields.get("full_name"):
                 doctor.full_name = str(fields["full_name"])[:100]
             if fields.get("phone"):
-                doctor.phone = str(fields["phone"])
-            db.commit()
+                new_phone = str(fields["phone"])
+                # 撞号预检（A2，同 users.py）：更正成他人手机号等于劫持其登录凭据；
+                # 真库唯一索引下直接提交只会 IntegrityError→500
+                dup = db.query(User).filter(
+                    User.phone == new_phone, User.id != doctor.id
+                ).first()
+                if dup:
+                    raise BusinessError(
+                        f"手机号已被用户 {dup.id} 使用，请驳回并让医生重新提交",
+                        code=4001)
+                doctor.phone = new_phone
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                raise BusinessError("手机号已被其他用户使用（并发更正），请驳回重新提交",
+                                    code=4001)
         elif req.request_type == "export":
             file_url = _build_privacy_package(db, doctor, req.id)
         elif req.request_type in ("delete", "account_delete"):

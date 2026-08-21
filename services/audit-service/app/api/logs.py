@@ -16,6 +16,7 @@ from shared.common.auth import require_roles
 from shared.common.db_session import get_db
 from shared.common.internal_auth import require_internal_key
 from shared.common.pagination import paginate
+from shared.common.xlsx import sanitize_cell as _sanitize
 from shared.models.audit_log import AuditLog
 
 from app.core.logger import get_audit_logger
@@ -210,7 +211,7 @@ async def export_report(
 
     # 数据
     for log in logs:
-        ws.append([
+        ws.append([_sanitize(v) for v in [
             log.timestamp.isoformat() if log.timestamp else "",
             log.service_name or "",
             log.user_id or "",
@@ -221,7 +222,7 @@ async def export_report(
             log.ai_model or "",
             log.risk_level or "",
             log.request_id or "",
-        ])
+        ]])
 
     # 调整列宽
     for col in ws.columns:

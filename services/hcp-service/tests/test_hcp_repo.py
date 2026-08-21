@@ -88,3 +88,23 @@ def test_update_ignores_system_and_unknown_fields():
     assert hcp.id == 5            # 主键未被覆盖
     assert hcp.created_at == "2026-01-01T00:00:00"  # 时间戳未被覆盖
     assert hcp.hospital == "仁济医院"
+
+
+def test_update_null_clears_optional_fields():
+    """显式 null = 清空可选字段（电话/标签）。修复前 `if value is not None`
+    把 null 静默丢弃 → 管理端“清空”操作永远不生效（审计遗留 M10）。"""
+    db = FakeDb()
+    hcp = _make_hcp(phone="13800000001", tags=["KOL"], hospital="协和医院")
+    hcp = HcpRepo.update(db, hcp, {"phone": None, "tags": None})
+    assert hcp.phone is None
+    assert hcp.tags == []
+    assert hcp.hospital == "协和医院"   # 未传入字段不动
+
+
+def test_update_null_keeps_required_name_status():
+    """name/status 是 NOT NULL 列，显式 null 必须跳过（清空只会制造 500）。"""
+    db = FakeDb()
+    hcp = _make_hcp(name="张伟", status="active")
+    hcp = HcpRepo.update(db, hcp, {"name": None, "status": None})
+    assert hcp.name == "张伟"
+    assert hcp.status == "active"

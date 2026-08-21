@@ -418,3 +418,32 @@ def test_handle_terminal_state_cannot_be_handled_again():
                     json={"action": "rejected", "response": "再来一次"})
     # BusinessError（终态拦截）→ HTTP 422，同上
     assert r.status_code == 422
+
+
+def test_handle_done_correct_phone_conflict_4001(audit_mock):
+    """更正手机号与他人已用手机号重复 → 422 code 4001，双方手机号不变。
+    修复前：直接 setattr 提交（测试库无唯一索引 → 静默劫持 rep 手机号；
+    真实 PG → IntegrityError 500）。修法对齐 users.py A2：预检 + 4001。"""
+    db = TestSession()
+    req = PrivacyRequest(
+        doctor_id=1, request_type="correct", status="pending",
+        content={"fields": {"phone": "13800000002"}},  # rep01 已占用
+        sla_deadline=datetime.utcnow() + timedelta(days=30),
+    )
+    db.add(req)
+    db.commit()
+    req_id = req.id   # close 前取，避免 DetachedInstanceError
+    db.close()
+    r = client.post(f"/api/v1/privacy-requests/{req_id}/handle",
+                    headers=_token(2, "admin"),
+                    json={"action": "done", "response": "已更正"})
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == 4001
+    db = TestSession()
+    try:
+        u1 = db.query(User).filter(User.id == 1).first()
+        u3 = db.query(User).filter(User.id == 3).first()
+        assert u1.phone == "13800000001"   # 医生手机号未被改
+        assert u3.phone == "13800000002"   # rep 手机号未被劫持
+    finally:
+        db.close()

@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from shared.common.response import success, error, ParamError
+from shared.common.response import success, error, ParamError, BusinessError
 from shared.common.auth import get_current_user, require_roles
 
 # 合规规则管理端点（增/改/禁/重载）仅限合规相关人员 —— rep 不得改规则（S6 RBAC）
@@ -13,6 +13,7 @@ from shared.common.db_session import get_db
 from shared.common.internal_auth import require_internal_key
 from shared.common.pagination import paginate, PaginationParams
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.checker import get_checker
 from app.services.audit_client import write_audit_log
@@ -279,6 +280,9 @@ async def create_rule(
     rule_name = (request.get("rule_name") or "").strip()
     if not rule_code or not rule_name:
         raise ParamError("rule_code 和 rule_name 不能为空")
+    if db.query(ComplianceRule).filter(ComplianceRule.rule_code == rule_code).first():
+        # 撞码预检（A2）：真库唯一索引兜底前给出友好 4001，而非 IntegrityError 500
+        raise BusinessError(f"rule_code 已存在: {rule_code}", code=4001)
     _validate_rule_fields(request, partial=False)
 
     content = request.get("content")
@@ -300,7 +304,11 @@ async def create_rule(
         created_by=current_user["id"],
     )
     db.add(rule)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise BusinessError(f"rule_code 已存在（并发创建）: {rule_code}", code=4001)
     db.refresh(rule)
     checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
     logger.info(f"新增合规规则: {rule.rule_code} by user {current_user['id']}")

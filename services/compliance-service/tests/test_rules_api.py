@@ -421,3 +421,26 @@ def test_list_rules_login_only(client):
     body = resp.json()
     assert body["code"] == 0
     assert isinstance(body["data"]["items"], list)
+
+
+def test_create_rule_duplicate_rule_code_4001(monkeypatch):
+    """重复 rule_code → 422 code 4001（修复前：假库无唯一约束 → 直接 200；
+    真实 PG 唯一索引 → IntegrityError → 500）。修法对齐 auth users.py 撞号 A2。"""
+    async def _fake_audit_log(**kwargs):
+        return None
+
+    monkeypatch.setattr(rules_api, "write_audit_log", _fake_audit_log)
+    monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb())
+    app.dependency_overrides[get_db] = lambda: _FakeDb(rows=[_FakeRule(rule_code="R900")])
+    app.dependency_overrides[get_current_user] = _fake_current_user
+    try:
+        with TestClient(app) as c:
+            resp = c.post("/api/v1/compliance/rules", json={
+                "rule_code": "R900", "rule_name": "重复规则", "rule_type": "keyword",
+                "content": {"patterns": ["违禁词"]}, "severity": "high",
+                "action": "reject", "description": "", "enabled": True,
+            })
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["code"] == 4001
+    finally:
+        app.dependency_overrides.clear()

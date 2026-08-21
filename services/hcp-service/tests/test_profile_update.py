@@ -21,3 +21,10 @@ def test_tags_dedup_append():
     base = {"tags": ["KOL"]}
     merged = _merge_profile_fields(base, {"tags": ["KOL", "学术型"]})
     assert merged["tags"] == ["KOL", "学术型"]
+
+
+def test_tags_string_comma_split_not_char_iteration():
+    """修复前 `for tag in value:` 对字符串逐字符展开 → "KOL,学术型" 变成
+    ["K","O","L",",","学",...] 单字符标签污染画像（审计遗留）。"""
+    merged = _merge_profile_fields({"tags": ["KOL"]}, {"tags": "KOL,学术型"})
+    assert merged["tags"] == ["KOL", "学术型"]

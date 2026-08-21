@@ -15,6 +15,7 @@ from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
+from shared.common.xlsx import sanitize_cell as _sanitize_cell
 from shared.models.user import User
 
 from app.models.conversation import Conversation
@@ -30,14 +31,6 @@ VALID_EXPORT_TYPES = ("conversations",)
 SLA_DAYS = 3
 DOWNLOAD_EXPIRE_DAYS = 7
 ROW_CAP = 50000
-
-
-def _sanitize_cell(value):
-    """防止 xlsx 公式注入：openpyxl 会把以 = + - @ \\t \\r 开头的字符串当作公式，
-    导出文件在 Excel 打开时会执行公式（如 =HYPERLINK(...)/=cmd|...）。加前导单引号强制存为文本。"""
-    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return "'" + value
-    return value
 
 
 def _build_conversations_xlsx(request_id: int, rows: list, out_dir: str = os.path.join("logs", "exports")) -> str:
