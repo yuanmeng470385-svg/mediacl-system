@@ -43,6 +43,7 @@ UNLIMITED_PATHS = ["/health", "/docs", "/openapi.json", "/redoc"]
 # 在 Auth 层已被 403 拦下；PUBLIC_PATHS（login/send-code）是用户入口，
 # 继续受限流保护，不得加入豁免。
 from app.core.auth_middleware import INTERNAL_PATHS
+from app.core.real_ip import trusted_proxy_real_ip
 
 # Redis 滑动窗口原子脚本：清理过期成员 → 计数检查 → 记录 + 设置过期。
 # 返回 1 = 放行，0 = 超限拒绝。member 用 "score_随机后缀" 防同毫秒碰撞覆盖。
@@ -171,7 +172,12 @@ class RateLimiter(BaseHTTPMiddleware):
         if user.get("id") is not None:
             client_key = f"u:{user['id']}"
         else:
-            client_key = f"ip:{request.client.host if request.client else 'unknown'}"
+            # M10（2026-08-21 审计）：反代/LB 部署下对端是 LB 地址，直接用
+            # client.host 会让全站共享一个限流窗口。对端命中 TRUSTED_PROXY_CIDRS
+            # 时改用部署层注入的 X-Real-IP；未配置/未命中仍用对端地址
+            # （不信任客户端自报 IP，防伪造头绕过限流）。
+            real_ip = trusted_proxy_real_ip(request, request.headers)
+            client_key = f"ip:{real_ip or (request.client.host if request.client else 'unknown')}"
 
         now = time.time()
         if not self._check_and_record(client_key, now):

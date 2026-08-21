@@ -66,6 +66,22 @@ def get_code_store() -> CodeStore:
     return _code_store_singleton
 
 
+_login_guard_singleton = None
+
+
+def get_login_guard():
+    """M9 密码登录失败锁定（单例；测试用 dependency_overrides 注入 Memory 版）"""
+    global _login_guard_singleton
+    if _login_guard_singleton is None:
+        from app.core.login_guard import RedisLoginGuard
+        _login_guard_singleton = RedisLoginGuard(
+            settings.REDIS_URL,
+            max_failures=settings.LOGIN_MAX_FAILURES,
+            lockout_seconds=settings.LOGIN_LOCKOUT_SECONDS,
+        )
+    return _login_guard_singleton
+
+
 # A8：发送器实例模块级缓存（provider -> sender）。aliyun SDK client 构造有
 # 开销，每次请求重建会拖慢 send-code。配置切换时自动重建。
 # 线程安全说明：send_code 经 asyncio.to_thread 在线程池并发调用，
@@ -190,6 +206,7 @@ async def login(
     request: Request,
     db: Session = Depends(get_db),
     store: CodeStore = Depends(get_code_store),
+    guard=Depends(get_login_guard),
 ):
     """
     两种方式，二选一：
@@ -217,12 +234,21 @@ async def login(
             raise
     elif username and password:
         method = "password"
+        # M9（2026-08-21 审计）：锁定检查在 bcrypt 之前 —— 锁内不消耗哈希直接拒；
+        # guard 是同步 Redis 客户端，统一 to_thread 不占事件循环（同批④口径）
+        remaining = await asyncio.to_thread(guard.lock_remaining, username)
+        if remaining > 0:
+            minutes = (remaining + 59) // 60
+            await _write_login_failed_audit(request, db, method, username=username)
+            raise AuthError(f"登录尝试次数过多，账号已锁定，请 {minutes} 分钟后再试")
         try:
             user = _login_by_password(db, username, password)
         except AuthError:
             # 合规硬伤回归：密码错误/用户不存在必须留痕
+            await asyncio.to_thread(guard.record_failure, username)
             await _write_login_failed_audit(request, db, method, username=username)
             raise
+        await asyncio.to_thread(guard.reset, username)
     else:
         raise ParamError("请提供 phone+code 或 username+password")
 
@@ -313,7 +339,8 @@ def _login_by_code(db: Session, store: CodeStore, phone: str, code: str):
 def _login_by_password(db: Session, username: str, password: str):
     """用户名 + 密码
 
-    注意：当前没有做账号级失败锁定，暴力破解只受网关 IP 限流约束。
+    M9（2026-08-21）：账号级失败锁定由 login 端点接线（guard，bcrypt 前拒）；
+    本函数只管凭证校验本身。
 
     A1 时序枚举防护：用户不存在/已停用/未设密码这些"秒回"分支都会对固定
     dummy hash 执行一次真实 bcrypt 校验，把耗时拉到与"密码错误"路径同一量级，

@@ -17,6 +17,7 @@ import jwt as pyjwt
 from starlette.testclient import TestClient
 
 import app.main as main
+import app.core.real_ip as real_ip_mod
 from app.main import app
 from app.core.auth_middleware import settings as middleware_settings
 
@@ -88,9 +89,10 @@ def _get_with_peer(peer_ip: str, path: str, headers: dict) -> httpx.Response:
 
 
 def _trust(monkeypatch, cidrs):
-    """注入信任代理网段（模块级 _trusted_proxy_nets 由启动时解析，测试用 monkeypatch 替换）"""
+    """注入信任代理网段（M10 起符号在 core/real_ip 模块，启动时解析，测试替换）"""
     monkeypatch.setattr(
-        main, "_trusted_proxy_nets", [ipaddress.ip_network(c, strict=False) for c in cidrs]
+        real_ip_mod, "_trusted_proxy_nets",
+        [ipaddress.ip_network(c, strict=False) for c in cidrs]
     )
 
 
@@ -158,6 +160,7 @@ def test_trusted_proxy_without_injected_header_falls_back_to_peer(monkeypatch):
 
 def test_parse_trusted_proxy_cidrs_skips_invalid(monkeypatch):
     """CIDR 解析：非法项告警跳过，不拖垮启动"""
-    monkeypatch.setattr(main, "_trusted_proxy_cidrs", ["10.0.0.0/8", "not-a-cidr", "192.168.0.0/16"])
-    nets = main._parse_trusted_proxy_cidrs()
+    monkeypatch.setattr(real_ip_mod, "_trusted_proxy_cidrs",
+                         ["10.0.0.0/8", "not-a-cidr", "192.168.0.0/16"])
+    nets = real_ip_mod._parse_trusted_proxy_cidrs()
     assert [str(n) for n in nets] == ["10.0.0.0/8", "192.168.0.0/16"]

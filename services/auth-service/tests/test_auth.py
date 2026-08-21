@@ -86,6 +86,7 @@ class BrokenCodeStore(CodeStore):
 
 store = MemoryCodeStore()
 sender = RecordingSender()
+_lock_guard = None   # M9：MemoryLoginGuard 实例，fixture 内延迟初始化
 
 
 def _override_db():
@@ -129,9 +130,26 @@ def fresh_state():
              status="active", password_hash=None),
         User(id=3, username="disabled", full_name="已停用", phone=DISABLED_PHONE, role="rep",
              status="disabled", password_hash=hash_password(PASSWORD)),
+        # M9 锁定测试专用：独立账号，避免锁死后污染 rep01 的其余用例
+        User(id=99, username="lockuser", full_name="锁定测试", phone="13800000099",
+             role="rep", status="active", password_hash=hash_password(PASSWORD)),
     ])
     db.commit()
     db.close()
+
+    # M9：每测试重置登录锁定计数（login_guard 未实现时本批尚未接线，跳过）
+    global _lock_guard
+    try:
+        from app.core.login_guard import MemoryLoginGuard
+        import app.api.auth as _auth_api
+        if _lock_guard is None:
+            _lock_guard = MemoryLoginGuard(max_failures=5, lockout_seconds=900)
+        _lock_guard.clear()
+        _dep = getattr(_auth_api, "get_login_guard", None)
+        if _dep is not None:
+            app.dependency_overrides[_dep] = lambda: _lock_guard
+    except ImportError:
+        pass
 
     store._codes.clear()
     store._cooldowns.clear()
@@ -661,3 +679,36 @@ class TestUserManagementSecurity:
         r = client.post("/api/v1/users", headers=self._auth("admin01"), json=[1, 2])
         assert r.status_code in (400, 422)
         assert r.json()["code"] == 1000
+
+
+# ==================== 密码登录失败锁定（M9，2026-08-21 审计） ====================
+
+class TestLoginByPasswordLockout:
+    """验证码路径自带单码尝试上限；密码路径此前无锁定——连续错密必须锁号。
+    定窗语义：第一次错密起 15 分钟内累计 5 次 → 锁 15 分钟，正确密码也拒。"""
+
+    def _post(self, password):
+        return client.post("/api/v1/auth/login",
+                           json={"username": "lockuser", "password": password})
+
+    def _require_m9_wired(self):
+        import app.api.auth as auth_api
+        if getattr(auth_api, "get_login_guard", None) is None:
+            pytest.fail("M9 未接线：login 端点缺少 get_login_guard 依赖")
+
+    def test_连续错密达到阈值后_正确密码也被锁拒(self):
+        self._require_m9_wired()
+        for _ in range(5):
+            assert self._post("totally-wrong").status_code == 401
+        r = self._post(PASSWORD)   # 密码完全正确，但账号已锁
+        assert r.status_code == 401
+        assert "锁" in (r.json().get("message") or ""), r.json()
+
+    def test_未达阈值_正确密码可登录且计数清零(self):
+        self._require_m9_wired()
+        for _ in range(4):
+            assert self._post("totally-wrong").status_code == 401
+        assert self._post(PASSWORD).status_code == 200
+        for _ in range(4):         # 成功已清零：再错 4 次不会锁
+            assert self._post("totally-wrong").status_code == 401
+        assert self._post(PASSWORD).status_code == 200

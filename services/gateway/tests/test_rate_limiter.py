@@ -213,3 +213,63 @@ class TestReset:
 
         limiter.reset("u:1")
         fake.delete.assert_called_once_with("rl:u:1")
+
+
+class TestIpKeyUsesTrustedProxyRealIp:
+    """M10（2026-08-21 审计）：反代/LB 部署下对端是 LB 地址——限流 IP 键若直接用
+    client.host，全站共享一个限流窗口（一个坏用户 429 全站陪葬，且无法按真实
+    客户端区分）。对端命中 TRUSTED_PROXY_CIDRS 时必须用部署层注入的 X-Real-IP。"""
+
+    def _dispatch_capturing_key(self, monkeypatch, headers, peer_host):
+        import asyncio
+        import ipaddress
+        from types import SimpleNamespace
+
+        from app.core import real_ip as realip_mod
+
+        # 信任 10.0.0.0/8 为代理网段（复刻生产 TRUSTED_PROXY_CIDRS 注入）
+        monkeypatch.setattr(realip_mod, "_trusted_proxy_nets",
+                            [ipaddress.ip_network("10.0.0.0/8")])
+
+        mw = RateLimiter.__new__(RateLimiter)
+        mw.max_requests = 60
+        req = SimpleNamespace(
+            url=SimpleNamespace(path="/api/v1/specialists"),
+            headers=headers,
+            client=SimpleNamespace(host=peer_host),
+            scope={},   # 未认证 → 走 IP 键分支
+        )
+        seen = {}
+
+        def fake_check(key, now):   # 同步：与真实 _check_and_record 签名一致
+            seen["key"] = key
+            return True
+
+        monkeypatch.setattr(mw, "_check_and_record", fake_check)
+
+        async def call_next(r):
+            return "resp"
+
+        resp = asyncio.run(mw.dispatch(req, call_next))
+        assert resp == "resp"
+        return seen["key"]
+
+    def test_信任代理对端用注入的真实IP(self, monkeypatch):
+        key = self._dispatch_capturing_key(
+            monkeypatch,
+            headers={"x-real-ip": "203.0.113.7"},
+            peer_host="10.0.0.9",   # LB 地址，命中信任网段
+        )
+        assert key == "ip:203.0.113.7", (
+            "限流 IP 键应取部署层注入的 X-Real-IP，而非 LB 地址 "
+            f"(got {key})"
+        )
+
+    def test_非信任对端无视自报头(self, monkeypatch):
+        """护栏：对端不在信任网段时必须忽略客户端伪造的 X-Real-IP（防绕过限流）"""
+        key = self._dispatch_capturing_key(
+            monkeypatch,
+            headers={"x-real-ip": "203.0.113.7"},
+            peer_host="192.0.2.1",  # 直连客户端，不在信任网段
+        )
+        assert key == "ip:192.0.2.1"

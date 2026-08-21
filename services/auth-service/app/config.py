@@ -22,6 +22,9 @@ class Settings:
     CODE_TTL_SECONDS = int(os.getenv("AUTH_CODE_TTL_SECONDS", "300"))      # 验证码有效期 5 分钟
     CODE_RESEND_SECONDS = int(os.getenv("AUTH_CODE_RESEND_SECONDS", "60")) # 重发冷却 60 秒
     CODE_MAX_ATTEMPTS = int(os.getenv("AUTH_CODE_MAX_ATTEMPTS", "5"))      # 单个验证码最多试 5 次
+    # M9（2026-08-21 审计）：密码登录失败锁定 —— 定窗内累计到阈值即锁
+    LOGIN_MAX_FAILURES = int(os.getenv("AUTH_LOGIN_MAX_FAILURES", "5"))    # 连续错密 5 次
+    LOGIN_LOCKOUT_SECONDS = int(os.getenv("AUTH_LOGIN_LOCKOUT_SECONDS", "900"))  # 锁 15 分钟
 
     # --- 短信通道 ---
     # console（默认，只写日志）/ aliyun（需签名与模板 CODE）
