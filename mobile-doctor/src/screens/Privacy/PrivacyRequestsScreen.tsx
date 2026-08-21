@@ -2,7 +2,7 @@
  * 我的隐私请求（三期 L）：本人请求列表 + 状态/SLA 展示 + 处理回复。
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import { privacyAPI } from '../../api/privacy';
 import type { PrivacyRequestItem } from '../../api/privacy';
 import { Colors, FontSize } from '../../constants/theme';
@@ -21,14 +21,18 @@ const TYPE_TEXT: Record<string, string> = {
 export default function PrivacyRequestsScreen() {
   const [items, setItems] = useState<PrivacyRequestItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError('');
     try {
       const data = await privacyAPI.getMyPrivacyRequests();
       setItems(data.items ?? []);
-    } catch {
-      /* 错误已由 client 统一 toast */
+    } catch (e: any) {
+      // client 只抛 APIError、无任何全局提示；加载失败须显示错误态 + 重试，不能伪装成"暂无"（此页承载法定 SLA 进度）
+      setError(e?.message || '隐私请求加载失败，请检查网络');
+      setItems([]);
     } finally {
       setLoading(false);
     }
@@ -48,9 +52,19 @@ export default function PrivacyRequestsScreen() {
       keyExtractor={(item) => String(item.id)}
       refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
       ListEmptyComponent={
-        <Text style={{ color: Colors.textSecondary, textAlign: 'center', marginTop: 32 }}>
-          暂无隐私请求
-        </Text>
+        <View style={{ alignItems: 'center', paddingTop: 32, paddingHorizontal: 24 }}>
+          <Text style={{ color: Colors.textSecondary, fontSize: FontSize.md, fontWeight: '600', textAlign: 'center' }}>
+            {error || '暂无隐私请求'}
+          </Text>
+          {error ? (
+            <Pressable
+              onPress={load}
+              style={{ backgroundColor: Colors.primary, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8, marginTop: 16 }}
+            >
+              <Text style={{ color: Colors.textWhite, fontWeight: '600' }}>重试</Text>
+            </Pressable>
+          ) : null}
+        </View>
       }
       renderItem={({ item }) => (
         <View style={{ backgroundColor: Colors.card, borderRadius: 12, padding: 16, gap: 6 }}>

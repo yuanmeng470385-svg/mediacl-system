@@ -31,6 +31,7 @@ export default function PrivacyCenterScreen({ navigation }: Props) {
   const [policy, setPolicy] = useState<PrivacyPolicy | null>(null);
   const [personal, setPersonal] = useState<PersonalData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [formKind, setFormKind] = useState<FormKind | null>(null);
   const [detail, setDetail] = useState('');
   const [fullName, setFullName] = useState('');
@@ -39,12 +40,14 @@ export default function PrivacyCenterScreen({ navigation }: Props) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError('');
     try {
       const [p, d] = await Promise.all([privacyAPI.getPrivacyPolicy(), privacyAPI.getPersonalData()]);
       setPolicy(p);
       setPersonal(d);
-    } catch {
-      /* 错误已由 client 统一 toast */
+    } catch (e: any) {
+      // client 只抛 APIError、无任何全局提示；加载失败须本屏自显（错误态 + 重试，照 FavoritesScreen）
+      setError(e?.message || '隐私中心加载失败，请检查网络');
     } finally {
       setLoading(false);
     }
@@ -58,16 +61,21 @@ export default function PrivacyCenterScreen({ navigation }: Props) {
       setSubmitting(true);
       try {
         const payload: CreatePrivacyRequestPayload = { request_type: kind, detail };
-        if (kind === 'correct' && (fullName || phone)) payload.fields = {};
-        if (fullName) payload.fields!.full_name = fullName;
-        if (phone) payload.fields!.phone = phone;
+        // 残留字段守卫：fullName/phone 仅属于 correct；取消/返回只关弹窗不清输入，
+        // 残留值不能泄入 export/delete/account_delete（否则 fields 为 undefined 仍赋值 → TypeError 被吞、静默不发请求）
+        if (kind === 'correct') {
+          if (fullName || phone) payload.fields = {};
+          if (fullName) payload.fields!.full_name = fullName;
+          if (phone) payload.fields!.phone = phone;
+        }
         if (kind === 'account_delete') payload.confirm = true;
         await privacyAPI.createPrivacyRequest(payload);
         setFormKind(null);
         setDetail(''); setFullName(''); setPhone('');
         Alert.alert('已提交', '请求已受理，将在 30 日内处理，可在「我的隐私请求」查看进度');
-      } catch {
-        /* 校验错误由 client 统一 toast */
+      } catch (e: any) {
+        // 后端校验驳回（422 带 message，如 correct 字段为空/手机号格式）必须可见，不能静默吞掉
+        Alert.alert('提交失败', e?.message || '请稍后重试');
       } finally {
         setSubmitting(false);
       }
@@ -85,6 +93,20 @@ export default function PrivacyCenterScreen({ navigation }: Props) {
 
   if (loading) {
     return <View style={{ flex: 1, justifyContent: 'center' }}><ActivityIndicator /></View>;
+  }
+
+  if (error && !policy && !personal) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background, padding: 24 }}>
+        <Text style={{ color: Colors.textSecondary, fontSize: FontSize.md, textAlign: 'center' }}>{error}</Text>
+        <Pressable
+          onPress={load}
+          style={{ backgroundColor: Colors.primary, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8, marginTop: 16 }}
+        >
+          <Text style={{ color: Colors.textWhite, fontWeight: '600' }}>重试</Text>
+        </Pressable>
+      </View>
+    );
   }
 
   return (
