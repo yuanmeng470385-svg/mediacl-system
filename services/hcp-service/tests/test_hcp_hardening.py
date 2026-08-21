@@ -138,7 +138,10 @@ def audit_calls(monkeypatch):
         return 1
 
     monkeypatch.setattr(hcps_api, "write_audit_log", _fake_audit)
-    monkeypatch.setattr(hcps_api, "_invalidate_hcp_cache", lambda hcp_id: None)
+    # helper 已改 async（Redis 调用下线程池）—— stub 也须返回 awaitable
+    async def _noop_invalidate(hcp_id):
+        return None
+    monkeypatch.setattr(hcps_api, "_invalidate_hcp_cache", _noop_invalidate)
     return calls
 
 

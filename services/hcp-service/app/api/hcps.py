@@ -23,6 +23,9 @@ from app.core.hcp_cache import cache as hcp_cache
 router = APIRouter(prefix="/api/v1/hcps", tags=["hcps"])
 logger = logging.getLogger(__name__)
 
+# M13（2026-08-21 审计）：批量导入文件大小上限 —— 防超大文件/zip 压缩炸弹占内存
+MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024
+
 
 def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
     # E4（2026-08-13）：裸 HTTPException(detail="医生档案不存在") → BusinessError
@@ -48,10 +51,14 @@ def _parse_hcp_id(hcp_id) -> int:
         raise ParamError("hcp_id 必须为整数")
 
 
-def _invalidate_hcp_cache(hcp_id: int) -> None:
-    """写路径失效：档案与画像缓存一起清（画像依赖档案字段）"""
-    hcp_cache.invalidate(f"hcp:{hcp_id}")
-    hcp_cache.invalidate_profile(hcp_id)
+async def _invalidate_hcp_cache(hcp_id: int) -> None:
+    """写路径失效：档案与画像缓存一起清（画像依赖档案字段）。
+
+    Redis delete/scan_iter 是同步阻塞调用，统一 to_thread 下线程池执行，
+    不占事件循环（2026-08-21 审计：4 个写端点同步清缓存阻塞 loop）。
+    """
+    await asyncio.to_thread(hcp_cache.invalidate, f"hcp:{hcp_id}")
+    await asyncio.to_thread(hcp_cache.invalidate_profile, hcp_id)
 
 
 def _validate_hcp_fields(request: dict) -> dict:
@@ -222,7 +229,7 @@ async def update_hcp(
     if "name" in data and not (data.get("name") or "").strip():
         raise ParamError("name 不能为空")
     hcp = HcpRepo.update(db, hcp, data)
-    _invalidate_hcp_cache(hcp_id)  # 档案变更：缓存即时失效
+    await _invalidate_hcp_cache(hcp_id)  # 档案变更：缓存即时失效
     # E7（2026-08-13）：编辑留痕（before/after，仅记白名单字段实际变更）
     await write_audit_log(
         user_id=current_user["id"],
@@ -249,6 +256,13 @@ async def batch_import_hcps(
     """
     if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise ParamError("仅支持 .xlsx/.xlsm 文件")
+
+    # M13（2026-08-21 审计）：大小上限 —— zip 压缩炸弹/超大文件防内存放大
+    file.file.seek(0, 2)  # io.SEEK_END
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > MAX_IMPORT_FILE_SIZE:
+        raise ParamError(f"Excel 文件超过 {MAX_IMPORT_FILE_SIZE // (1024 * 1024)}MB 上限")
 
     try:
         rows = parse_hcp_excel(file.file)
@@ -307,7 +321,7 @@ async def add_hcp_tags(
     hcp = _get_hcp_or_404(db, hcp_id)
     before_tags = list(hcp.tags or [])
     hcp = HcpRepo.add_tags(db, hcp, tags)
-    _invalidate_hcp_cache(hcp_id)
+    await _invalidate_hcp_cache(hcp_id)
     # E7（2026-08-13）：标签增删留痕（before/after 标签列表）
     await write_audit_log(
         user_id=current_user["id"],
@@ -337,7 +351,7 @@ async def remove_hcp_tags(
     hcp = _get_hcp_or_404(db, hcp_id)
     before_tags = list(hcp.tags or [])
     hcp = HcpRepo.remove_tags(db, hcp, tags)
-    _invalidate_hcp_cache(hcp_id)
+    await _invalidate_hcp_cache(hcp_id)
     # E7（2026-08-13）：标签增删留痕（before/after 标签列表）
     await write_audit_log(
         user_id=current_user["id"],
@@ -379,7 +393,7 @@ async def update_hcp_profile_from_visit(
         "tags": request.get("tags"),
     }
     hcp = HcpRepo.merge_profile(db, hcp, updates)
-    _invalidate_hcp_cache(hcp_id)  # 画像更新（拜访结束）：档案+画像缓存即时失效
+    await _invalidate_hcp_cache(hcp_id)  # 画像更新（拜访结束）：档案+画像缓存即时失效
     await write_audit_log(
         user_id=None, action="hcp_profile_update_from_visit",
         resource_type="hcp", resource_id=str(hcp_id),

@@ -173,7 +173,8 @@ class TestHcpCacheApi:
         real_cache.set("profile:1:u5", {"ai_profile": {"role": "rep"}})
         real_cache.set("profile:1:u9", {"ai_profile": {"role": "rep"}})
 
-        api_module._invalidate_hcp_cache(1)
+        import asyncio
+        asyncio.run(api_module._invalidate_hcp_cache(1))
         assert real_cache.get("hcp:1") is None
         assert real_cache.get("profile:1:all") is None
         assert real_cache.get("profile:1:u5") is None
@@ -214,3 +215,32 @@ class TestHcpCacheApi:
         # rep 再次请求：命中 u5 缓存，不重新生成
         asyncio.run(api_module.get_hcp_profile(1, {"id": 5, "role": "rep"}, None))
         assert gen_calls == [5, None], f"第二次 rep 应命中缓存，实际 {gen_calls}"
+
+
+def test_invalidate_hcp_cache_runs_off_event_loop(monkeypatch):
+    """缓存失效（Redis delete/scan_iter 同步阻塞调用）必须下线程池执行，
+    不得跑在事件循环线程上（2026-08-21 审计：4 个写端点同步调 scan_iter 阻塞）。"""
+    import asyncio
+    import inspect
+    import threading
+
+    from app.api import hcps as hcps_api
+
+    assert inspect.iscoroutinefunction(hcps_api._invalidate_hcp_cache), \
+        "_invalidate_hcp_cache 必须是 async（Redis 同步调用统一 to_thread）"
+
+    seen = {}
+
+    class _FakeCache:
+        def invalidate(self, *keys):
+            seen["invalidate"] = threading.get_ident()
+
+        def invalidate_profile(self, hcp_id):
+            seen["profile"] = threading.get_ident()
+
+    monkeypatch.setattr(hcps_api, "hcp_cache", _FakeCache())
+    asyncio.run(hcps_api._invalidate_hcp_cache(1))
+
+    main = threading.get_ident()
+    assert seen["invalidate"] != main
+    assert seen["profile"] != main

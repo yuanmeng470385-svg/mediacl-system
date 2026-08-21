@@ -60,8 +60,12 @@ def _make_mock_db():
     q.filter.return_value.first.return_value = None
     # 列表页：query().order_by().offset().limit().all()
     q.order_by.return_value.offset.return_value.limit.return_value.all.return_value = []
-    # 导出：query().order_by().limit().all()
+    # 导出：query().order_by().limit().all()；带筛选时 count/all 都落在 filter 链上
     q.order_by.return_value.limit.return_value.all.return_value = []
+    fq = q.filter.return_value
+    fq.filter.return_value = fq   # 多重过滤自环：任意层级行为一致
+    fq.count.return_value = 0
+    fq.order_by.return_value.limit.return_value.all.return_value = []
 
     def _query(*models):
         # require_roles 每次受限请求主键查一次库（S6 修复）：User 走用户 stub，其余走日志 stub

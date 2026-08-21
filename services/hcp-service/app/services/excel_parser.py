@@ -25,6 +25,11 @@ COLUMN_MAP = {
 # 影响力中文 → 枚举值
 _INFLUENCE_MAP = {"高": "high", "中": "medium", "低": "low", "high": "high", "medium": "medium", "low": "low"}
 
+# M13（2026-08-21 审计）：xlsx 本质是 zip，小文件可解压出巨型工作表（解压炸弹）。
+# 行/列上限防 iter_rows 无界展开撑爆内存；超限抛 ValueError，端点统一转 ParamError。
+MAX_IMPORT_ROWS = 5000
+MAX_IMPORT_COLS = 200
+
 
 def parse_hcp_excel(file) -> List[Dict]:
     """解析医生档案 Excel（第一个工作表），跳过空行，返回 [{name, hospital, ...}]
@@ -44,6 +49,8 @@ def parse_hcp_excel(file) -> List[Dict]:
     header = next(rows, None)
     if not header:
         return []
+    if len(header) > MAX_IMPORT_COLS:
+        raise ValueError(f"Excel 列数 {len(header)} 超过上限 {MAX_IMPORT_COLS}（疑似损坏文件或压缩炸弹）")
 
     col_map = {}
     for idx, cell in enumerate(header):
@@ -56,6 +63,9 @@ def parse_hcp_excel(file) -> List[Dict]:
 
     result = []
     for row in rows:
+        if len(result) >= MAX_IMPORT_ROWS:
+            raise ValueError(
+                f"Excel 数据行数超过上限 {MAX_IMPORT_ROWS}（疑似损坏文件或压缩炸弹），请分批导入")
         item = {}
         for idx, field in col_map.items():
             val = row[idx] if idx < len(row) else None

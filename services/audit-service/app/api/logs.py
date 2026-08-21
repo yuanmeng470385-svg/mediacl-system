@@ -29,6 +29,9 @@ audit_logger = get_audit_logger()
 # 审计数据查看/导出角色：审计日志含全量用户操作记录，仅管理者与合规专员可见（rep 等不开放）
 AUDIT_VIEW_ROLES = ("admin", "manager", "compliance")
 
+# 导出行数上限：超限不再静默截断 —— 表内加警示行 + 审计带 total/truncated（2026-08-21 审计修复）
+EXPORT_ROW_LIMIT = 10000
+
 
 # ==================== 写入审计日志（内部接口） ====================
 
@@ -197,7 +200,10 @@ async def export_report(
     if risk_level:
         query = query.filter(AuditLog.risk_level == risk_level)
 
-    logs = query.order_by(desc(AuditLog.timestamp)).limit(10000).all()
+    # 上限封顶导出，但绝不静默丢数据：total/truncated 同时进警示行与审计留痕
+    total = query.count()
+    logs = query.order_by(desc(AuditLog.timestamp)).limit(EXPORT_ROW_LIMIT).all()
+    truncated = total > len(logs)
 
     # 生成 Excel
     wb = openpyxl.Workbook()
@@ -224,6 +230,13 @@ async def export_report(
             log.request_id or "",
         ]])
 
+    if truncated:
+        ws.append([_sanitize(v) for v in [
+            "⚠ 数据已截断",
+            f"共 {total} 条，仅导出最新 {len(logs)} 条，请缩小时间范围分批导出",
+            "", "", "", "", "", "", "", "",
+        ]])
+
     # 调整列宽
     for col in ws.columns:
         max_length = max((len(str(cell.value or "")) for cell in col), default=10)
@@ -247,6 +260,8 @@ async def export_report(
             "service_name": request.get("service_name"),
             "risk_level": request.get("risk_level"),
             "rows": len(logs),
+            "total": total,
+            "truncated": truncated,
         },
         client_ip=_client_ip(http_request),
     )

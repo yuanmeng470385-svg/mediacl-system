@@ -60,3 +60,25 @@ def test_parse_unknown_columns_ignored():
     assert len(rows) == 1
     assert rows[0]["name"] == "王五"
     assert "随便写的列" not in rows[0]
+
+
+def test_parse_row_cap(monkeypatch):
+    """行数上限（M13）：xlsx 是 zip，小文件可解压出巨型工作表（解压炸弹）——
+    超限抛 ValueError（端点转 ParamError），防 iter_rows 无界展开撑爆内存"""
+    from app.services import excel_parser
+
+    monkeypatch.setattr(excel_parser, "MAX_IMPORT_ROWS", 5)
+    buf = _make_xlsx(["姓名"], [[f"医生{i}"] for i in range(6)])
+    with pytest.raises(ValueError, match="行数"):
+        excel_parser.parse_hcp_excel(buf)
+
+
+def test_parse_column_cap(monkeypatch):
+    """列数上限（M13）：同上，防超宽表头炸弹"""
+    from app.services import excel_parser
+
+    monkeypatch.setattr(excel_parser, "MAX_IMPORT_COLS", 200)
+    headers = ["姓名"] + [f"列{i}" for i in range(200)]
+    buf = _make_xlsx(headers, [["张伟"] + [""] * 200])
+    with pytest.raises(ValueError, match="列数"):
+        excel_parser.parse_hcp_excel(buf)

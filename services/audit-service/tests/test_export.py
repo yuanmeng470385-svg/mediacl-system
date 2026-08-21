@@ -55,6 +55,8 @@ def _make_db(rows):
     """导出走 query(AuditLog).order_by().limit().all()；User 查询走用户 stub"""
     db = MagicMock()
     log_q = MagicMock()
+    log_q.count.return_value = len(rows)
+    log_q.filter.return_value.count.return_value = len(rows)
     log_q.order_by.return_value.limit.return_value.all.return_value = rows
 
     def _query(*models):
@@ -63,6 +65,7 @@ def _make_db(rows):
         return log_q
 
     db.query.side_effect = _query
+    db._log_q = log_q   # 截断用例改 count 总数用
     return db
 
 
@@ -84,5 +87,34 @@ def test_export_sanitizes_formula_cells():
         assert ws.cell(row=2, column=4).value == "'" + EVIL_ACTION   # 操作列
         assert ws.cell(row=2, column=10).value == "'+7020"           # 请求ID列
         assert ws.cell(row=2, column=3).value == 1                    # 正常数值不误伤
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_export_truncation_signaled():
+    """超过导出上限静默截断 → 表内警示行 + 审计 after_value 带 total/truncated
+    （2026-08-21 审计修复：原先导 1 万条封顶，多出来的数据无声消失）"""
+    db = _make_db([_fake_log()])
+    db._log_q.count.return_value = 10002   # 库里共 10002 条
+    app.dependency_overrides[get_db] = lambda: db
+    try:
+        with patch("app.api.logs.audit_logger") as mock_logger:
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/v1/audit/export",
+                    headers={"Authorization": "Bearer " + create_token(
+                        user_id=1, username="admin_user", role="admin")},
+                    json={},
+                )
+        assert resp.status_code == 200, resp.text
+        wb = load_workbook(io.BytesIO(resp.content))
+        ws = wb["审计日志"]
+        marker = ws.cell(row=3, column=1).value   # 表头 + 1 数据行 + 警示行
+        assert marker and "截断" in marker
+        assert "10002" in ws.cell(row=3, column=2).value
+        after = mock_logger.log.call_args.kwargs["after_value"]
+        assert after["truncated"] is True
+        assert after["total"] == 10002
+        assert after["rows"] == 1
     finally:
         app.dependency_overrides.clear()
