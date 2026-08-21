@@ -4,6 +4,8 @@ import { ProLayout } from '@ant-design/pro-components';
 import { Button, Dropdown, Avatar, theme } from 'antd';
 import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { menuConfig } from '../constants/menu';
+import { canAccess, filterMenu, isKnownRoute } from '../constants/routeAccess';
+import Forbidden from '../components/Forbidden';
 import { useAuth } from '../hooks/useAuth';
 
 export default function AdminLayout() {
@@ -16,7 +18,8 @@ export default function AdminLayout() {
     <ProLayout
       title="MedAgent"
       logo={null}
-      route={{ children: menuConfig }}
+      // M17：菜单按角色过滤（角色表单一事实源见 constants/routeAccess.ts）
+      route={{ children: filterMenu(menuConfig, user?.role) }}
       location={{ pathname: location.pathname }}
       collapsed={collapsed}
       onCollapse={setCollapsed}
@@ -49,7 +52,12 @@ export default function AdminLayout() {
         },
       }}
     >
-      <Outlet />
+      {/* M17：已知路由越权访问 → 403 落地页（后端 403 兜底仍在前，此处先挡请求） */}
+      {isKnownRoute(location.pathname) && !canAccess(location.pathname, user?.role) ? (
+        <Forbidden />
+      ) : (
+        <Outlet />
+      )}
     </ProLayout>
   );
 }
