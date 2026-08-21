@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
     region VARCHAR(50),
     manager_id BIGINT REFERENCES users(id),
     status VARCHAR(20) DEFAULT 'active',
+    deleted_at TIMESTAMP,                   -- 注销标记（三期 L）：status='deleted' 时写入；物理删除不做，去标识化+留存
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -663,3 +664,20 @@ CREATE TABLE IF NOT EXISTS export_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_er_status ON export_requests(status);
 CREATE INDEX IF NOT EXISTS idx_er_requester ON export_requests(requester_id);
+
+-- 三期 L：隐私中心（迁移 023，2026-08-21 起已并入 init_db.sql；旧库须执行 023）
+CREATE TABLE IF NOT EXISTS privacy_requests (
+    id BIGSERIAL PRIMARY KEY,
+    doctor_id BIGINT NOT NULL REFERENCES users(id),
+    request_type VARCHAR(20) NOT NULL,               -- view/correct/delete/export/account_delete
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',   -- pending/processing/done/rejected
+    content JSONB,                                   -- {detail, fields:{full_name,phone}, confirm, response}
+    sla_deadline TIMESTAMP NOT NULL,                 -- created_at + 30 自然日（API 层写入）
+    handled_by BIGINT REFERENCES users(id),
+    handled_at TIMESTAMP,
+    file_url VARCHAR(500),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pr_doctor ON privacy_requests(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_pr_status ON privacy_requests(status);

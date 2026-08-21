@@ -1,5 +1,5 @@
 """用户模型"""
-from sqlalchemy import Column, String, BigInteger, ForeignKey
+from sqlalchemy import Column, DateTime, String, BigInteger, ForeignKey
 from shared.models.base import Base, TimestampMixin
 
 
@@ -15,6 +15,8 @@ class User(Base, TimestampMixin):
     region = Column(String(50))
     manager_id = Column(BigInteger, ForeignKey("users.id"))
     status = Column(String(20), default="active")
+    # 注销标记（三期 L）：status='deleted' 时写入；物理删除不做，去标识化+留存
+    deleted_at = Column(DateTime)
 
     def to_dict(self):
         """对外输出。注意：绝不包含 password_hash。"""
