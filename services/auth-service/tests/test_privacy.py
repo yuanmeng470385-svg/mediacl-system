@@ -30,6 +30,7 @@ from sqlalchemy.pool import StaticPool
 from shared.common.auth import create_token
 from shared.common.db_session import get_db
 from shared.models.base import Base
+from shared.models.doctor_profile import DoctorProfile
 from shared.models.privacy import PrivacyRequest
 from shared.models.user import User
 
@@ -73,12 +74,13 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    """每用例重建 users + privacy_requests 表；审计打桩。
+    """每用例重建 users + privacy_requests + doctor_profiles 表；审计打桩。
 
-    doctor_profiles/doctor_certifications/conversations 按需在用例内建表
-    （Task 2/4 引入后再放进 tables 列表或用 DDL 建）。
+    doctor_profiles 已随 Task 2 加入 tables 列表（否则 without_profile 用例
+    在无表/残留数据下不稳定）。doctor_certifications/conversations 仍按需在
+    用例内建表（Task 4 DDL）。
     """
-    tables = [User.__table__, PrivacyRequest.__table__]
+    tables = [User.__table__, PrivacyRequest.__table__, DoctorProfile.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -134,3 +136,43 @@ def test_user_model_has_deleted_at():
     loaded = db.query(User).filter(User.id == 1).first()
     assert loaded.status == "deleted"
     assert loaded.deleted_at is not None
+
+
+# ---------- Task 2：隐私政策 + 个人信息 ----------
+
+def test_privacy_policy_public_no_auth_required():
+    r = client.get("/api/v1/doctors/privacy-policy")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["version"] == "1.0"
+    assert "注销" in data["content"]
+    assert "30" in data["content"]
+
+
+def test_personal_data_returns_user_and_profile():
+    db = TestSession()
+    db.add(DoctorProfile(doctor_id=1, interest_areas=["心血管"],
+                         preferred_doc_type="rct", preferred_style="标准", closed=False))
+    db.commit()
+    db.close()
+
+    r = client.get("/api/v1/doctors/personal-data", headers=_token(1, "doctor"))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["user"]["id"] == 1
+    assert data["user"]["full_name"] == "张医生"
+    assert "password_hash" not in data["user"]
+    assert data["doctor_profile"]["interest_areas"] == ["心血管"]
+
+
+def test_personal_data_without_profile_returns_null():
+    r = client.get("/api/v1/doctors/personal-data", headers=_token(1, "doctor"))
+    assert r.status_code == 200
+    assert r.json()["data"]["doctor_profile"] is None
+
+
+def test_personal_data_doctor_only_rep_403():
+    r = client.get("/api/v1/doctors/personal-data", headers=_token(3, "rep"))
+    assert r.status_code == 403

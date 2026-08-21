@@ -24,6 +24,7 @@ from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, PermissionError, success
 from shared.models.doctor import DoctorCertification
+from shared.models.doctor_profile import DoctorProfile
 from shared.models.user import User
 
 from app.api.qualifications import QUAL_ADMIN_ROLES, _client_ip, _save_upload
@@ -213,3 +214,53 @@ async def review_cert(
         },
     )
     return success(cert.to_dict())
+
+
+# ---------- 隐私中心（三期 L，需求 5.7） ----------
+
+PRIVACY_POLICY = {
+    "title": "MedAgent 医生端隐私政策",
+    "version": "1.0",
+    "updated_at": "2026-08-21",
+    "content": (
+        "1. 我们收集的信息：账号信息（姓名/手机号/科室/地区）、医师资质文件、"
+        "您与数字分身的对话记录、学术偏好设置。\n"
+        "2. 使用目的：提供医学问答、分身订阅、学术触达与患教服务；未经同意不会"
+        "将您的个人信息用于其他目的。\n"
+        "3. 存储与保护：数据加密存储于境内服务器，访问全程留痕审计。\n"
+        "4. 对话合规：所有对话经合规系统实时检查，违规内容将被拦截。\n"
+        "5. 您的权利：您可在隐私中心查看个人信息、申请更正、申请导出数据包、"
+        "申请删除数据或注销账号。\n"
+        "6. 删除与注销：注销采用去标识化处理（姓名置为『已注销医生』、手机号脱敏），"
+        "依法留存的合规记录不做物理删除。\n"
+        "7. 响应时限：您的请求将在 30 日内处理并反馈结果。\n"
+        "8. 联系我们：可通过隐私请求提交说明，或联系平台管理员。"
+    ),
+}
+
+
+@router.get("/privacy-policy")
+def get_privacy_policy():
+    """隐私政策全文（静态文案，公开可读——登录前亦可展示）"""
+    return success(PRIVACY_POLICY)
+
+
+@router.get("/personal-data")
+def get_personal_data(
+    current_user: dict = Depends(require_roles("doctor")),
+    db: Session = Depends(get_db),
+):
+    """个人信息查看（需求 5.7(2)）：user 安全字段 + 偏好画像（无画像为 null）
+
+    历史对话查看不自建端点——mobile 复用既有收藏历史（需求原文即"复用"）。
+    """
+    user = db.query(User).filter(User.id == current_user["id"]).first()
+    if not user:
+        raise BusinessError("用户不存在")
+    profile = (
+        db.query(DoctorProfile).filter(DoctorProfile.doctor_id == user.id).first()
+    )
+    return success({
+        "user": user.to_dict(),
+        "doctor_profile": profile.to_dict() if profile else None,
+    })
