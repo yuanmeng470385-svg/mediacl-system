@@ -163,6 +163,7 @@ ROUTE_MAP = {
     "/api/v1/doctor-plaza": settings.SPECIALIST_SERVICE_URL,  # 医生侧广场（二期 I）
     "/api/v1/doctor-stats": settings.SPECIALIST_SERVICE_URL,  # 运营统计（二期 I）
     "/api/v1/data-exports": settings.SPECIALIST_SERVICE_URL,  # 数据导出审批（三期 K）
+    "/api/v1/privacy-requests": settings.AUTH_SERVICE_URL,  # 隐私请求（三期 L）
 }
 
 
