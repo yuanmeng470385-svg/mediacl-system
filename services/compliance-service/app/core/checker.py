@@ -81,13 +81,22 @@ class ComplianceChecker:
         self.rules: List[Dict] = []
         self.rules_ttl = settings.RULES_RELOAD_TTL
         self._rules_loaded_at = 0.0
+        self._load_error: Optional[str] = None  # 降级标记（DB 加载异常/0 条规则），见 _reload_rules
         self._reload_rules()
 
     # ==================== 规则加载 ====================
 
     def _reload_rules(self):
-        """从 YAML 文件 + 数据库加载规则，合并去重"""
+        """从 YAML 文件 + 数据库加载规则，合并去重
+
+        降级语义（2026-08-21 审计修复，此前加载失败只打日志静默全放行）：
+        - self._load_error 非 None = 降级（DB 加载异常 / 合并后 0 条规则），
+          /health、prometheus 指标、check() 结果的 degraded 字段全部暴露；
+        - 是否硬拦截由 check() 按 settings.RULES_FAIL_MODE 决定（仅有效规则为
+          0 时拦；DB 挂但 YAML 兜底规则仍生效时不硬拦，避免 DB 抖动瘫掉全站对话）。
+        """
         rules = []
+        self._load_error = None
         # 1. 从 YAML 文件加载（路径可用 RULES_YAML_PATH 覆盖 —— 容器内 shared 在 /app/shared）
         yaml_path = settings.RULES_YAML_PATH
         if os.path.exists(yaml_path):
@@ -95,8 +104,10 @@ class ComplianceChecker:
                 config = yaml.safe_load(f)
             rules.extend(config.get("rules", []))
         else:
+            # 不计入 _load_error：DB 为源铁律，YAML 缺失由 DB 规则兜底；
+            # 两者同时失效会被下方「0 条规则」判定兜住
             logger.error(
-                "合规规则文件不存在: %s —— 合规检查将全部放行，这是危险状态。"
+                "合规规则文件不存在: %s —— 依赖数据库规则兜底，若 DB 也无规则将进入降级拦截。"
                 "请检查 RULES_YAML_PATH 环境变量。", yaml_path
             )
 
@@ -106,19 +117,37 @@ class ComplianceChecker:
             rules = self._merge_rules(rules, db_rules)
             logger.info("数据库规则加载完成，共 %d 条（含 YAML %d 条）", len(db_rules), len(rules))
         except Exception as exc:
-            logger.error("数据库规则加载失败，仅用 YAML（危险：DB 规则不生效）: %s", exc)
+            self._load_error = f"数据库规则加载失败: {exc}"
+            logger.error("数据库规则加载失败，仅用 YAML 兜底（degraded 已置位，/health 与指标可见）: %s", exc)
 
         # 3. 仅保留 enabled 的规则 —— 唯一的 enabled 过滤点（2026-08-13 D1）：
-        # DB 禁用行（enabled=False）必须能压掉 YAML 同 id 规则的 enabled: true，
-        # 所以过滤不能在 SQL 层做，统一在这里剔除 disabled，保持单次过滤语义。
+        #    DB 禁用行（enabled=False）必须能压掉 YAML 同 id 规则的 enabled: true，
+        #    所以过滤不能在 SQL 层做，统一在这里剔除 disabled，保持单次过滤语义。
         rules = [r for r in rules if r.get("enabled", True)]
         self.rules = rules
         self._compile_rules()
         if not self.rules:
-            logger.error("合规规则为 0 条 —— 所有内容都会被放行，请立即排查")
+            self._load_error = self._load_error or "合规规则为 0 条"
+            logger.error(
+                "合规规则为 0 条 —— %s（RULES_FAIL_MODE=%s）",
+                "closed 模式下所有内容将被降级拦截" if settings.RULES_FAIL_MODE != "open"
+                else "open 模式下所有内容都会被放行",
+                settings.RULES_FAIL_MODE,
+            )
         else:
             logger.info(f"合规规则加载完成，共 {len(self.rules)} 条有效规则")
         self._rules_loaded_at = time.time()
+
+        # 可观测：规则数 gauge + 加载失败计数（指标注册失败不阻断加载）
+        try:
+            from app.api.metrics import (
+                COMPLIANCE_RULES_LOADED, COMPLIANCE_RULES_LOAD_FAILURES,
+            )
+            COMPLIANCE_RULES_LOADED.set(len(self.rules))
+            if self._load_error:
+                COMPLIANCE_RULES_LOAD_FAILURES.inc()
+        except Exception:
+            logger.debug("规则加载指标上报失败（不影响规则加载）")
 
     def _load_db_rules(self) -> List[Dict]:
         """从 compliance_rules 表加载全部规则行（含 enabled=False，引擎格式）
@@ -243,8 +272,38 @@ class ComplianceChecker:
     # ==================== 审核主流程 ====================
 
     def check(self, content: str, context: Optional[Dict] = None, fast: bool = False) -> Dict:
+        """审核内容合规性（含降级 fail-closed 兜底，2026-08-21 审计修复）
+
+        降级语义：规则库加载失败（_load_error 非 None）时结果带 degraded=True；
+        若有效规则为 0 且 RULES_FAIL_MODE=closed（默认），非空内容一律按合成违规
+        R998 拦截 —— 合规门禁不能静默失效（旧行为：0 条规则静默全放行）。
+        DB 挂但 YAML 兜底规则仍生效时不硬拦（避免 DB 抖动瘫掉全站对话），
+        但 degraded 字段照常暴露。
         """
-        审核内容合规性
+        result = self._check_pipeline(content, context, fast)
+        degraded = self._load_error is not None
+        if (degraded and not result["blocked"] and not self.rules
+                and settings.RULES_FAIL_MODE != "open"
+                and content and content.strip()):
+            violation = {
+                "rule_code": "R998",
+                "rule_name": "合规引擎降级",
+                "severity": "high",
+                "action": "reject",
+                "matched_text": "",
+                "reason": f"规则库不可用（{self._load_error}），本次内容按降级拦截处理",
+            }
+            result["violations"] = result["violations"] + [violation]
+            result["blocked"] = True
+            result["risk_level"] = "high"
+            if not fast:
+                self._count_violations([violation])
+        result["degraded"] = degraded
+        return result
+
+    def _check_pipeline(self, content: str, context: Optional[Dict] = None, fast: bool = False) -> Dict:
+        """
+        审核流水线（关键词 → 正则 → LLM 语义）
 
         Args:
             content: 待审核的文本内容

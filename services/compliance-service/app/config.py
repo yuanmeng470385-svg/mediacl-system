@@ -26,6 +26,11 @@ class Settings:
     # 规则热更新 TTL（秒）：超过该时间自动从数据库重载
     RULES_RELOAD_TTL = float(os.getenv("RULES_RELOAD_TTL", "60"))
 
+    # 规则库降级行为（2026-08-21 审计修复）：closed=有效规则为 0 时 check() 直接
+    # 拦截（fail-closed，默认，对齐 S7 语义层哲学）；open=放行（旧行为，仅故障
+    # 排查临时使用）。DB 挂但 YAML 兜底规则仍生效时不硬拦，仅 degraded 可观测。
+    RULES_FAIL_MODE = os.getenv("RULES_FAIL_MODE", "closed")
+
     GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 

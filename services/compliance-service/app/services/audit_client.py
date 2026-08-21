@@ -67,5 +67,12 @@ async def write_audit_log(
             data = resp.json().get("data", {})
             return data.get("id")
     except Exception as e:
-        logger.error(f"审计日志写入失败: {e}")
+        logger.error(f"审计日志写入失败: action={action} request_id={request_id}: {e}")
+        # 可观测（2026-08-21 审计修复）：失败原先仅日志，监控不可见 —— 计数指标
+        # 让「审计链路整体失效」在告警面板上可见。业务仍不受影响。
+        try:
+            from app.api.metrics import COMPLIANCE_AUDIT_WRITE_FAILURES
+            COMPLIANCE_AUDIT_WRITE_FAILURES.inc()
+        except Exception:
+            logger.debug("审计失败指标上报异常（不影响业务）")
         return None  # 审计失败不影响业务

@@ -36,6 +36,7 @@ def _mk_checker(qwen_client=None, rules=None):
     ]
     c.rules_ttl = 3600
     c._rules_loaded_at = time.time()
+    c._load_error = None  # 绕过 __init__ 也要补齐降级标记（2026-08-21 checker 新增）
     return c
 
 

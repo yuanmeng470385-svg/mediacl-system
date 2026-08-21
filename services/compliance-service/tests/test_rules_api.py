@@ -444,3 +444,57 @@ def test_create_rule_duplicate_rule_code_4001(monkeypatch):
         assert resp.json()["code"] == 4001
     finally:
         app.dependency_overrides.clear()
+
+
+def test_update_rule_top_level_patterns_applied(monkeypatch):
+    """update 支持顶层 patterns 直传（与 create 同口径）。修复前：PUT 只传 patterns
+    是静默 no-op（changed_fields 不含 patterns，content 原样）——管理端以为改了词，
+    实际线上还是旧 pattern。"""
+    async def _fake_audit_log(**kwargs):
+        return None
+
+    monkeypatch.setattr(rules_api, "write_audit_log", _fake_audit_log)
+    monkeypatch.setattr(rules_api.checker, "reload", lambda: None)
+    monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb())
+    app.dependency_overrides[get_db] = lambda: _FakeDb(
+        rows=[_FakeRule(id=1, rule_code="R101", content={"patterns": ["旧词"]})])
+    app.dependency_overrides[get_current_user] = _fake_current_user
+    try:
+        with TestClient(app) as c:
+            resp = c.put("/api/v1/compliance/rules/1", json={"patterns": ["新违禁词"]})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["content"]["patterns"] == ["新违禁词"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_rule_write_endpoints_reload_off_event_loop(monkeypatch):
+    """checker.reload() 是同步 DB+磁盘 IO，不得跑在事件循环线程上（2026-08-21 审计：
+    create/update/delete/reload 四端点直接同步调用，规则加载慢时阻塞整个服务）。
+    判别：reload 与 async 端点代码必须运行在不同线程。"""
+    import threading
+    seen = {}
+
+    def fake_reload():
+        seen["reload_thread"] = threading.get_ident()
+
+    async def fake_audit_log(**kwargs):
+        seen["loop_thread"] = threading.get_ident()   # async 代码恒在事件循环线程
+
+    monkeypatch.setattr(rules_api.checker, "reload", fake_reload)
+    monkeypatch.setattr(rules_api, "write_audit_log", fake_audit_log)
+    monkeypatch.setattr("shared.common.db_session.SessionLocal", lambda: _FakeDb())
+    app.dependency_overrides[get_db] = lambda: _FakeDb()
+    app.dependency_overrides[get_current_user] = _fake_current_user
+    try:
+        with TestClient(app) as c:
+            resp = c.post("/api/v1/compliance/rules", json={
+                "rule_code": "R910", "rule_name": "线程测试", "rule_type": "keyword",
+                "content": {"patterns": ["违禁词"]}, "severity": "high",
+                "action": "reject", "description": "", "enabled": True,
+            })
+        assert resp.status_code == 200, resp.text
+        assert "reload_thread" in seen and "loop_thread" in seen
+        assert seen["reload_thread"] != seen["loop_thread"]
+    finally:
+        app.dependency_overrides.clear()

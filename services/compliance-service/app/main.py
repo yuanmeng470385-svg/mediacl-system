@@ -63,7 +63,18 @@ app.include_router(data_assets_router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": settings.SERVICE_NAME, "version": "1.0.0"}
+    from app.core.checker import get_checker
+
+    checker = get_checker()
+    return {
+        "status": "ok",
+        "service": settings.SERVICE_NAME,
+        "version": "1.0.0",
+        # 规则库状态（2026-08-21 审计修复：加载失败原先无任何信号，门禁可静默失效）
+        "rules_count": len(checker.rules),
+        "rules_degraded": checker._load_error is not None,
+        "rules_error": checker._load_error,
+    }
 
 
 if __name__ == "__main__":

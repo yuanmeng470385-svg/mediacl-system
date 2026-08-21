@@ -310,7 +310,7 @@ async def create_rule(
         db.rollback()
         raise BusinessError(f"rule_code 已存在（并发创建）: {rule_code}", code=4001)
     db.refresh(rule)
-    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
+    await asyncio.to_thread(checker.reload)  # 同步 DB+磁盘 IO 下线程池（其他 worker 靠 TTL 重载）
     logger.info(f"新增合规规则: {rule.rule_code} by user {current_user['id']}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_create",
@@ -343,13 +343,25 @@ async def update_rule(
 
     changed_fields = ["rule_name", "rule_type", "content", "severity", "action", "description", "enabled"]
     before_value = {f: getattr(rule, f) for f in changed_fields if f in request}
+    old_content = dict(rule.content or {})
     for field in changed_fields:
         if field in request:
             setattr(rule, field, request[field])
+    # 顶层 patterns 直传与 create 同口径支持（2026-08-21 审计修复：此前 update
+    # 静默 no-op —— 管理端以为改了词，线上还是旧 pattern）。content.patterns 优先
+    # （_extract_patterns 语义），新 patterns 单独过校验防坏数据落库毒化加载。
+    patterns = _extract_patterns(request)
+    req_content = request.get("content")
+    # 优先级对齐 create：仅当请求自身的 content.patterns 已存在时跳过（content 优先），
+    # 存量 content 里的旧 patterns 恰恰是要被顶层 patterns 替换的对象
+    if patterns is not None and not (isinstance(req_content, dict) and "patterns" in req_content):
+        _validate_rule_fields({"patterns": patterns}, partial=True)
+        before_value["content"] = old_content
+        rule.content = {**(rule.content or {}), "patterns": patterns}
     rule.version = (rule.version or 0) + 1
 
     db.commit()
-    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
+    await asyncio.to_thread(checker.reload)  # 同步 DB+磁盘 IO 下线程池（其他 worker 靠 TTL 重载）
     logger.info(f"更新合规规则: {rule.rule_code} v{rule.version}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_update",
@@ -372,7 +384,7 @@ async def delete_rule(
         raise HTTPException(status_code=404, detail="规则不存在")
     rule.enabled = False
     db.commit()
-    checker.reload()  # 让本 worker 立即生效（其他 worker 靠 TTL 自动重载）
+    await asyncio.to_thread(checker.reload)  # 同步 DB+磁盘 IO 下线程池（其他 worker 靠 TTL 重载）
     logger.info(f"禁用合规规则: {rule.rule_code}")
     await write_audit_log(
         user_id=current_user["id"], action="rule_disable",
@@ -389,7 +401,7 @@ async def delete_rule(
 async def reload_rules(current_user: dict = Depends(require_roles(*RULE_ADMIN_ROLES))):
     """热更新规则缓存（不重启服务）"""
     before = len(checker.rules)
-    checker.reload()
+    await asyncio.to_thread(checker.reload)
     await write_audit_log(
         user_id=current_user["id"], action="rules_reload",
         resource_type="compliance_rule",

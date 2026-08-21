@@ -1,5 +1,5 @@
 """Prometheus 指标端点（方案 15.4 监控数据源）"""
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import APIRouter
 from fastapi.responses import Response
 
@@ -17,6 +17,12 @@ COMPLIANCE_BLOCKS = Counter("compliance_blocks_total", "合规拦截总数（仅
 COMPLIANCE_VIOLATIONS = Counter("compliance_violations_total", "合规命中总数（reject/warn/log 全量）", ["action", "severity"])
 # LLM 语义层漏检可观测（2026-08-11）：模型返回未知 rule_code 等被丢弃的违规数
 COMPLIANCE_SEMANTIC_DROPS = Counter("compliance_semantic_drops_total", "语义层丢弃的违规数", ["reason"])
+
+# 规则库加载可观测（2026-08-21 审计修复）：加载失败/为空原先只打日志静默全放行
+COMPLIANCE_RULES_LOADED = Gauge("compliance_rules_loaded", "当前已加载的合规规则数（enabled 且编译通过）")
+COMPLIANCE_RULES_LOAD_FAILURES = Counter("compliance_rules_load_failures_total", "规则库加载失败/为空次数")
+# 审计写失败可观测（2026-08-21 审计修复）：失败原先仅 logger.error，监控不可见
+COMPLIANCE_AUDIT_WRITE_FAILURES = Counter("compliance_audit_write_failures_total", "审计日志写入失败次数")
 
 
 @router.get("/metrics")
