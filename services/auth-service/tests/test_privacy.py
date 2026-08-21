@@ -151,12 +151,17 @@ def test_privacy_policy_public_no_auth_required():
     assert "30" in data["content"]
 
 
-def test_personal_data_returns_user_and_profile():
+def _make_profile():
+    """建一行医生偏好画像（Task 2/Task 4 复用：个人信息查看 / export 数据包）"""
     db = TestSession()
     db.add(DoctorProfile(doctor_id=1, interest_areas=["心血管"],
                          preferred_doc_type="rct", preferred_style="标准", closed=False))
     db.commit()
     db.close()
+
+
+def test_personal_data_returns_user_and_profile():
+    _make_profile()
 
     r = client.get("/api/v1/doctors/personal-data", headers=_token(1, "doctor"))
     assert r.status_code == 200
@@ -249,3 +254,167 @@ def test_me_lists_only_own_requests_with_pagination():
     assert r2.json()["data"]["total"] == 3
     r3 = client.get("/api/v1/privacy-requests/me?status=pending", headers=_token(1, "doctor"))
     assert r3.json()["data"]["total"] == 0
+
+
+# ---------- Task 4：管理端列表 + handle ----------
+
+def _add_request(**kw):
+    db = TestSession()
+    defaults = dict(
+        doctor_id=1, request_type="view", status="pending", content={},
+        sla_deadline=datetime.utcnow() + timedelta(days=30),
+    )
+    defaults.update(kw)
+    req = PrivacyRequest(**defaults)
+    db.add(req)
+    db.commit()
+    db.close()
+    return req
+
+
+def test_admin_list_requires_admin_roles():
+    r = client.get("/api/v1/privacy-requests", headers=_token(3, "rep"))
+    assert r.status_code == 403
+
+
+def test_admin_list_joins_doctor_name_and_flags_sla_overdue():
+    _add_request()  # 未超时
+    _add_request(status="pending",
+                 sla_deadline=datetime.utcnow() - timedelta(days=1))  # 已超时
+    _add_request(status="done",
+                 sla_deadline=datetime.utcnow() - timedelta(days=1))  # 终态不算超时
+
+    r = client.get("/api/v1/privacy-requests", headers=_token(2, "admin"))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["total"] == 3
+    overdue = [i for i in data["items"] if i["sla_overdue"]]
+    assert len(overdue) == 1
+    assert data["items"][0]["doctor_name"] == "张医生"
+
+
+def test_admin_list_filters_by_status_and_type():
+    _add_request(request_type="correct")
+    _add_request(request_type="export")
+    r = client.get("/api/v1/privacy-requests?request_type=export",
+                   headers=_token(2, "admin"))
+    assert r.json()["data"]["total"] == 1
+    r2 = client.get("/api/v1/privacy-requests?status=pending",
+                    headers=_token(2, "admin"))
+    assert r2.json()["data"]["total"] == 2
+
+
+def test_handle_requires_response_for_done_and_rejected():
+    _add_request()
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "done"})
+    assert r.status_code == 400
+    r2 = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                     json={"action": "bad"})
+    assert r2.status_code == 400
+
+
+def test_handle_nonexistent_request_fails():
+    r = client.post("/api/v1/privacy-requests/999/handle", headers=_token(2, "admin"),
+                    json={"action": "rejected", "response": "查无此人"})
+    # BusinessError → HTTP 422（共享 exception_handler 映射；同 qualifications
+    # 「备案记录不存在」的既有测试约定 test_qualifications.py:332）
+    assert r.status_code == 422
+
+
+def test_handle_rejected_keeps_user_untouched(audit_mock):
+    _add_request(request_type="delete")
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "rejected", "response": "依法须留存"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "rejected"
+    db = TestSession()
+    u = db.query(User).filter(User.id == 1).first()
+    db.close()
+    assert u.status == "active" and u.full_name == "张医生"
+    audit_mock.assert_awaited_once()
+
+
+def test_handle_processing_marks_without_response():
+    _add_request()
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "processing"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "processing"
+
+
+def test_handle_done_correct_updates_user_fields():
+    _add_request(request_type="correct",
+                 content={"fields": {"full_name": "张三丰", "phone": "13900000001"}})
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "done", "response": "已更正"})
+    assert r.status_code == 200
+    db = TestSession()
+    u = db.query(User).filter(User.id == 1).first()
+    db.close()
+    assert u.full_name == "张三丰"
+    assert u.phone == "13900000001"
+
+
+def test_handle_done_account_delete_deidentifies_and_kills_token():
+    _add_request(request_type="account_delete")
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "done", "response": "已注销"})
+    assert r.status_code == 200
+
+    db = TestSession()
+    u = db.query(User).filter(User.id == 1).first()
+    db.close()
+    assert u.full_name == "已注销医生"
+    assert u.phone == "DELETED-1"
+    assert u.status == "deleted"
+    assert u.deleted_at is not None
+
+    # 旧 token 实时查库被拦（get_current_user status != active → 401）
+    r2 = client.get("/api/v1/privacy-requests/me", headers=_token(1, "doctor"))
+    assert r2.status_code == 401
+
+
+def test_handle_done_export_writes_package_json(tmp_path, monkeypatch):
+    _make_profile()
+    # doctor_certifications 按需建表（fixture 仅重建 users/privacy_requests/
+    # doctor_profiles；数据包查询认证记录，无表会 OperationalError）
+    from shared.models.doctor import DoctorCertification
+    Base.metadata.create_all(engine, tables=[DoctorCertification.__table__])
+    monkeypatch.setattr(privacy_api, "EXPORT_DIR", str(tmp_path))
+    # conversations 表用 DDL 建（模型在 specialist 本地，auth 不 import——这正是
+    # 数据包走 text() 只读的原因）
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS conversations ("
+            "id INTEGER PRIMARY KEY, user_id INTEGER, specialist_id INTEGER, "
+            "session_id VARCHAR(100), role VARCHAR(20), content TEXT, "
+            "compliance_result JSON, created_at TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO conversations (user_id, specialist_id, session_id, role, content) "
+            "VALUES (1, 9, 's1', 'user', '最近有什么新指南？')"
+        ))
+
+    _add_request(request_type="export")
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "done", "response": "数据包已生成，线下交付"})
+    assert r.status_code == 200
+    file_url = r.json()["data"]["file_url"]
+    assert file_url and file_url.endswith("privacy_1.json")
+
+    import json as _json
+    with open(file_url, encoding="utf-8") as f:
+        pkg = _json.load(f)
+    assert pkg["user"]["id"] == 1
+    assert pkg["doctor_profile"]["interest_areas"] == ["心血管"]
+    assert pkg["conversations"][0]["content"] == "最近有什么新指南？"
+    assert pkg["privacy_requests"][0]["id"] == 1
+
+
+def test_handle_terminal_state_cannot_be_handled_again():
+    _add_request(status="done")
+    r = client.post("/api/v1/privacy-requests/1/handle", headers=_token(2, "admin"),
+                    json={"action": "rejected", "response": "再来一次"})
+    # BusinessError（终态拦截）→ HTTP 422，同上
+    assert r.status_code == 422
