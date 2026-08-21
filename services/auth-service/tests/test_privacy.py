@@ -73,7 +73,7 @@ def _token(user_id: int, role: str) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def fresh_state(monkeypatch):
+def audit_mock(monkeypatch):
     """每用例重建 users + privacy_requests + doctor_profiles 表；审计打桩。
 
     doctor_profiles 已随 Task 2 加入 tables 列表（否则 without_profile 用例
@@ -176,3 +176,76 @@ def test_personal_data_without_profile_returns_null():
 def test_personal_data_doctor_only_rep_403():
     r = client.get("/api/v1/doctors/personal-data", headers=_token(3, "rep"))
     assert r.status_code == 403
+
+# ---------- Task 3：提交 + 本人查询 ----------
+
+def test_create_privacy_request_success_with_30d_sla(audit_mock):
+    r = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                    json={"request_type": "export", "detail": "申请导出本人数据"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["status"] == "pending"
+    assert data["request_type"] == "export"
+    deadline = datetime.fromisoformat(data["sla_deadline"])
+    assert timedelta(days=29) < (deadline - datetime.utcnow()) <= timedelta(days=31)
+    audit_mock.assert_awaited_once()
+    assert audit_mock.await_args.kwargs["action"] == "privacy_request_create"
+
+
+def test_create_invalid_type_400():
+    r = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                    json={"request_type": "destroy"})
+    assert r.status_code == 400
+
+
+def test_create_correct_requires_at_least_one_field():
+    r = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                    json={"request_type": "correct", "fields": {}})
+    assert r.status_code == 400
+
+
+def test_create_correct_phone_format_validated():
+    r = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                    json={"request_type": "correct", "fields": {"phone": "123"}})
+    assert r.status_code == 400
+
+
+def test_create_account_delete_requires_confirm():
+    r = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                    json={"request_type": "account_delete"})
+    assert r.status_code == 400
+    r2 = client.post("/api/v1/privacy-requests", headers=_token(1, "doctor"),
+                     json={"request_type": "account_delete", "confirm": True})
+    assert r2.status_code == 200
+
+
+def test_create_doctor_only_rep_403():
+    r = client.post("/api/v1/privacy-requests", headers=_token(3, "rep"),
+                    json={"request_type": "view"})
+    assert r.status_code == 403
+
+
+def test_me_lists_only_own_requests_with_pagination():
+    db = TestSession()
+    for i in range(3):
+        db.add(PrivacyRequest(
+            doctor_id=1, request_type="view", status="done",
+            content={}, sla_deadline=datetime.utcnow() + timedelta(days=30),
+        ))
+    db.add(PrivacyRequest(
+        doctor_id=4, request_type="view", status="pending",
+        content={}, sla_deadline=datetime.utcnow() + timedelta(days=30),
+    ))
+    db.commit()
+    db.close()
+
+    r = client.get("/api/v1/privacy-requests/me", headers=_token(1, "doctor"))
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["total"] == 3
+    assert all(item["doctor_id"] == 1 for item in data["items"])
+
+    r2 = client.get("/api/v1/privacy-requests/me?status=done", headers=_token(1, "doctor"))
+    assert r2.json()["data"]["total"] == 3
+    r3 = client.get("/api/v1/privacy-requests/me?status=pending", headers=_token(1, "doctor"))
+    assert r3.json()["data"]["total"] == 0
