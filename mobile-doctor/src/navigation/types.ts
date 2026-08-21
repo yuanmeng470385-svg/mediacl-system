@@ -38,4 +38,8 @@ export type RootStackParamList = {
   PatientEduZone: undefined;
   // 收藏历史
   Favorites: undefined;
+  // 隐私中心（三期 L：政策/个人信息/数据权利申请）
+  PrivacyCenter: undefined;
+  // 我的隐私请求（三期 L：进度查询）
+  PrivacyRequests: undefined;
 };

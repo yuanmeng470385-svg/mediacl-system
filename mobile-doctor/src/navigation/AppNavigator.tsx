@@ -27,6 +27,8 @@ import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
 import PatientEduZoneScreen from '../screens/PatientEdu/PatientEduZoneScreen';
 import FavoritesScreen from '../screens/Profile/FavoritesScreen';
+import PrivacyCenterScreen from '../screens/Privacy/PrivacyCenterScreen';
+import PrivacyRequestsScreen from '../screens/Privacy/PrivacyRequestsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -207,6 +209,16 @@ export default function AppNavigator() {
               name="Favorites"
               component={FavoritesScreen}
               options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="PrivacyCenter"
+              component={PrivacyCenterScreen}
+              options={{ title: '隐私中心' }}
+            />
+            <Stack.Screen
+              name="PrivacyRequests"
+              component={PrivacyRequestsScreen}
+              options={{ title: '我的隐私请求' }}
             />
           </>
         ) : (

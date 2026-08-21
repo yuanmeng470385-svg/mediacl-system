@@ -184,6 +184,22 @@ export default function ProfileScreen() {
           <Icon name="chevron-right" size={20} color={Colors.textHint} />
         </TouchableOpacity>
 
+        {/* 隐私中心入口 */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('PrivacyCenter')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name={FeatureIcons.compliance} size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>隐私中心</Text>
+            <Text style={styles.desc}>隐私政策 · 个人信息 · 数据权利申请</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
         {/* 医师资格认证入口 */}
         <TouchableOpacity
           style={[styles.card, Shadow.card, styles.entryRow]}
