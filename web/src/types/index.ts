@@ -486,3 +486,23 @@ export interface ExportRequest {
   created_at: string | null;
   sla_overdue?: boolean;
 }
+
+export interface PrivacyRequest {
+  id: number;
+  doctor_id: number;
+  doctor_name?: string;
+  request_type: 'view' | 'correct' | 'delete' | 'export' | 'account_delete';
+  status: 'pending' | 'processing' | 'done' | 'rejected';
+  content: {
+    detail?: string;
+    fields?: { full_name?: string; phone?: string };
+    confirm?: boolean;
+    response?: string;
+  };
+  sla_deadline: string | null;
+  sla_overdue?: boolean;
+  handled_by: number | null;
+  handled_at: string | null;
+  file_url: string | null;
+  created_at: string | null;
+}

@@ -34,6 +34,7 @@ export const menuConfig: MenuDataItem[] = [
   { path: '/compliance/card-stats', name: '触达统计', icon: <BarChartOutlined /> },
   { path: '/data/assets', name: '数据治理', icon: <SafetyOutlined /> },
   { path: '/data/exports', name: '导出审批', icon: <SnippetsOutlined /> },
+  { path: '/privacy/requests', name: '隐私请求', icon: <SafetyOutlined /> },
   { path: '/audit/list', name: '审计查询', icon: <AuditOutlined /> },
   { path: '/doctor/list', name: '医生管理', icon: <UserOutlined /> },
   { path: '/user/list', name: '用户管理', icon: <TeamOutlined /> },
