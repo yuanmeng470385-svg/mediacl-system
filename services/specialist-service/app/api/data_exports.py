@@ -123,7 +123,10 @@ async def list_export_requests(
 async def review_export_request(
     request_id: int,
     payload: dict,
-    current_user: dict = Depends(require_roles(*EXPORT_ROLES)),
+    # M-2（2026-08-24 审查修复）：审批收敛到 compliance/admin。申请人角色是
+    # admin/manager —— manager 既可申请又可审批 = 自审自批；admin 保留兜底
+    # 但被下方自批守卫拦住。列表查看仍开放 EXPORT_ROLES（申请人需看进度）。
+    current_user: dict = Depends(require_roles("compliance", "admin")),
     db: Session = Depends(get_db),
 ):
     """合规部审批：approve → 生成对话明细 xlsx + expires_at；reject 必填 reason。"""
@@ -132,6 +135,9 @@ async def review_export_request(
         raise BusinessError("导出申请不存在", code=4001)
     if req.status != "pending":
         raise BusinessError("当前状态不可审批（仅待审批可审）", code=4001)
+    # M-2：本人申请本人批 = 自审自批，一律拒绝（含 admin）
+    if req.requester_id == current_user["id"]:
+        raise BusinessError("不能审批自己提交的导出申请", code=4001)
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
     verdict = payload.get("verdict")

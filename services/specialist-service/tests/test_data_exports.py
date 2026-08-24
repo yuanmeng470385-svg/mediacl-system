@@ -226,3 +226,34 @@ def test_mah_overview_aggregates(fresh_state):
     assert data["training_completed_rate"] == 0.5
     assert data["commitment_signed_rate"] == 0.5
     assert data["compliance_pass_rate"] == 0.75
+
+
+# ==================== M-2（2026-08-24 审查修复）：审批角色收敛 + 自审自批拦截 ====================
+
+def test_review_rejects_manager_role(fresh_state):
+    """审批收敛到 compliance/admin：manager（申请人角色）不再可审（此前可自审自批）"""
+    db = TestSession()
+    db.add(User(id=5, username="mgr", full_name="经理", phone="13800000005", role="manager", status="active"))
+    db.add(ExportRequest(id=1, requester_id=2, export_type="conversations", reason="a", status="pending"))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/data-exports/requests/1/review", json={"verdict": "approve"},
+                       headers=_token(5, "manager"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_review_rejects_self_approval(fresh_state):
+    """本人申请本人批 → 4001（含 admin：兜底审批权也不能批自己的单）"""
+    db = TestSession()
+    db.add(ExportRequest(id=1, requester_id=3, export_type="conversations", reason="自查", status="pending"))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/data-exports/requests/1/review", json={"verdict": "approve"},
+                       headers=_token(3, "compliance"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+    # 申请单仍为 pending，未被审批
+    db = TestSession()
+    assert db.query(ExportRequest).filter_by(id=1).first().status == "pending"
+    db.close()

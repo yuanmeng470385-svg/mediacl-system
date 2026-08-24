@@ -3,6 +3,7 @@ import { ProTable, ModalForm, ProFormText } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
 import { App, Button, Descriptions, Drawer, Input, Radio, Space, Tag } from 'antd';
 import { dataExportAPI } from '../../services/dataExports';
+import { useAuth } from '../../hooks/useAuth';
 import type { ExportRequest } from '../../types';
 
 const STATUS_MAP: Record<string, { color: string; text: string }> = {
@@ -14,6 +15,13 @@ const STATUS_MAP: Record<string, { color: string; text: string }> = {
 export default function DataExports() {
   const actionRef = useRef<ActionType>();
   const { message } = App.useApp();
+  const { user: me } = useAuth();
+  // M-2（2026-08-24 审查修复）：审批收敛到 compliance/admin，且不能批自己
+  // 提交的单（与后端 require_roles + 自批守卫对齐，前端只做可见性兜底）
+  const myId = me?.id !== undefined ? Number(me.id) : null;
+  const canReview =
+    (me?.role === 'compliance' || me?.role === 'admin') && myId !== null;
+  const reviewable = (r: ExportRequest) => canReview && r.requester_id !== myId;
   const [current, setCurrent] = useState<ExportRequest | null>(null);
   const [verdict, setVerdict] = useState<'approve' | 'reject'>('approve');
   const [reason, setReason] = useState('');
@@ -109,7 +117,11 @@ export default function DataExports() {
       render: (_, r) => (
         <Space size="middle">
           {r.status === 'pending' ? (
-            <a onClick={() => openReview(r)}>审批</a>
+            reviewable(r) ? (
+              <a onClick={() => openReview(r)}>审批</a>
+            ) : (
+              <span style={{ color: '#999' }}>无权审批</span>
+            )
           ) : r.status === 'approved' ? (
             <a onClick={() => handleDownload(r)}>
               {downloadingId === r.id ? '下载中…' : '下载'}
