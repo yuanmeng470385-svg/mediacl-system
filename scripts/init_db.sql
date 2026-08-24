@@ -325,6 +325,14 @@ CREATE TABLE IF NOT EXISTS conversation_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_conversation ON conversation_feedback(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_user ON conversation_feedback(user_id);
+-- M-4（2026-08-24 审查修复）：同一用户对同一对话一条反馈（改主意走 UPDATE）；
+-- 卡片好评借表行（conversation_id IS NULL）每 (医生, 分身) 一条，防重复累加
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feedback_user_conversation
+    ON conversation_feedback(user_id, conversation_id)
+    WHERE conversation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_feedback_card_useful
+    ON conversation_feedback(user_id, specialist_id)
+    WHERE conversation_id IS NULL AND rating = 1;
 
 CREATE TABLE IF NOT EXISTS conversation_favorites (
     id BIGSERIAL PRIMARY KEY,

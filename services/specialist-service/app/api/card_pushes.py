@@ -95,13 +95,23 @@ async def submit_feedback(
     # 卡片好评记录（rating=1，comment='学术卡片有用'），无需改 monitor。同一 push 仅
     # 首次 useful 写入，重复 useful 不重复累加。
     if feedback == "useful" and rec.specialist_id and not was_useful:
-        db.add(ConversationFeedback(
-            conversation_id=None,
-            user_id=rec.doctor_id,
-            specialist_id=rec.specialist_id,
-            rating=1,
-            comment="学术卡片有用",
-        ))
+        # M-4（2026-08-24 审查修复）：useful→useless→useful 反复切换会让
+        # was_useful 每次回到 False 再插一行 —— 每位医生对每分身的卡片好评
+        # 只记一条（DB 侧 uq_feedback_card_useful 兜底）
+        exists = db.query(ConversationFeedback.id).filter(
+            ConversationFeedback.user_id == rec.doctor_id,
+            ConversationFeedback.specialist_id == rec.specialist_id,
+            ConversationFeedback.conversation_id.is_(None),
+            ConversationFeedback.rating == 1,
+        ).first()
+        if not exists:
+            db.add(ConversationFeedback(
+                conversation_id=None,
+                user_id=rec.doctor_id,
+                specialist_id=rec.specialist_id,
+                rating=1,
+                comment="学术卡片有用",
+            ))
     db.commit()
     db.refresh(rec)
     # 通知回流代表

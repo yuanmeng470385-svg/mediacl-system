@@ -1,4 +1,5 @@
 """反馈/收藏落库 + 满意度统计"""
+import pytest
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
 
@@ -113,6 +114,15 @@ def _client(db: FakeDb):
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_current_user] = lambda: {"id": 3, "role": "rep"}
     return TestClient(app)
+
+
+# M-4 批次顺手修（2026-08-24）：本文件 _client 设置的 dependency_overrides
+# 此前不清理，同进程后续文件（test_monitor_specialists 等 require_roles 用例）
+# 拿到假 rep 身份 7 例假红。autouse 每用例后清空，恢复隔离。
+@pytest.fixture(autouse=True)
+def _clear_overrides():
+    yield
+    app.dependency_overrides.clear()
 
 
 def test_toggle_favorite_no_body_returns_200():

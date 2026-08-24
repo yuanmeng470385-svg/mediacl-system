@@ -128,14 +128,25 @@ async def submit_feedback(
         raise ParamError("rating 必须是 1（赞）或 -1（踩）")
     conv = _get_conv_or_404(db, conversation_id)
     _assert_conv_owner(conv, current_user)
-    fb = ConversationFeedback(
-        conversation_id=conv.id,
-        user_id=current_user["id"],
-        specialist_id=conv.specialist_id,
-        rating=rating,
-        comment=(request.get("comment") or "")[:500],
-    )
-    db.add(fb)
+    # M-4（2026-08-24 审查修复）：upsert —— 同一用户对同一对话只有一条反馈，
+    # 改主意覆盖原 rating/comment。此前每次 POST 都插新行，rating==1 的
+    # approval_rate 聚合可被无限点赞注水（DB 侧 uq_feedback_user_conversation 兜底）
+    fb = db.query(ConversationFeedback).filter(
+        ConversationFeedback.conversation_id == conv.id,
+        ConversationFeedback.user_id == current_user["id"],
+    ).first()
+    if fb:
+        fb.rating = rating
+        fb.comment = (request.get("comment") or "")[:500]
+    else:
+        fb = ConversationFeedback(
+            conversation_id=conv.id,
+            user_id=current_user["id"],
+            specialist_id=conv.specialist_id,
+            rating=rating,
+            comment=(request.get("comment") or "")[:500],
+        )
+        db.add(fb)
     db.commit()
     logger.info("feedback saved: user=%s conv=%s rating=%s", current_user["id"], conv.id, rating)
     return success({"feedback_id": fb.id})

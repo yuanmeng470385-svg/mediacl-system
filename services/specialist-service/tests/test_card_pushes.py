@@ -205,3 +205,51 @@ def test_feedback_useful_duplicate_not_duplicated(fresh_state):
 def test_doctor_inbox_rejects_rep():
     resp = client.get("/api/v1/card-pushes", headers=_token(1, "rep"))
     assert resp.status_code == 403
+
+
+# ==================== M-4（2026-08-24 审查修复）：反馈唯一性（防评分注水） ====================
+
+def _add_conv(cid=10, uid=2, sid=1):
+    db = TestSession()
+    db.add(Conversation(id=cid, user_id=uid, specialist_id=sid, session_id=f"s-{cid}",
+                        role="assistant", content="回答"))
+    db.commit()
+    db.close()
+
+
+def test_conversation_feedback_upsert_single_row():
+    """同一用户对同一对话多次反馈 → 仅一行，rating 覆盖（此前每次 POST 插新行可注水 approval_rate）"""
+    _add_conv()
+
+    r1 = client.post("/api/v1/conversations/10/feedback", json={"rating": 1, "comment": "好"},
+                     headers=_token(2, "doctor"))
+    r2 = client.post("/api/v1/conversations/10/feedback", json={"rating": -1, "comment": "改主意"},
+                     headers=_token(2, "doctor"))
+    assert r1.json()["code"] == 0 and r2.json()["code"] == 0
+
+    db = TestSession()
+    rows = db.query(ConversationFeedback).filter_by(conversation_id=10, user_id=2).all()
+    assert len(rows) == 1
+    assert rows[0].rating == -1
+    assert rows[0].comment == "改主意"
+    db.close()
+
+
+def test_card_feedback_useful_useless_useful_no_inflation():
+    """useful→useless→useful 反复切换 → 卡片好评仍只一条（此前 was_useful 复位后重复插行）"""
+    db = TestSession()
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2,
+                          specialist_id=1, read_status="read"))
+    db.commit()
+    db.close()
+
+    for fb in ("useful", "useless", "useful", "useless", "useful"):
+        resp = client.post("/api/v1/card-pushes/1/feedback", json={"feedback": fb},
+                           headers=_token(2, "doctor"))
+        assert resp.json()["code"] == 0
+
+    db = TestSession()
+    rows = db.query(ConversationFeedback).filter_by(
+        specialist_id=1, rating=1, conversation_id=None).all()
+    assert len(rows) == 1
+    db.close()
