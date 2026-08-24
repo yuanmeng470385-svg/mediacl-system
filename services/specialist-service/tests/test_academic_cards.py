@@ -163,3 +163,65 @@ def test_stats_aggregates(fresh_state):
     assert data["read_rate"] == 0.5
     assert data["rep_ranking"][0]["representative_id"] == 1
     assert data["rep_ranking"][0]["reads"] == 1
+
+
+# ==================== M-1（2026-08-24 审查修复）：引用链与检索原文入模 ====================
+
+class _FakeQwen:
+    """替身 QwenClient：捕获入参消息，返回固定卡片 JSON"""
+    def __init__(self):
+        self.messages = None
+
+    def chat(self, messages, **kw):
+        self.messages = messages
+        return {"content": '{"conclusion": "c", "key_points": ["k"], "summary": "s"}'}
+
+
+_FAKE_RESULTS = [
+    {"title": "高血压防治指南", "content": "推荐每日食盐摄入量小于5克。" * 5,
+     "url": "https://oss/guide.pdf", "doc_id": "doc-1", "score": 0.9},
+    {"title": "限盐与血压", "content": "限盐可显著降低收缩压。",
+     "url": "https://oss/salt.pdf", "doc_id": "doc-2", "score": 0.8},
+]
+
+
+@pytest.mark.asyncio
+async def test_generate_card_citations_use_real_contract_and_feed_content(monkeypatch):
+    """引用取检索层真实键（title/url/doc_id），且检索原文进 prompt（此前两者皆无 → 引用恒空、内容凭空编）"""
+    fake = _FakeQwen()
+    monkeypatch.setattr(ac_api, "_retrieve", AsyncMock(return_value={"results": _FAKE_RESULTS}))
+    monkeypatch.setattr(ac_api, "QwenClient", lambda: fake)
+
+    card = await ac_api._generate_card_content("高血压", "限盐建议")
+
+    assert card["citations"] == [
+        {"doc_name": "高血压防治指南", "url": "https://oss/guide.pdf", "doc_id": "doc-1"},
+        {"doc_name": "限盐与血压", "url": "https://oss/salt.pdf", "doc_id": "doc-2"},
+    ]
+    user_msg = fake.messages[1]["content"]
+    # 检索原文必须喂给模型（截断到 800 字/条）
+    assert "推荐每日食盐摄入量" in user_msg
+    assert "限盐可显著降低收缩压" in user_msg
+    # 主题/标题是用户输入，必须留在 <user_content> 定界内（防注入）
+    assert "<user_content>\n主题：高血压\n卡片标题：限盐建议" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_generate_card_no_sources_fails_closed(monkeypatch):
+    """知识库零命中 → 拒绝生成（凭空写学术内容 = 必然编造）"""
+    monkeypatch.setattr(ac_api, "_retrieve", AsyncMock(return_value={"results": []}))
+    with pytest.raises(Exception) as ei:
+        await ac_api._generate_card_content("不存在的主题", "x")
+    assert "引用" in str(ei.value)
+
+
+def test_create_card_no_sources_returns_4001(fresh_state, monkeypatch):
+    """端到端：检索空 → BusinessError 4001 透传（不被吞成笼统 6001）"""
+    async def _empty_retrieve(topic, top_k=3):
+        return {"results": []}
+    monkeypatch.setattr(ac_api, "_retrieve", _empty_retrieve)
+
+    resp = client.post("/api/v1/academic-cards", json={"title": "无据卡片", "topic": "任意"},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001

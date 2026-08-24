@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -187,9 +188,13 @@ export default function CardDetailScreen() {
                   <Text style={styles.citationIndex}>{i + 1}.</Text>
                   <View style={styles.citationBody}>
                     <Text style={styles.citationName}>{c.doc_name || '未命名文献'}</Text>
-                    {c.version || c.section ? (
-                      <Text style={styles.citationMeta}>
-                        {[c.version, c.section].filter(Boolean).join(' · ')}
+                    {/* M-1：检索层真实字段是 url（原 version/section 恒空，元数据行从未展示过） */}
+                    {c.url ? (
+                      <Text
+                        style={styles.citationMeta}
+                        onPress={() => Linking.openURL(c.url!)}
+                      >
+                        {c.url}
                       </Text>
                     ) : null}
                   </View>

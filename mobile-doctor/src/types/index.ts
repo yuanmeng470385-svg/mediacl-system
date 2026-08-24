@@ -317,12 +317,13 @@ export interface ContentItem {
 
 // ========== 学术触达（二期 G） ==========
 
-/** 学术卡片引用来源 —— 后端 academic_cards.content.citations 元素 */
+/** 学术卡片引用来源 —— 后端 academic_cards.content.citations 元素
+ *  M-1（2026-08-24 审查修复）：后端改为知识检索统一契约 {doc_name, url, doc_id}
+ *  （原 version/section/file_url 键从未被检索层填充，是恒空的死字段） */
 export interface AcademicCitation {
   doc_name?: string;
-  version?: string;
-  section?: string;
-  file_url?: string;
+  url?: string;
+  doc_id?: string;
 }
 
 /** 学术卡片正文 —— AcademicCard.content（JSONB） */
