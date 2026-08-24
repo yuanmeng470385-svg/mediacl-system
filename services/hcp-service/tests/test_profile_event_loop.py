@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
@@ -38,18 +39,22 @@ class _FakeHcp:
 
 
 class _FakeDb:
-    """hcp 查得到 + 其余查询不崩"""
+    """hcp 查得到 + 其余查询不崩（User 查询走 require_roles 角色复核，M-3）"""
 
     def __init__(self):
         self._fetched = []
+        self._model = None
 
-    def query(self, *a, **k):
+    def query(self, model, *a, **k):
+        self._model = model
         return self
 
     def filter(self, *a, **k):
         return self
 
     def first(self):
+        if getattr(self._model, "__name__", "") == "User":
+            return SimpleNamespace(id=1, role="admin", status="active")
         return _FakeHcp()
 
     def all(self):

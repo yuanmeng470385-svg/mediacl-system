@@ -10,6 +10,11 @@ from shared.common.internal_auth import require_internal_key
 
 # 医生库维护端点（S6 RBAC）：写操作限 admin/manager
 HCP_ADMIN_ROLES = ("admin", "manager")
+# M-3（2026-08-24 审查修复）：档案读取角色。列表/详情/画像含手机号、邮箱等
+# 医生 PII，此前任意登录角色（doctor/finance 等）都能拉全量档案 —— 收敛到
+# 实际使用方：admin/manager（web 医生管理）+ rep（mobile 拜访/画像）。
+# 医生端 app 不调 /hcps；标签端点仍开放（B5：协作元数据非敏感字段）。
+HCP_READ_ROLES = ("admin", "manager", "rep")
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from app.models.hcp import Hcp
@@ -90,10 +95,12 @@ async def list_hcps(
     region: Optional[str] = None,
     status: Optional[str] = None,
     tag: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_READ_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """医生列表（分页 + 筛选：姓名/医院/科室/职称/区域/状态/标签）"""
+    """医生列表（分页 + 筛选：姓名/医院/科室/职称/区域/状态/标签）。
+
+    M-3：读取收敛到 HCP_READ_ROLES（admin/manager/rep），档案含医生 PII。"""
     p = PaginationParams(page=page, page_size=page_size)
     items, total = HcpRepo.list(
         db, page=p.page, page_size=p.page_size,
@@ -106,10 +113,12 @@ async def list_hcps(
 @router.get("/{hcp_id}")
 async def get_hcp(
     hcp_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_READ_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """医生详情（Redis 缓存：hcp:{id}，TTL 300s；写路径即时失效，见 _invalidate_hcp_cache）"""
+    """医生详情（Redis 缓存：hcp:{id}，TTL 300s；写路径即时失效，见 _invalidate_hcp_cache）。
+
+    M-3：读取收敛到 HCP_READ_ROLES（admin/manager/rep）。"""
     hcp_id = _parse_hcp_id(hcp_id)
     cached = hcp_cache.get(f"hcp:{hcp_id}")
     if cached is not None:
@@ -124,10 +133,13 @@ async def get_hcp(
 @router.get("/{hcp_id}/profile")
 async def get_hcp_profile(
     hcp_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles(*HCP_READ_ROLES)),
     db: Session = Depends(get_db),
 ):
     """医生画像（聚合互动历史 + AI 生成，LLM 不可用时降级为基础数据）。
+
+    M-3（2026-08-24 审查修复）：与列表/详情同口径收敛到 HCP_READ_ROLES ——
+    画像响应含 hcp.to_dict()（手机号/邮箱 PII），此前任意登录角色可拉。
 
     H3（2026-08-11）：互动历史按查看者过滤——admin/manager 聚合全部代表的互动，
     rep 只聚合本人（画像含 ai_summary/异议/兴趣等敏感内容，此前任意登录用户可

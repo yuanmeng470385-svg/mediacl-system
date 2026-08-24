@@ -39,9 +39,12 @@ class _HcpQuery:
 
 
 class _FakeDb:
-    """hcp 查询返回 None（缺档案场景）；User 查询不被本文件用例触发"""
+    """hcp 查询返回 None（缺档案场景）；User 查询供 require_roles 角色复核
+    （M-3 后读端点也走 require_roles，每次受限请求会主键查 User）"""
 
     def query(self, model):
+        if model.__name__ == "User":
+            return _HcpQuery(SimpleNamespace(id=1, role="admin", status="active"))
         return _HcpQuery(None)
 
 
