@@ -200,6 +200,12 @@ def test_generate_upserts_idempotent(fresh_state, monkeypatch):
     db.close()
     assert len(rows) == 1  # 不堆积第二行
 
+    # L-2（2026-08-24 审查修复）：重跑是内容更新，通知只发一次
+    db = TestSession()
+    notifications = db.query(Notification).filter_by(type="briefing_ready").all()
+    db.close()
+    assert len(notifications) == 1
+
 
 def test_generate_skips_no_doctor_dialogue(fresh_state, monkeypatch):
     _seed_rep_doctor_and_twin()

@@ -160,6 +160,16 @@ def generate_for_date(db: Session, target_date: date) -> dict:
                     briefing_date=target_date, content=structured, status="ready",
                 )
                 db.add(row)
+                # L-2（2026-08-24 审查修复）：通知只在"当日首篇"落库时发一次。
+                # 重跑/重启触发同日重新生成是内容更新（existing 分支），
+                # 此前通知无条件 add —— 同一 rep 同一天会堆多条"已生成"。
+                db.add(Notification(
+                    user_id=rep_id,
+                    type="briefing_ready",
+                    title="你的夜间简报已生成",
+                    content="查看医生提问汇总与需跟进事项",
+                    link="/briefings",
+                ))
                 try:
                     # 并发安全：在本行 savepoint 内 flush，唯一键冲突（另一 worker 已插入）
                     # 时仅回滚本行、转更新既有行，不把整批事务打崩。
@@ -178,13 +188,6 @@ def generate_for_date(db: Session, target_date: date) -> dict:
                     row.status = "ready"
             generated += 1
             generated_rows.append(row)
-            db.add(Notification(
-                user_id=rep_id,
-                type="briefing_ready",
-                title="你的夜间简报已生成",
-                content="查看医生提问汇总与需跟进事项",
-                link="/briefings",
-            ))
 
     generated_links = [
         {
