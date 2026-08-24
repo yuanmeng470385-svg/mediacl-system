@@ -547,6 +547,16 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
   - 隐私请求数据包为服务器本地文件线下交付（`logs/exports/privacy_<id>.json`，未做在线下载端点；如需对称 K 的 blob 直下可后续补）
   - 测试基线（2026-08-21 三期 L Task 8 全量回归实测）：auth 152 passed + 7 skipped（本机 Redis 未起，验证码 Lua 并发用例跳过）/ gateway 84 / specialist 268 / compliance 109 / mobile-doctor jest 24（4 套件，新增 privacy-contract）+ tsc --noEmit 零错误 / mobile jest 96 / web build PASS
 
+**全量代码审查修复批（2026-08-24，H-1/M-1..M-4/L-1/L-2 七项全交付，be0205c..d1ad6f9）**：
+- **H-1 考试绕过**：/exams/submit 此前完全信任客户端题目集合（单题正确答案提交即 100 分过考置 training_completed）→ 开考签发考试会话 JWT（scope=exam/uid/qids/2h，与登录 JWT 同密钥不互认），交卷验会话且作答集合须与试卷一致；mobile 契约同步（startExam 返回 session_token，submitExam 携带）
+- **M-1 学术卡片引用链**：citations 改知识检索真实契约 {doc_name,url,doc_id}（原 version/section/file_url 恒空）；检索原文每条截 800 字入 prompt（此前从未喂模型，"严格来自引用"无从满足）；主题/标题移入 <user_content> 定界；零命中 fail-closed 4001；mobile-doctor AcademicCitation 对齐 + url 可点
+- **M-2 导出自审自批**：review 收敛 compliance/admin（manager 不再可审）+ requester==审批人 → 4001；web 审批入口按角色+本人单隐藏
+- **M-3 医生档案 PII**：hcps list/detail/profile 收敛 HCP_READ_ROLES(admin/manager/rep)（此前 doctor/finance 可拉全量含手机/邮箱；标签端点维持 B5 开放）
+- **M-4 反馈注水**：/conversations/{id}/feedback 改 upsert（同用户同对话一行，改主意覆盖）；卡片好评每 (医生,分身) 一条（useful→useless→useful 不再重复累加）；迁移 **024_feedback_unique.sql**（两 partial unique index + 存量去重，**本机 PG 容器未起未实跑，部署时须执行**）；init_db.sql 同步
+- **L-1** 推送通知 title 截断 [:200]（超长致推送事务 DataError 回滚）；**L-2** briefing_ready 通知只在当日首篇落库时发（重跑/重启不堆通知）
+- 顺手修（预先存在）：test_feedback_favorite._client 的 dependency_overrides 不清理 → 同进程 monitor 等 7 例假红；require_roles 会让假 DB 夹具查 User，hcp 两个测试夹具按模型分流
+- 测试基线（2026-08-24 实测）：auth 168 passed + 7 skipped / specialist 275 passed / hcp 67 passed / mobile exam-contract 4 passed + tsc 0 错 / mobile-doctor tsc 0 错 / web tsc 0 错 + vitest 14 passed
+
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
 - ~~**流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）~~（e6c0d75 起逐帧 fast 门禁，违规帧不转发）
