@@ -567,7 +567,7 @@ def _normalize_status(status: str) -> str:
     return s
 
 
-def _validate_specialist_fields(request: dict, creating: bool) -> dict:
+def _validate_specialist_fields(request: dict, creating: bool, existing: dict = None) -> dict:
     """白名单 + 必填校验（纯函数，便于单测）。
 
     creating 与 updating 都接受 SPECIALIST_UPDATE_FIELDS 白名单字段，
@@ -576,6 +576,9 @@ def _validate_specialist_fields(request: dict, creating: bool) -> dict:
     - name 传了就必须非空（含 update —— name 是 NOT NULL 列，null/空串无法落库）；
     - product_id 传了就必须能转 int（防 create 的 int() 抛 ValueError 变 500）；
       显式 null 放行（update 清空 product_id 引用，可空 FK）。
+    L-4（2026-08-24 审查修复）：官方分身不变式按"合并后"状态判定 ——
+    existing 传当前行 {is_official, representative_id}，payload 只改其一
+    也能查出冲突；此前两键须同时出现在 payload 才触发，partial update 可绕过。
     """
     data = dict(request)
     allowed = set(data.keys()) - SPECIALIST_UPDATE_FIELDS
@@ -595,7 +598,12 @@ def _validate_specialist_fields(request: dict, creating: bool) -> dict:
             data["product_id"] = int(data["product_id"])
         except (TypeError, ValueError):
             raise ParamError("product_id 必须为整数")
-    if data.get("is_official") and data.get("representative_id"):
+    # L-4：合并既有行后判定 —— partial update（只带其中一个键）不再绕过
+    merged = dict(existing or {})
+    for key in ("is_official", "representative_id"):
+        if key in data:
+            merged[key] = data[key]
+    if merged.get("is_official") and merged.get("representative_id"):
         raise ParamError("官方公共数字员工不能绑定代表（representative_id 须为空）")
     return data
 
@@ -843,7 +851,11 @@ async def update_specialist(
     specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在")
-    data = _validate_specialist_fields(request, creating=False)
+    data = _validate_specialist_fields(request, creating=False, existing={
+        # L-4：partial update 场景下官方分身不变式以合并后状态判定
+        "is_official": specialist.is_official,
+        "representative_id": specialist.representative_id,
+    })
     if "product_id" in data and data["product_id"] is not None:
         _ensure_product_exists(db, data["product_id"])
     for field in SPECIALIST_UPDATE_FIELDS:

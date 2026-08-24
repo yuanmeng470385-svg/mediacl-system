@@ -28,6 +28,9 @@ class FakeSpecialist:
         self.compliance_level = "internal"
         self.bailian_app_id = f"mm_{id}"
         self.status = status
+        # L-4：update_specialist 的官方分身不变式合并判定会读当前行两列
+        self.is_official = False
+        self.representative_id = None
         self.created_at = datetime(2026, 8, 1)
 
     def to_dict(self):
