@@ -3,13 +3,15 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+
+import jwt
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from shared.common.auth import get_current_user, require_roles
+from shared.common.auth import get_current_user, require_roles, _jwt_secret
 from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
@@ -28,6 +30,51 @@ VALID_TYPES = ("single", "multiple", "judge")
 VALID_REVIEW = ("pending", "approved", "rejected")
 
 _PASS_SCORE = int(os.getenv("EXAM_PASS_SCORE", "80"))
+
+# H-1（2026-08-24 审查修复）：考试会话绑定。此前 /submit 完全信任客户端提交的
+# 题目集合 —— 只挑一道已知正确答案的题提交即 100 分通过并置
+# compliance_training_completed=True，整个考试可被绕过。现在 /start 签发
+# 无状态考试会话 JWT（scope=exam，携带开考抽中的题目 ID），/submit 必须携带
+# 该 token 且作答题目集合与会话完全一致，判分基数取会话题数。选无状态签名
+# 而非 Redis 是因为测试基线（SQLite、无 Redis）也能全量回归。
+_EXAM_SESSION_TTL_SECONDS = 2 * 60 * 60  # 考试会话有效期 2 小时
+
+
+def _issue_exam_session(user_id: int, question_ids: list) -> str:
+    """签发一次性考试会话 token：与登录 JWT 同密钥（HS256），但 scope=exam
+    且不携带 username/role —— verify_token 不会误认它为登录凭证，登录态
+    侧 payload 无 scope 字段故同样不会串用。"""
+    now = datetime.utcnow()
+    return jwt.encode(
+        {
+            "scope": "exam",
+            "uid": user_id,
+            "qids": [int(q) for q in question_ids],
+            "iat": now,
+            "exp": now + timedelta(seconds=_EXAM_SESSION_TTL_SECONDS),
+        },
+        _jwt_secret(),
+        algorithm="HS256",
+    )
+
+
+def _verify_exam_session(token, user_id: int) -> list:
+    """校验考试会话并返回会话题目 ID 列表；无效/过期/非本人一律拒绝交卷。"""
+    if not isinstance(token, str) or not token.strip():
+        raise ParamError("缺少 session_token，请先调用 /exams/start 开考后再交卷")
+    try:
+        sess = jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise BusinessError("考试会话已过期，请重新开考", code=4001)
+    except jwt.InvalidTokenError:
+        raise BusinessError("考试会话无效，请重新开考", code=4001)
+    if sess.get("scope") != "exam" or sess.get("uid") != user_id:
+        # 登录 token 或他人会话都进不来：登录 token 无 scope，他人会话 uid 不符
+        raise BusinessError("考试会话无效，请重新开考", code=4001)
+    qids = sess.get("qids")
+    if not isinstance(qids, list) or not qids:
+        raise BusinessError("考试会话无效，请重新开考", code=4001)
+    return qids
 
 
 def _validate_question(payload: dict) -> dict:
@@ -262,7 +309,13 @@ async def start_exam(
     if not pool:
         raise BusinessError("暂无可考试的题目，请联系医学部/合规部上架题目", code=4001)
     questions = random.sample(pool, min(question_count, len(pool)))
-    return success({"questions": [q.to_dict() for q in questions]})
+    # H-1：签发考试会话 token（绑定本次抽中的题目集合），交卷须原样携带
+    session_token = _issue_exam_session(current_user["id"], [q.id for q in questions])
+    return success({
+        "questions": [q.to_dict() for q in questions],
+        "session_token": session_token,
+        "expires_in": _EXAM_SESSION_TTL_SECONDS,
+    })
 
 
 @router.post("/submit")
@@ -282,6 +335,11 @@ async def submit_exam(
         raise ParamError("answers 缺少 question_id")
     if len(q_ids) != len(set(q_ids)):
         raise ParamError("存在重复作答的题目")
+    # H-1：校验考试会话 —— 作答题目集合必须与开考试卷完全一致，
+    # 不能自选题目/漏题交卷（此前单题提交即判 100 分，考试可被完全绕过）
+    session_qids = _verify_exam_session(payload.get("session_token"), current_user["id"])
+    if set(q_ids) != set(session_qids):
+        raise BusinessError("作答题目与开考试卷不一致，不能自选题目交卷，请重新开考", code=4001)
     rows = db.query(ExamQuestion).filter(ExamQuestion.id.in_(q_ids)).all()
     by_id = {q.id: q for q in rows}
     if len(rows) != len(set(q_ids)):
@@ -296,7 +354,8 @@ async def submit_exam(
             raise BusinessError("存在不存在的题目", code=4001)
         if _score_match(a.get("selected"), q.answer):
             correct += 1
-    total = len(answers)
+    # H-1：判分基数取会话题数（与作答数一致，语义上以试卷为准）
+    total = len(session_qids)
     score = round(correct * 100 / total)
     passed = score >= _PASS_SCORE
 

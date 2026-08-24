@@ -1,6 +1,8 @@
 /**
  * 合规考试页（二期 F）：加载题目 → 逐题选择 → 提交 → 结果。
- * startExam 返回 {questions}，submitExam 返回 ExamRecord（request 已解包 data）。
+ * startExam 返回 {questions, session_token, expires_in}，submitExam 返回 ExamRecord（request 已解包 data）。
+ * H-1（2026-08-24 审查修复）：开考返回的 session_token 在交卷时原样携带 ——
+ * 后端校验作答题目与开考试卷一致，防绕过考试直接刷分。
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -15,6 +17,7 @@ const TYPE_TEXT: Record<string, string> = { single: '单选', multiple: '多选'
 export default function ExamScreen() {
   const navigation = useNavigation();
   const [questions, setQuestions] = useState<ExamQuestion[]>([]);
+  const [sessionToken, setSessionToken] = useState<string>('');
   const [answers, setAnswers] = useState<Record<number, number[]>>({});
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<any | null>(null);
@@ -23,6 +26,7 @@ export default function ExamScreen() {
     try {
       const res = await examAPI.startExam(10);
       setQuestions(res?.questions || []);
+      setSessionToken(res?.session_token || '');
       const init: Record<number, number[]> = {};
       (res?.questions || []).forEach((q: ExamQuestion) => { init[q.id] = []; });
       setAnswers(init);
@@ -47,7 +51,7 @@ export default function ExamScreen() {
     if (payload.some(a => !a.selected.length)) { Alert.alert('提示', '请完成所有题目'); return; }
     setSubmitting(true);
     try {
-      const res = await examAPI.submitExam(payload);
+      const res = await examAPI.submitExam(payload, sessionToken);
       setResult(res);
     } catch { Alert.alert('提交失败', '请稍后重试'); }
     finally { setSubmitting(false); }

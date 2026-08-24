@@ -37,11 +37,14 @@ describe('examAPI', () => {
     expect(JSON.parse(init.body)).toEqual({ question_count: 5 });
   });
 
-  it('submitExam 发 POST /api/v1/exams/submit 带 answers', async () => {
-    await examAPI.submitExam([{ question_id: 1, selected: [0] }]);
+  it('submitExam 发 POST /api/v1/exams/submit 带 session_token + answers', async () => {
+    await examAPI.submitExam([{ question_id: 1, selected: [0] }], 'sess-token-1');
     const { url, init } = lastCall();
     expect(url).toContain('/api/v1/exams/submit');
-    expect(JSON.parse(init.body).answers).toEqual([{ question_id: 1, selected: [0] }]);
+    expect(JSON.parse(init.body)).toEqual({
+      session_token: 'sess-token-1',
+      answers: [{ question_id: 1, selected: [0] }],
+    });
   });
 
   it('signCommitment 发 POST /api/v1/qualifications/commitment/sign 带 code', async () => {

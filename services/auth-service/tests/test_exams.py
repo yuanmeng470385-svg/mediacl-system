@@ -2,6 +2,8 @@
 import os
 import sys
 
+import jwt
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -62,6 +64,11 @@ client = TestClient(app)
 def _token(user_id: int, role: str) -> dict:
     token = create_token(user_id=user_id, username=f"u{user_id}", role=role)
     return {"Authorization": f"Bearer {token}"}
+
+
+# H-1（2026-08-24 审查修复）：直接用被测模块签发考试会话，避免依赖 /start 的随机抽题
+def _session(user_id: int, qids: list) -> str:
+    return exams_api._issue_exam_session(user_id, qids)
 
 
 @pytest.fixture(autouse=True)
@@ -254,6 +261,14 @@ def test_start_returns_approved_questions_no_answer():
     assert len(items) == 1  # 只抽 approved
     assert items[0]["content"] == "q1"
     assert "answer" not in items[0]
+    # H-1：开考同时签发考试会话 token，交卷必须携带
+    assert body["data"]["session_token"]
+    assert body["data"]["expires_in"] > 0
+    # 会话绑定的题目集合 = 本次试卷
+    sess = jwt.decode(body["data"]["session_token"], os.environ["JWT_SECRET"], algorithms=["HS256"])
+    assert sess["scope"] == "exam"
+    assert sess["uid"] == 1
+    assert sess["qids"] == [1]
 
 
 def test_start_requires_rep():
@@ -271,7 +286,7 @@ def test_submit_scores_and_writes_record(fresh_state):
     resp = client.post("/api/v1/exams/submit", json={"answers": [
         {"question_id": 1, "selected": [1]},
         {"question_id": 2, "selected": [0, 2]},
-    ]}, headers=_token(1, "rep"))
+    ], "session_token": _session(1, [1, 2])}, headers=_token(1, "rep"))
     body = resp.json()
     assert body["code"] == 0
     data = body["data"]
@@ -301,7 +316,7 @@ def test_submit_partial_score():
     resp = client.post("/api/v1/exams/submit", json={"answers": [
         {"question_id": 1, "selected": [1]},
         {"question_id": 2, "selected": [1]},  # 错
-    ]}, headers=_token(1, "rep"))
+    ], "session_token": _session(1, [1, 2])}, headers=_token(1, "rep"))
     body = resp.json()
     data = body["data"]
     assert data["score"] == 50
@@ -311,7 +326,7 @@ def test_submit_partial_score():
 def test_submit_unknown_question_rejected():
     resp = client.post("/api/v1/exams/submit", json={"answers": [
         {"question_id": 999, "selected": [0]},
-    ]}, headers=_token(1, "rep"))
+    ], "session_token": _session(1, [999])}, headers=_token(1, "rep"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
 
@@ -321,9 +336,78 @@ def test_submit_rejects_duplicate_question():
     resp = client.post("/api/v1/exams/submit", json={"answers": [
         {"question_id": 1, "selected": [1]},
         {"question_id": 1, "selected": [0]},
+    ], "session_token": _session(1, [1, 1])}, headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+# ==================== H-1（2026-08-24 审查修复）：考试会话绑定 ====================
+
+def test_submit_requires_session_token():
+    """无 session_token 直接交卷 → 参数错误（此前的绕过路径之一）"""
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
     ]}, headers=_token(1, "rep"))
     assert resp.status_code == 400
     assert resp.json()["code"] == 1000
+
+
+def test_submit_rejects_self_picked_questions():
+    """核心绕过路径：会话抽了 2 题，只挑 1 道已知正确答案的题交卷 → 拒绝，
+    且不写考试记录、不置 training_completed"""
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    _add_q(id=2, question_type="single", content="q2", options=["A", "B"], answer=[0], review_status="approved")
+    db = TestSession()
+    _add_qualification(1)
+    db.close()
+
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},  # 只交会话里的一道
+    ], "session_token": _session(1, [1, 2])}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+    from shared.models.qualification import RepresentativeQualification
+    db = TestSession()
+    assert db.query(ExamRecord).count() == 0
+    qual = db.query(RepresentativeQualification).filter_by(representative_id=1).first()
+    assert qual.compliance_training_completed is False
+    db.close()
+
+
+def test_submit_rejects_foreign_session():
+    """别人的会话 token 交卷 → 拒绝（uid 不匹配）"""
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+    ], "session_token": _session(2, [1])}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_submit_rejects_expired_session(monkeypatch):
+    """过期会话 → 拒绝（含重放旧会话）"""
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    # 用负 TTL 签发一个已过期的会话
+    monkeypatch.setattr(exams_api, "_EXAM_SESSION_TTL_SECONDS", -1)
+    token = _session(1, [1])
+    monkeypatch.setattr(exams_api, "_EXAM_SESSION_TTL_SECONDS", 2 * 60 * 60)
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+    ], "session_token": token}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_submit_rejects_login_token_as_session():
+    """拿登录 JWT 冒充会话 token → 拒绝（scope 不符）"""
+    _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
+    resp = client.post("/api/v1/exams/submit", json={"answers": [
+        {"question_id": 1, "selected": [1]},
+    ], "session_token": create_token(user_id=1, username="rep01", role="rep")}, headers=_token(1, "rep"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
 
 
 def test_records_me_and_admin_list():
