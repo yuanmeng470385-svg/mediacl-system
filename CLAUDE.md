@@ -555,8 +555,9 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - **M-4 反馈注水**：/conversations/{id}/feedback 改 upsert（同用户同对话一行，改主意覆盖）；卡片好评每 (医生,分身) 一条（useful→useless→useful 不再重复累加）；迁移 **024_feedback_unique.sql**（两 partial unique index + 存量去重，**2026-08-24 已实跑 PG：存量去重 1 行、索引建成、重复键插入实测被拒**）；init_db.sql 同步
 - **L-1** 推送通知 title 截断 [:200]（超长致推送事务 DataError 回滚）；**L-2** briefing_ready 通知只在当日首篇落库时发（重跑/重启不堆通知）
 - 顺手修（预先存在）：test_feedback_favorite._client 的 dependency_overrides 不清理 → 同进程 monitor 等 7 例假红；require_roles 会让假 DB 夹具查 User，hcp 两个测试夹具按模型分流
+- **M-1 残留（2026-08-24 模拟器实测暴露，2319585）**：DashVector embedding 连接抖动（10054）时 knowledge 检索降级百炼索引，bailian retrieve 的 title/doc_id/url 全取自索引 metadata，缺元数据文档返回 dict 存在但字段全空的条目——学术卡片照常落库（引用不可溯源）。修复：academic_cards sources 按 title 非空过滤（excerpts/citations 同步收窄对位）、过滤后无有效引用 4001 fail-closed；medical QA 被引条目 title 空跳过不透出；smoke_fix_batch M-1 断言收紧为值非空（此前只查键存在空串照过）。真实复现验证：DashVector 抖动→百炼降级→4001 拒绝；恢复后成功卡 citations 全可溯源
 - **L-4 官方分身不变式**（同日补修）：_validate_specialist_fields 加 existing 合并判定 —— partial update 只传 is_official 或 representative_id 其一，不再绕过「官方分身不能绑代表」校验；update 端点传当前行两列
-- 测试基线（2026-08-24 全量回归实测，Redis 已起 7 skip 解锁）：auth 175 / specialist 276 / hcp 67 / gateway 86 / compliance 120 / knowledge 72 / audit 28 / visit 115 = **889 passed**；mobile jest 96 / mobile-doctor jest 24 / web vitest 14 + 双端 tsc 0 错
+- 测试基线（2026-08-24 全量回归实测，Redis 已起 7 skip 解锁）：auth 175 / specialist 279（+M-1 残留空元数据过滤/拒绝 2） / hcp 67 / gateway 86 / compliance 120 / knowledge 72 / audit 28 / visit 115 = **892 passed**（M-1 残留批实测；此前 889）；mobile jest 96 / mobile-doctor jest 24 / web vitest 14 + 双端 tsc 0 错
 
 **审计确认的技术债（2026-08-06，勿误以为已修；划线=已修，2026-08-11）**：
 - ~~**听悟离线归档转写必然失败**：`visit-service/app/services/tingwu_client.py:83-96` 的 `_parse_result` 未处理 GetTaskInfo 返回的"带签名 URL 的 dict/JSON 字符串"结果（dict 取 None、str 抛 AttributeError）~~（6dce273 已按真实 GetTaskInfo 结构重写 `_parse_result`）
