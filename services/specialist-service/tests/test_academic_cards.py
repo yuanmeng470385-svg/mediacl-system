@@ -225,3 +225,17 @@ def test_create_card_no_sources_returns_4001(fresh_state, monkeypatch):
                        headers=_token(1, "rep"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+
+@pytest.mark.asyncio
+async def test_generate_card_rejects_empty_llm_output(monkeypatch):
+    """M-1 收尾：LLM 畸形输出（缺 conclusion/key_points）→ 拒绝，不落空壳卡"""
+    class _BadQwen:
+        def chat(self, messages, **kw):
+            return {"content": '{"summary": "只有总结"}'}
+
+    monkeypatch.setattr(ac_api, "_retrieve", AsyncMock(return_value={"results": _FAKE_RESULTS}))
+    monkeypatch.setattr(ac_api, "QwenClient", lambda: _BadQwen())
+    with pytest.raises(Exception) as ei:
+        await ac_api._generate_card_content("高血压", "限盐")
+    assert "conclusion" in str(ei.value) or "key_points" in str(ei.value)

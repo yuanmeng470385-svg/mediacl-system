@@ -90,6 +90,11 @@ async def _generate_card_content(topic: str, title: str) -> dict:
         max_tokens=2000,
     )
     result = _parse_card_json(resp.get("content", ""))
+    # M-1 收尾（2026-08-24 e2e 实测暴露）：LLM 偶发输出缺字段的畸形 JSON ——
+    # 此前空壳卡（conclusion/key_points 全空）照样落库且 compliance_status=passed，
+    # 医生端收到无内容卡片；空文本合规预检也恒过。无有效内容直接 6001 拒绝。
+    if not str(result.get("conclusion") or "").strip() or not (result.get("key_points") or []):
+        raise ValueError(f"qwen 返回内容缺 conclusion/key_points: {str(result)[:200]}")
     return {
         "conclusion": str(result.get("conclusion") or "").strip(),
         "key_points": [str(k).strip() for k in (result.get("key_points") or []) if str(k).strip()],
