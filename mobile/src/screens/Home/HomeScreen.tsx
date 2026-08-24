@@ -2,7 +2,7 @@
  * 工作台 - 今日工作总览
  * 临床精准风：深海军蓝头部 + 纯白卡片 + 青蓝数据高亮
  */
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   RefreshControl,
   TouchableOpacity,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ProgressRing from '../../components/ProgressRing';
 import VisitCard from '../../components/VisitCard';
@@ -56,7 +56,13 @@ export default function HomeScreen() {
     }
   }, []);
 
-  useEffect(() => { loadVisits(); }, [loadVisits]);
+  // 挂载只拉一次会让返回场景吃旧快照：拜访结束后回到工作台，
+  // 进度环/「进行中」仍显示结束前的状态 —— 聚焦时重拉
+  useFocusEffect(
+    useCallback(() => {
+      loadVisits();
+    }, [loadVisits])
+  );
 
   const handleRetry = () => {
     setLoading(true);

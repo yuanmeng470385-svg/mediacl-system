@@ -56,7 +56,9 @@ export interface DigitalSpecialist {
   name: string;
   product_id: number;
   product_name?: string;
-  persona: string;
+  /** 两形态并存：历史数据是 string，二期 H 起风格设置/style-test 写入
+   *  {style:{formal_level,reply_length,opening_mode}} 对象（列表卡仅渲染 string 形态） */
+  persona: string | { style?: { formal_level?: string; reply_length?: string; opening_mode?: string } } | null;
   knowledge_scope: string;
   compliance_level: string;
   bailian_app_id?: string;

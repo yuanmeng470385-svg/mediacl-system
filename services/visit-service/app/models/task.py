@@ -26,7 +26,8 @@ class Task(Base):
     channel = Column(String(50))
     status = Column(String(20), default="open")
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+    # onupdate 与 TimestampMixin 对齐：缺它时 status 变更不刷新 updated_at（冻结在建行时刻）
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     def to_dict(self):
         return {

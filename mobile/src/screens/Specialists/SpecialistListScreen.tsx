@@ -107,7 +107,10 @@ export default function SpecialistListScreen() {
           </View>
           <Text style={styles.product}>{item.product_name || item.knowledge_scope}</Text>
           <Text style={styles.persona} numberOfLines={2}>
-            {item.persona}
+            {/* persona 两形态并存：历史数据是 string，二期 H style-test/style
+                设置写入 {style:{...}} 对象 —— 对象直接进 Text 会红屏
+                （Objects are not valid as a React child），此处仅展示字符串形态 */}
+            {typeof item.persona === 'string' ? item.persona : ''}
           </Text>
           {/* 对话入口 */}
           <TouchableOpacity
