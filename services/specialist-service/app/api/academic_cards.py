@@ -52,6 +52,11 @@ async def _generate_card_content(topic: str, title: str) -> dict:
     # M-1（2026-08-24 审查修复）：知识检索统一契约是 {title, content, url, doc_id, score}，
     # 此前取 version/section/file_url 全是不存在的键 —— 引用除标题外恒空值；
     # 且检索原文从未喂给模型，"内容必须严格来自提供的引用"无从满足（只能编造）。
+    # M-1 残留（2026-08-24 模拟器实测暴露）：DashVector 抖动降级百炼时，
+    # bailian retrieve 的 title/doc_id/url 全来自 metadata，索引文档缺元数据会
+    # 返回 dict 存在但字段全空的条目 —— 引用不可溯源仍会落库。按 doc_name
+    # 过滤不可引用条目，sources 与 citations 同步收窄（excerpts 与引用对位）。
+    sources = [c for c in sources if (c.get("title") or "").strip()]
     citations = [{
         "doc_name": (c.get("title") or "").strip(),
         "url": c.get("url"),
@@ -59,6 +64,7 @@ async def _generate_card_content(topic: str, title: str) -> dict:
     } for c in sources]
     if not citations:
         # 无引用时拒绝生成：让模型凭空写学术内容 = 必然编造，fail-closed
+        # （含检索命中但元数据全空、无法溯源的情况）
         raise BusinessError("知识库中没有该主题的可用引用，无法生成有据可依的卡片", code=4001)
     # 检索原文喂给模型（每段截 800 字防 prompt 膨胀），与主题/标题一起放
     # <user_content> 定界内 —— 主题与标题同为用户输入，留在定界外会成注入点

@@ -153,6 +153,10 @@ async def medical_qa(
     for i in cited_ids:
         if isinstance(i, int) and 0 <= i < len(results):
             r = results[i]
+            # M-1 残留（2026-08-24 模拟器实测暴露）：百炼降级检索的 metadata 缺失时
+            # 条目 dict 存在但 title/url/doc_id 全空 —— 引用不可溯源，跳过不透出
+            if not (r.get("title") or "").strip():
+                continue
             citations.append({
                 "title": r.get("title", ""), "url": r.get("url", ""),
                 "doc_id": str(r.get("doc_id", "")),

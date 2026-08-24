@@ -125,8 +125,11 @@ def main():
     cites = ((d.get("content") or {}).get("citations")) or []
     concl = ((d.get("content") or {}).get("conclusion") or "")
     if st == 200 and resp.get("code") == 0:
+        # M-1 残留教训（2026-08-24）：断言须查值非空——只查键存在时，
+        # 百炼降级检索的空元数据条目（title=""/url=""/doc_id=""）照样通过
         ok = bool(cites) and all(
-            c.get("doc_name") and ("url" in c) and ("doc_id" in c) for c in cites)
+            (c.get("doc_name") or "").strip() and (c.get("doc_id") or "") not in ("", None)
+            for c in cites)
         check("卡片 citations 为真实契约 {doc_name, url, doc_id}", ok,
               f"cites={json.dumps(cites, ensure_ascii=False)[:200]}")
         check("卡片 conclusion 非空（检索原文入模产出）", bool(concl.strip()), concl[:120])

@@ -215,6 +215,40 @@ async def test_generate_card_no_sources_fails_closed(monkeypatch):
     assert "引用" in str(ei.value)
 
 
+@pytest.mark.asyncio
+async def test_generate_card_skips_metadata_less_sources(monkeypatch):
+    """M-1 残留：百炼降级检索 metadata 缺失 → dict 存在但 title 空。
+    不可溯源条目必须剔除（sources/citations/excerpts 同步收窄），不全拒。"""
+    mixed = [
+        {"title": "", "content": "无元数据条目的正文", "url": "", "doc_id": ""},
+        {"title": "有据文献", "content": "正文A", "url": "https://oss/a.pdf", "doc_id": 7},
+        {"title": None, "content": "title 为 None 的条目", "url": None, "doc_id": None},
+    ]
+    fake = _FakeQwen()
+    monkeypatch.setattr(ac_api, "_retrieve", AsyncMock(return_value={"results": mixed}))
+    monkeypatch.setattr(ac_api, "QwenClient", lambda: fake)
+
+    card = await ac_api._generate_card_content("主题", "标题")
+
+    assert card["citations"] == [{"doc_name": "有据文献", "url": "https://oss/a.pdf", "doc_id": 7}]
+    user_msg = fake.messages[1]["content"]
+    assert "正文A" in user_msg
+    assert "无元数据条目的正文" not in user_msg  # excerpts 与引用对位收窄
+
+
+@pytest.mark.asyncio
+async def test_generate_card_all_empty_metadata_fails_closed(monkeypatch):
+    """M-1 残留：检索命中但元数据全空（无法溯源）→ 同零命中 fail-closed 4001"""
+    empty_meta = [
+        {"title": "", "content": "正文1", "url": "", "doc_id": ""},
+        {"title": "", "content": "正文2", "url": "", "doc_id": ""},
+    ]
+    monkeypatch.setattr(ac_api, "_retrieve", AsyncMock(return_value={"results": empty_meta}))
+    with pytest.raises(Exception) as ei:
+        await ac_api._generate_card_content("主题", "标题")
+    assert "引用" in str(ei.value)
+
+
 def test_create_card_no_sources_returns_4001(fresh_state, monkeypatch):
     """端到端：检索空 → BusinessError 4001 透传（不被吞成笼统 6001）"""
     async def _empty_retrieve(topic, top_k=3):
