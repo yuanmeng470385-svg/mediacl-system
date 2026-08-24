@@ -85,12 +85,16 @@ export default function TwinChatScreen() {
       };
       setMessages((prev) => [...prev, aiMsg]);
     } catch (e: any) {
+      // Hermes 实测：在 setMessages updater 闭包里直接读 e.message 会抛
+      // "Property 'e' doesn't exist"（catch 绑定未随闭包存活）→ 红屏。
+      // 先在 catch 块内取好字符串，updater 只用纯值
+      const errMsg = `抱歉，出错了：${e?.message || '请稍后重试'}`;
       setMessages((prev) => [
         ...prev,
         {
           id: `err_${Date.now()}`,
           role: 'assistant',
-          content: `抱歉，出错了：${e.message || '请稍后重试'}`,
+          content: errMsg,
         },
       ]);
     } finally {
