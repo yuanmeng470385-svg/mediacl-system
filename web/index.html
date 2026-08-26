@@ -3,6 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- M17 残余半项（2026-08-26 落地）：CSP 防外联/内联脚本注入等主要 XSS 落地手段。
+         script-src 保留 'unsafe-eval'：G2(@antv/g2) 的 d3-dsv 列解析器动态生成函数，
+         硬依赖 new Function（已核实，去掉图表直接挂）。meta 不支持 frame-ancestors，
+         防点击劫持需网关响应头补（部署时加）。 -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self' 'unsafe-eval';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data: blob:;
+      connect-src 'self' ws: wss:;
+      font-src 'self' data:;
+      object-src 'none';
+      base-uri 'self';
+    " />
     <title>MedAgent - 管理后台</title>
   </head>
   <body>
