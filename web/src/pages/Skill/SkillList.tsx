@@ -145,7 +145,7 @@ export default function SkillList() {
   return (
     <>
       <ProTable<SkillPackage>
-        headerTitle="Skill 模版管理"
+        headerTitle="技能模版管理"
         actionRef={actionRef}
         rowKey="id"
         search={{ labelWidth: 80 }}
@@ -163,7 +163,7 @@ export default function SkillList() {
       />
       <ModalForm
         key="create"
-        title="新建官方 Skill 模版"
+        title="新建官方技能模版"
         open={createOpen}
         onOpenChange={setCreateOpen}
         modalProps={{ destroyOnHidden: true }}
@@ -190,7 +190,7 @@ export default function SkillList() {
             return true;
           } catch (e) {
             // 400-499 已由 client.ts 拦截器弹后端 message；网络层错误至少留痕
-            console.error('新建 Skill 模版失败', e);
+            console.error('新建技能模版失败', e);
             return false; // 保留表单
           }
         }}
@@ -202,7 +202,7 @@ export default function SkillList() {
         <ProFormText name="opening_mode" label="开场白模式" initialValue="直切主题" />
         <ProFormSwitch name="is_public" label="上架代表广场" initialValue tooltip="开启后审核通过即上架广场并可在陪练场加载" />
       </ModalForm>
-      <Drawer title="Skill 审核" width={520} open={!!current} onClose={() => setCurrent(null)} destroyOnHidden>
+      <Drawer title="技能审核" width={520} open={!!current} onClose={() => setCurrent(null)} destroyOnHidden>
         {current && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">
@@ -237,7 +237,7 @@ export default function SkillList() {
           </Space>
         )}
       </Drawer>
-      <Drawer title="Skill 下架" width={520} open={!!offShelfTarget} onClose={() => setOffShelfTarget(null)} destroyOnHidden>
+      <Drawer title="技能下架" width={520} open={!!offShelfTarget} onClose={() => setOffShelfTarget(null)} destroyOnHidden>
         {offShelfTarget && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions column={1} size="small">

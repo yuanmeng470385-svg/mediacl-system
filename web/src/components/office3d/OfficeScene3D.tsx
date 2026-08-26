@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Alert, Empty, Button } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { buildScene } from './buildScene';
@@ -25,6 +26,9 @@ const CSS = `
 .o3d-canvas { position: absolute; inset: 0; }
 .o3d-css { position: absolute; inset: 0; pointer-events: none; }
 .o3d-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.o3d-hint { position: absolute; right: 12px; bottom: 10px; z-index: 2; pointer-events: none;
+  font-size: 12px; color: rgba(148,163,184,.95); background: rgba(15,23,42,.65);
+  padding: 4px 10px; border-radius: 6px; }
 `;
 
 /** 3D 动态办公室：Three.js 场景 + 小人模拟 + CSS2D 名牌 + raycast 交互 */
@@ -49,6 +53,9 @@ export default function OfficeScene3D({
     hovered: number | null;
     raf: number;
     last: number;
+    controls: OrbitControls;
+    /** 用户正在拖拽/缩放（及松开后 2s 缓冲）——期间暂停相机自动聚焦 */
+    userControlling: boolean;
   } | null>(null);
   const propsRef = useRef({ onSelect, onEdit, onToggleStatus, onViewData });
   propsRef.current = { onSelect, onEdit, onToggleStatus, onViewData };
@@ -96,8 +103,33 @@ export default function OfficeScene3D({
       hovered: null as number | null,
       raf: 0,
       last: performance.now(),
+      controls: null as unknown as OrbitControls,
+      userControlling: false,
     };
     ctxRef.current = ctx;
+
+    // 拖拽旋转/平移 + 滚轮缩放（OrbitControls；target 与 camTarget 共享引用，
+    // 自动聚焦 lerp 与手动探索共用同一注视点，互不打架）
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target = camTarget;
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 5;
+    controls.maxDistance = 40;
+    controls.minPolarAngle = 0.15;        // 允许接近俯视
+    controls.maxPolarAngle = Math.PI / 2.05; // 不低于地平线（防钻到地板下方）
+    ctx.controls = controls;
+    let releaseTimer: number | undefined;
+    const onCtlStart = () => {
+      ctx.userControlling = true;
+      if (releaseTimer !== undefined) { window.clearTimeout(releaseTimer); releaseTimer = undefined; }
+    };
+    const onCtlEnd = () => {
+      // 松开后再等 2s 才恢复自动聚焦，避免用户刚看完就立刻被拉回
+      releaseTimer = window.setTimeout(() => { ctx.userControlling = false; }, 2000);
+    };
+    controls.addEventListener('start', onCtlStart);
+    controls.addEventListener('end', onCtlEnd);
 
     // 尺寸自适应
     const ro = new ResizeObserver(() => {
@@ -137,7 +169,15 @@ export default function OfficeScene3D({
         mount.style.cursor = id !== null ? 'pointer' : 'default';
       }
     };
-    const onClick = (e: PointerEvent) => {
+    // 点击选中 vs 拖拽旋转：pointerdown/up 位移 > 6px 视为拖拽，不算点击
+    const downPos = new THREE.Vector2();
+    const onPointerDown = (e: PointerEvent) => {
+      downPos.set(e.clientX, e.clientY);
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      const dx = e.clientX - downPos.x;
+      const dy = e.clientY - downPos.y;
+      if (dx * dx + dy * dy > 36) return; // 拖拽过不算点击
       toNDC(e);
       const id = pick();
       if (id !== null) {
@@ -149,7 +189,8 @@ export default function OfficeScene3D({
       }
     };
     mount.addEventListener('pointermove', onPointerMove);
-    mount.addEventListener('click', onClick);
+    mount.addEventListener('pointerdown', onPointerDown);
+    mount.addEventListener('pointerup', onPointerUp);
 
     // 主循环
     const loop = (now: number) => {
@@ -163,18 +204,20 @@ export default function OfficeScene3D({
         t.obj.position.set(a.pos.x, 2.0, a.pos.z);
         t.update(a, ctx.selected === id, ctx.hovered === id);
       }
-      // 选中聚焦（相机注视点平滑跟随）
-      if (ctx.selected !== null) {
-        const a = ctx.sim.agents.get(ctx.selected);
-        if (a) {
-          ctx.tmpVec.set(a.pos.x, 0, a.pos.z);
+      // 选中聚焦（相机注视点平滑跟随）；用户拖拽/缩放中及松开后 2s 内暂停，不抢控制权
+      if (!ctx.userControlling) {
+        if (ctx.selected !== null) {
+          const a = ctx.sim.agents.get(ctx.selected);
+          if (a) {
+            ctx.tmpVec.set(a.pos.x, 0, a.pos.z);
+            ctx.camTarget.lerp(ctx.tmpVec, Math.min(1, dt * 2));
+          }
+        } else {
+          ctx.tmpVec.set(0, 0, 0.5);
           ctx.camTarget.lerp(ctx.tmpVec, Math.min(1, dt * 2));
         }
-      } else {
-        ctx.tmpVec.set(0, 0, 0.5);
-        ctx.camTarget.lerp(ctx.tmpVec, Math.min(1, dt * 2));
       }
-      camera.lookAt(ctx.camTarget);
+      ctx.controls.update(dt); // 阻尼 + 内部按 target 重定位相机并 lookAt
       renderer.render(scene as unknown as THREE.Scene, camera);
       css.render(scene as unknown as THREE.Scene, camera);
       ctx.raf = requestAnimationFrame(loop);
@@ -186,7 +229,11 @@ export default function OfficeScene3D({
       cancelAnimationFrame(ctx.raf);
       ro.disconnect();
       mount.removeEventListener('pointermove', onPointerMove);
-      mount.removeEventListener('click', onClick);
+      mount.removeEventListener('pointerdown', onPointerDown);
+      mount.removeEventListener('pointerup', onPointerUp);
+      controls.removeEventListener('start', onCtlStart);
+      controls.removeEventListener('end', onCtlEnd);
+      controls.dispose();
       ctx.sim.dispose();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
@@ -279,6 +326,7 @@ export default function OfficeScene3D({
         </div>
       )}
       <div ref={mountRef} style={{ width: '100%', height: items.length === 0 ? 420 : 560, position: 'relative' }} />
+      {items.length > 0 && <div className="o3d-hint">拖拽旋转 · 滚轮缩放 · 右拖平移</div>}
     </div>
   );
 }

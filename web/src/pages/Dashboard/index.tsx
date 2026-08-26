@@ -273,7 +273,7 @@ export default function Dashboard() {
             title="风险热力图（区域 × 近 7 天拦截量）"
             variant="borderless"
             extra={heatmapDimension === 'service' ? (
-              <Tooltip title="users 表不可达，已按服务（service_name）维度兜底聚合">
+              <Tooltip title="用户表不可达，已按服务维度兜底聚合">
                 <Tag color="orange">服务维度兜底</Tag>
               </Tooltip>
             ) : null}

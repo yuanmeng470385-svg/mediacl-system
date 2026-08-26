@@ -122,7 +122,7 @@ export default function TrainingList() {
               }}>
                 <Form.Item name="title" label="标题" rules={[{ required: true, message: '必填' }]}><Input maxLength={200} /></Form.Item>
                 <Form.Item name="material_type" label="类型" rules={[{ required: true, message: '必选' }]}>
-                  <Select options={[{ value: 'regulation', label: '办法' }, { value: 'rdpac', label: 'RDPAC' }, { value: 'internal', label: '内部政策' }]} />
+                  <Select options={[{ value: 'regulation', label: '办法' }, { value: 'rdpac', label: 'RDPAC 准则' }, { value: 'internal', label: '内部政策' }]} />
                 </Form.Item>
                 <Form.Item name="content" label="正文" rules={[{ required: true, message: '必填' }]}><Input.TextArea rows={12} /></Form.Item>
               </Form>

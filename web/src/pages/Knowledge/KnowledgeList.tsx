@@ -278,8 +278,8 @@ export default function KnowledgeList() {
         <Form.Item name="doc_type" label="文档类型" rules={[{ required: true, message: '请选择文档类型' }]}>
           <Select placeholder="请选择文档类型" options={DOC_TYPES.map(({ value, label }) => ({ value, label }))} />
         </Form.Item>
-        <Form.Item name="product_id" label="关联产品" tooltip="填写产品 ID，可留空">
-          <InputNumber min={1} style={{ width: '100%' }} placeholder="产品 ID（可选）" />
+        <Form.Item name="product_id" label="关联产品" tooltip="填写产品编号，可留空">
+          <InputNumber min={1} style={{ width: '100%' }} placeholder="产品编号（可选）" />
         </Form.Item>
         <Form.Item name="evidence_level" label="证据等级">
           <Select allowClear placeholder="请选择（可选）" options={EVIDENCE_OPTIONS} />

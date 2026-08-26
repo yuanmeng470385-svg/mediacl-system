@@ -69,7 +69,20 @@ export function canAccess(path: string, role?: string | null): boolean {
   );
 }
 
-/** 菜单按角色过滤（泛型兼容 MenuDataItem；扁平配置无 children 分支） */
-export function filterMenu<T extends { path?: string }>(items: T[], role?: string | null): T[] {
-  return items.filter((it) => it.path && canAccess(it.path, role));
+/** 菜单项的最小结构（泛型兼容 MenuDataItem；children 递归同构） */
+type MenuLike = { path?: string; children?: MenuLike[] };
+
+/** 菜单按角色过滤。分组（children）递归过滤，
+ *  整组无任何可见子项时剔除（如 compliance 看不到仅 admin 的「系统配置」） */
+export function filterMenu<T extends MenuLike>(items: T[], role?: string | null): T[] {
+  const out: T[] = [];
+  for (const it of items) {
+    if (it.children?.length) {
+      const kids = filterMenu(it.children, role);
+      if (kids.length) out.push({ ...it, children: kids });
+    } else if (it.path && canAccess(it.path, role)) {
+      out.push(it);
+    }
+  }
+  return out;
 }

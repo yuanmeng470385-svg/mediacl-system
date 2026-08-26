@@ -81,6 +81,28 @@ describe('filterMenu（菜单按角色过滤）', () => {
   it('未登录不给菜单', () => {
     expect(filterMenu([{ path: '/dashboard' }], null)).toEqual([]);
   });
+
+  it('分组递归过滤：保留可见子项，整组不可见则剔除', () => {
+    const menu = [
+      { key: 'g-ok', children: [{ path: '/audit/list' }, { path: '/doctor/list' }] },
+      { key: 'g-empty', children: [{ path: '/system/config' }] },
+      { path: '/dashboard' },
+    ];
+    const filtered = filterMenu(menu, 'compliance');
+    // compliance 可见审计（audit 三角色）、不可见医生管理（仅 admin/manager）与系统配置（仅 admin）
+    expect(filtered).toHaveLength(2);
+    expect(filtered[0]?.key).toBe('g-ok');
+    expect(filtered[0]?.children?.map((m) => m.path)).toEqual(['/audit/list']);
+    expect(filtered[1]?.path).toBe('/dashboard');
+  });
+
+  it('admin 保留全部分组子项', () => {
+    const menu = [
+      { key: 'g', children: [{ path: '/compliance/list' }, { path: '/system/config' }] },
+    ];
+    const filtered = filterMenu(menu, 'admin');
+    expect(filtered[0]?.children).toHaveLength(2);
+  });
 });
 
 // 角色分层快照（后端事实源的固化；变更须对齐后端 require_roles）

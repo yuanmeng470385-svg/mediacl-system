@@ -29,7 +29,7 @@ export default function MonitorList() {
     { title: '类型', dataIndex: 'is_official', width: 80, hideInSearch: true,
       render: (_, r) => r.is_official ? <Tag color="purple">官方</Tag> : <Tag>个人</Tag> },
     { title: '今日服务', dataIndex: 'today_services', width: 90, hideInSearch: true },
-    { title: '平均响应(ms)', dataIndex: 'avg_latency_ms', width: 110, hideInSearch: true },
+    { title: '平均响应（毫秒）', dataIndex: 'avg_latency_ms', width: 110, hideInSearch: true },
     { title: '服务医生数', dataIndex: 'service_doctors', width: 100, hideInSearch: true },
     { title: '合规健康度', dataIndex: 'compliance_health', width: 110, hideInSearch: true,
       render: (_, r) => { const m = HEALTH_TEXT[r.compliance_health] || { color: 'default', text: r.compliance_health }; return <Tag color={m.color}>{m.text}</Tag>; } },

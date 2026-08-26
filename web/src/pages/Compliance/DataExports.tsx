@@ -101,7 +101,7 @@ export default function DataExports() {
           return (
             <>
               <Tag color={m.color}>{m.text}</Tag>
-              <Tag color="red">超 SLA</Tag>
+              <Tag color="red">超时限</Tag>
             </>
           );
         }
@@ -196,7 +196,9 @@ export default function DataExports() {
             <Descriptions column={1} size="small">
               <Descriptions.Item label="申请单号">{current.id}</Descriptions.Item>
               <Descriptions.Item label="申请人">{current.requester_name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="导出类型">{current.export_type}</Descriptions.Item>
+              <Descriptions.Item label="导出类型">
+                {current.export_type === 'conversations' ? '对话记录' : current.export_type}
+              </Descriptions.Item>
               <Descriptions.Item label="导出目的">{current.reason || '-'}</Descriptions.Item>
               <Descriptions.Item label="申请时间">{current.created_at || '-'}</Descriptions.Item>
               {current.expires_at && (

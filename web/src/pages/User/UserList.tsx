@@ -107,12 +107,12 @@ export default function UserList() {
         {/* 手机号变更仅限 admin（users.py:158-159 非 admin 传 phone 必 403）—— 非 admin 编辑时禁用 */}
         <ProFormText name="phone" label="手机号" rules={[{ required: true }]}
           disabled={!!editing && me?.role !== 'admin'}
-          tooltip={editing && me?.role !== 'admin' ? '仅 admin 可变更用户手机号' : undefined} />
+          tooltip={editing && me?.role !== 'admin' ? '仅管理员可变更用户手机号' : undefined} />
         <ProFormSelect name="role" label="角色" rules={[{ required: true }]}
           disabled={editing ? !canEditRole : me?.role !== 'admin'}
           tooltip={editing
-            ? (canEditRole ? '可变更角色' : '仅 admin 可改角色，且不能改自己的角色')
-            : (me?.role === 'admin' ? '可指定角色' : '仅 admin 可指定角色，将按默认角色创建')}
+            ? (canEditRole ? '可变更角色' : '仅管理员可修改角色，且不能修改自己的角色')
+            : (me?.role === 'admin' ? '可指定角色' : '仅管理员可指定角色，将按默认角色创建')}
           options={Object.entries(ROLE_MAP).map(([k, v]) => ({ label: v.text, value: k }))} />
         <ProFormText name="region" label="区域" />
       </ModalForm>

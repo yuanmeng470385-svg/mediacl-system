@@ -7,6 +7,7 @@ import StatCard from '../../components/StatCard';
 import { auditAPI } from '../../services/audit';
 import type { AuditExportParams, AuditListParams } from '../../services/audit';
 import type { AuditLog } from '../../types';
+import { AUDIT_ACTION_MAP } from '../../constants/audit';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 
@@ -36,9 +37,10 @@ function LogDetail({ log }: { log: AuditLog }) {
   const d = data ?? log;
   const timeText = d.timestamp ? dayjs.utc(d.timestamp).local().format('YYYY-MM-DD HH:mm:ss') : '—';
   const rows: [string, string][] = [
-    ['用户 ID', d.user_id ?? '—'],
+    ['用户编号', d.user_id ?? '—'],
     ['服务', d.service_name ?? '—'],
-    ['操作', d.action ?? '—'],
+    // 详情是"真实字段"展示：中文文案 + 原始 action 码，两侧信息都不丢
+    ['操作', d.action ? (AUDIT_ACTION_MAP[d.action] ? `${AUDIT_ACTION_MAP[d.action]}（${d.action}）` : d.action) : '—'],
     ['资源', d.resource_type && d.resource_id ? `${d.resource_type} / ${d.resource_id}` : (d.resource_type || d.resource_id || '—')],
     ['AI 模型', d.ai_model ?? '—'],
     ['AI 参与', d.ai_involved ? '是' : '否'],
@@ -104,15 +106,22 @@ export default function AuditList() {
       },
     },
     { title: '服务', dataIndex: 'service_name', width: 130, fieldProps: { placeholder: '如 specialist-service' } },
-    { title: '操作', dataIndex: 'action', width: 150, fieldProps: { placeholder: '如 chat_response' } },
-    { title: '用户 ID', dataIndex: 'user_id', width: 90, fieldProps: { placeholder: '用户 ID' } },
+    {
+      title: '操作', dataIndex: 'action', width: 150,
+      // 下拉搜索：值仍是后端原始 action 码（搜索/导出契约不变），只把文案换成中文
+      valueType: 'select',
+      valueEnum: AUDIT_ACTION_MAP,
+      fieldProps: { showSearch: true, placeholder: '选择操作类型' },
+      render: (_, r) => AUDIT_ACTION_MAP[r.action] ?? r.action,
+    },
+    { title: '用户编号', dataIndex: 'user_id', width: 90, fieldProps: { placeholder: '用户编号' } },
     // 关键词搜索（B5 后端已支持 ILIKE 多字段：操作/服务/资源/请求ID/取证内容），仅作搜索列不在表格展示
-    { title: '关键词', dataIndex: 'keyword', hideInTable: true, fieldProps: { placeholder: '操作/服务/资源/请求ID/取证内容' } },
+    { title: '关键词', dataIndex: 'keyword', hideInTable: true, fieldProps: { placeholder: '操作/服务/资源/请求编号/取证内容' } },
     {
       title: '风险等级', dataIndex: 'risk_level', width: 100, valueEnum: RISK_ENUM,
       render: (_, r) => (r.risk_level ? <Tag color={RISK_COLOR[r.risk_level] || 'default'}>{RISK_ENUM[r.risk_level] ?? r.risk_level}</Tag> : '—'),
     },
-    { title: 'IP', dataIndex: 'client_ip', width: 130, hideInSearch: true, render: (_, r) => r.client_ip || '—' },
+    { title: 'IP 地址', dataIndex: 'client_ip', width: 130, hideInSearch: true, render: (_, r) => r.client_ip || '—' },
   ];
 
   const handleExport = async () => {

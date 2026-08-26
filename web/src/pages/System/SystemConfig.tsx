@@ -28,7 +28,7 @@ export default function SystemConfig() {
         type="info"
         showIcon
         message="本页为只读状态页，不支持在线保存"
-        description="阿里云、短信、大模型（通义千问 / 百炼）、NLS 语音等密钥类配置通过服务的 .env 环境变量管理，修改后需重启对应服务生效。此处仅展示各配置项是否已配置。"
+        description="阿里云、短信、大模型（通义千问 / 百炼）、智能语音（NLS）等密钥类配置通过服务的 .env 环境变量管理，修改后需重启对应服务生效。此处仅展示各配置项是否已配置。"
         style={{ marginBottom: 24 }}
       />
 

@@ -55,7 +55,7 @@ export default function PrivacyRequests() {
   };
 
   const columns: ProColumns<PrivacyRequest>[] = [
-    { title: 'ID', dataIndex: 'id', width: 60, search: false },
+    { title: '编号', dataIndex: 'id', width: 60, search: false },
     { title: '医生', dataIndex: 'doctor_name', search: false },
     {
       title: '类型',
@@ -76,7 +76,7 @@ export default function PrivacyRequests() {
       render: (_, row) => (
         <Space size={4}>
           <Tag color={STATUS_MAP[row.status]?.color}>{STATUS_MAP[row.status]?.text ?? row.status}</Tag>
-          {row.sla_overdue && <Tag color="red">SLA 超时</Tag>}
+          {row.sla_overdue && <Tag color="red">办理超时</Tag>}
         </Space>
       ),
     },
@@ -87,7 +87,7 @@ export default function PrivacyRequests() {
       search: false,
     },
     { title: '申请时间', dataIndex: 'created_at', search: false, width: 170 },
-    { title: 'SLA 截止', dataIndex: 'sla_deadline', search: false, width: 170 },
+    { title: '办理时限', dataIndex: 'sla_deadline', search: false, width: 170 },
     {
       title: '操作',
       valueType: 'option',
@@ -136,7 +136,7 @@ export default function PrivacyRequests() {
                 {detail.content.fields.phone && <>手机号 → {detail.content.fields.phone}</>}
               </Descriptions.Item>
             )}
-            <Descriptions.Item label="SLA 截止">{detail.sla_deadline ?? '—'}</Descriptions.Item>
+            <Descriptions.Item label="办理时限">{detail.sla_deadline ?? '—'}</Descriptions.Item>
             <Descriptions.Item label="处理回复">{detail.content?.response || '—'}</Descriptions.Item>
             <Descriptions.Item label="数据包">{detail.file_url || '—'}</Descriptions.Item>
           </Descriptions>
