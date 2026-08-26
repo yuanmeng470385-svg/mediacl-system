@@ -2,6 +2,7 @@
 import sys
 import os
 import asyncio
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 # 确保 shared 可导入
@@ -23,10 +24,12 @@ logger = logging.getLogger(__name__)
 
 
 async def _briefing_loop() -> None:
-    """夜间简报定时任务（需求 C）：启动即跑一次，此后按
-    NIGHTLY_BRIEFING_INTERVAL_HOURS 周期执行。同步 DB 生成丢线程池（to_thread），
-    不阻塞事件循环；异常记 error 不崩（多 worker 各跑一份，生成逻辑单行捕获
-    唯一键冲突转更新，等效 upsert 幂等）。
+    """夜间简报定时任务（需求 C）：启动即跑一次（部署后立即可见），此后
+    对齐 NIGHTLY_BRIEFING_HOUR 固定时刻执行（挂账收尾：此前 interval 24h
+    近似每日一跑，随启动时间漂移）。日期口径用本地时区（与 run_briefing_scan
+    的 date.today() 一致）。同步 DB 生成丢线程池（to_thread），不阻塞事件
+    循环；异常记 error 不崩（多 worker 各跑一份，生成逻辑单行捕获唯一键
+    冲突转更新，等效 upsert 幂等）。
     """
     from app.core.briefing_generator import run_briefing_scan
 
@@ -35,7 +38,13 @@ async def _briefing_loop() -> None:
             await run_briefing_scan()
         except Exception as exc:
             logger.error("夜间简报生成失败: %s", exc)
-        await asyncio.sleep(settings.NIGHTLY_BRIEFING_INTERVAL_HOURS * 3600)
+        now = datetime.now()
+        next_run = now.replace(hour=settings.NIGHTLY_BRIEFING_HOUR, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += timedelta(days=1)
+        # 启动即跑后到下一固定时刻前等待；上限 25h 防配置漂移空转
+        wait = min(max((next_run - now).total_seconds(), 1.0), 25 * 3600)
+        await asyncio.sleep(wait)
 
 
 @asynccontextmanager

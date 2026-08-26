@@ -37,6 +37,8 @@ class Settings:
 
     # --- 夜间简报 ---
     NIGHTLY_BRIEFING_INTERVAL_HOURS = int(os.getenv("NIGHTLY_BRIEFING_INTERVAL_HOURS", "24"))
+    # 简报每日对齐的固定执行时刻（0-23，本地时区；默认凌晨 2 点）
+    NIGHTLY_BRIEFING_HOUR = int(os.getenv("NIGHTLY_BRIEFING_HOUR", "2"))
 
 
 settings = Settings()
