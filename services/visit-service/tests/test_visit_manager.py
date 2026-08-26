@@ -960,6 +960,25 @@ def test_end_visit_retry_violations_deduped():
     assert codes == ["R002", "R003"], "不同违规条目应都保留"
 
 
+def test_dedupe_violations_keeps_missing_matched_text():
+    """B2 修正（2026-08-26）：matched_text 缺失/为空不去重 ——
+    同规则的多条无文本违规都应保留；此前按 (rule_code, None) 去重会误并为一条"""
+    from app.core.visit_manager import _dedupe_violations
+
+    vs = [
+        {"rule_code": "R100", "severity": "warn", "matched_text": None},
+        {"rule_code": "R100", "severity": "warn", "matched_text": None},
+        {"rule_code": "R100", "severity": "warn", "matched_text": ""},
+        {"rule_code": "R100", "severity": "warn", "matched_text": "违禁词"},
+        {"rule_code": "R100", "severity": "warn", "matched_text": "违禁词"},
+        {"rule": "旧形状", "reason": "x"},
+    ]
+    out = _dedupe_violations(vs)
+    # 3 条无文本（None/空各保留）+ 1 条有文本（同文本去重）+ 1 条旧形状
+    assert len(out) == 5, f"无文本违规不应被误并，实际 {out}"
+    assert [v.get("matched_text") for v in out] == [None, None, "", "违禁词", None]
+
+
 # ---------- M5 回归（2026-08-14）：full_transcript 覆盖语义收紧 ----------
 
 def test_end_visit_full_transcript_rejects_non_prefix():

@@ -41,6 +41,13 @@ app.add_middleware(
 # 服务内日志/审计 get_request_id() 取用；无头时生成（服务直连场景兜底）
 app.add_middleware(RequestIDMiddleware)
 
+# http_requests_total 计数（REQUESTS 接线，2026-08-26 补齐挂账）：
+# 计数器此前只定义从未 .inc() 恒为 0；网关无 /metrics 端点，计数落在
+# 服务请求中间件（OPTIONS/WS 不计），照 specialist-service 同款
+from app.core.metrics_middleware import MetricsMiddleware
+
+app.add_middleware(MetricsMiddleware)
+
 # 注册全局异常处理器
 register_exception_handlers(app)
 

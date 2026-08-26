@@ -51,7 +51,8 @@ async def send_commitment_code(
         code = "".join(secrets.choice("0123456789") for _ in range(settings.CODE_LENGTH))
         saved = store.save(phone, code, settings.CODE_TTL_SECONDS, settings.CODE_RESEND_SECONDS)
         if not saved:
-            raise ParamError("验证码已发送，请稍后再试")
+            # 与 auth send-code 同款语义：本次未发出新验证码，已有验证码仍有效
+            raise ParamError("验证码仍在有效期内，请稍后再试")
         await asyncio.to_thread(sender.send_code, phone, code)
     except CodeStoreError as exc:
         logger.error(f"承诺书验证码存储不可用: {exc}")

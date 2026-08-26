@@ -104,8 +104,10 @@ def _dedupe_violations(violations: list) -> list:
             continue
         rc = v.get("rule_code")
         mt = v.get("matched_text")
-        if rc is None and mt is None:
-            # 旧形状（如 {"rule", "reason"}）无去重键 → 保守保留，不去重
+        if not rc or not mt:
+            # 去重键信息不足（旧形状无 rule_code / matched_text 缺失或为空）→
+            # 保守保留不去重：按 (rule_code, None) 去重会把同规则的多条无文本
+            # 违规误并为一条（B2 修正，2026-08-26）
             out.append(v)
             continue
         key = (rc, mt)

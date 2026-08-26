@@ -155,7 +155,8 @@ async def send_code(
             # in_cooldown 一致），后到者不再覆盖先发验证码（覆盖会让用户拿到废码）。
             # 注：验证码 TTL（默认 300s）大于冷却（60s）时，冷却结束但验证码仍
             # 在存的重发请求也会走到这里——先发验证码未被覆盖，行为可接受。
-            raise BusinessError("验证码已发送，请稍后再试", code=4002)
+            # 文案与实际一致：本次请求并未发出新验证码，已有验证码仍在有效期内
+            raise BusinessError("验证码仍在有效期内，请稍后再试", code=4002)
         try:
             # A8：send_sms 是同步阻塞网络调用，丢线程池执行，不阻塞事件循环
             await asyncio.to_thread(sender.send_code, phone, issued)
