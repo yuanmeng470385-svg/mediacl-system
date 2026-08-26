@@ -13,3 +13,8 @@ const DEV_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
 export const API_HOST = DEV_HOST;
 export const ASR_HOST = DEV_HOST;
 export const GATEWAY_HOST = DEV_HOST;
+
+/** 传输协议：生产走 TLS 时改 'https'/'wss'（需网关/反代配证书）；
+ *  本地/内网联调保持 'http'/'ws'。API_HOST 等只配地址，协议单独配。 */
+export const API_SCHEME: 'http' | 'https' = 'http';
+export const WS_SCHEME: 'ws' | 'wss' = 'ws';

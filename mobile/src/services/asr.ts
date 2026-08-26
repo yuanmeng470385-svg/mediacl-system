@@ -5,7 +5,7 @@
  *   - 客户端→服务端：Binary = PCM 音频分片（16k/16bit/单声道）；Text = {"type":"stop"}
  *   - 服务端→客户端：ready / sentence(index,text,final) / compliance(blocked,violations) / error / completed
  */
-import { ASR_HOST } from '../config';
+import { ASR_HOST, WS_SCHEME } from '../config';
 import { readPcmSource, pcmSourceLength } from './recorder';
 
 export interface AsrCallbacks {
@@ -27,7 +27,7 @@ export interface AsrSession {
 export function connectAsr(visitId: number, token: string, cbs: AsrCallbacks): AsrSession {
   // B5 修复（2026-08-12）：token 不再放 query string（会进网关/服务访问日志）——
   // 连接建立后首帧发 {"type":"auth","token"}，服务端据此鉴权；旧服务端兼容 query 兜底
-  const ws = new WebSocket(`ws://${ASR_HOST}:8002/ws/visits/${visitId}/asr`);
+  const ws = new WebSocket(`${WS_SCHEME}://${ASR_HOST}:8002/ws/visits/${visitId}/asr`);
   let finalText = '';
   // 最后一次 sentence 帧的说话人标签（visit-service 新字段，缺省 rep）
   let lastSpeaker: string | undefined;
