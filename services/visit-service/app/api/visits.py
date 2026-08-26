@@ -234,9 +234,9 @@ async def cancel_visit(
     if not record:
         raise HTTPException(status_code=404, detail="拜访记录不存在")
     if record.status == VISIT_STATUS_CANCELLED:
-        raise BusinessError("拜访已取消，无需重复取消")
+        raise BusinessError("拜访已取消，无需重复取消", code=4001)
     if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
-        raise BusinessError("拜访已结束，不能取消")
+        raise BusinessError("拜访已结束，不能取消", code=4001)
 
     record.status = VISIT_STATUS_CANCELLED
     db.commit()

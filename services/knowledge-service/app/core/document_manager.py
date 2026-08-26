@@ -81,7 +81,7 @@ class DocumentManager:
     def approve_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)
         if not doc:
-            raise BusinessError("文档不存在", code=4001)
+            raise BusinessError("文档不存在", code=4000)
         if doc.status not in ("draft", "rejected"):
             raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
 
@@ -138,7 +138,7 @@ class DocumentManager:
         from app.services.document_processor import extract_text, chunk_text
         doc = self.repo.get(doc_id)
         if not doc:
-            raise BusinessError("文档不存在", code=4001)
+            raise BusinessError("文档不存在", code=4000)
         if doc.status not in ("draft", "rejected"):
             raise BusinessError(f"当前状态 {doc.status} 不允许审核", code=4001)
         if not doc.file_url:
@@ -201,7 +201,7 @@ class DocumentManager:
     def reject_document(self, doc_id: int, reviewer_id: int):
         doc = self.repo.get(doc_id)
         if not doc:
-            raise BusinessError("文档不存在", code=4001)
+            raise BusinessError("文档不存在", code=4000)
         # M23: 状态校验。draft/processing 可驳回；ready 已上架 → 直接驳回并清理索引（响应会说明）；
         # 其他状态（archived 等）不允许驳回。
         if doc.status not in ("draft", "processing", "ready"):

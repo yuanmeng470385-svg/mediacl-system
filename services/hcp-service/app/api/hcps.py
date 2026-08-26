@@ -39,7 +39,7 @@ def _get_hcp_or_404(db: Session, hcp_id: int) -> Hcp:
     # 4000 更准确（函数名保留，避免改散全部调用点与测试注入）。
     hcp = HcpRepo.get(db, hcp_id)
     if not hcp:
-        raise BusinessError("医生档案不存在", code=4001)
+        raise BusinessError("医生档案不存在", code=4000)
     return hcp
 
 
@@ -397,7 +397,7 @@ async def update_hcp_profile_from_visit(
     hcp = HcpRepo.get(db, hcp_id)
     if not hcp:
         # E4：裸 HTTPException 404 → BusinessError code 4001（统一形状 + 业务语义码）
-        raise BusinessError("医生档案不存在", code=4001)
+        raise BusinessError("医生档案不存在", code=4000)
     updates = {
         "academic_background": request.get("academic_background"),
         "prescription_preference": request.get("prescription_preference"),

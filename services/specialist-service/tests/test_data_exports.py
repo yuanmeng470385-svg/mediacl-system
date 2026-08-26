@@ -188,8 +188,8 @@ def test_download_requires_approved(fresh_state):
     db.commit()
     db.close()
     resp = client.get("/api/v1/data-exports/requests/1/download", headers=_token(3, "compliance"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 def test_mah_overview_requires_admin():

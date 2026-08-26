@@ -162,16 +162,16 @@ def test_create_link_generates_token_and_expiry(fresh_state):
     assert data["add_count"] == 0
 
 
-def test_create_link_twin_inactive_4001(fresh_state):
+def test_create_link_twin_inactive_4000(fresh_state):
     # 停用 twin
     resp = client.post("/api/v1/share-links", json={"twin_id": 3}, headers=_token(3, "rep"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
     # 不存在 twin
     resp = client.post("/api/v1/share-links", json={"twin_id": 999}, headers=_token(3, "rep"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 def test_create_link_expire_days_validation(fresh_state):

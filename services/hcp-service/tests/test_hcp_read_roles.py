@@ -93,5 +93,5 @@ def test_read_allowed_for_hcp_read_roles(make_client, role):
     assert resp.status_code == 200
     assert resp.json()["code"] == 0
     detail = c.get("/api/v1/hcps/999")
-    assert detail.status_code == 422
-    assert detail.json()["code"] == 4001  # 角色门已过，是"档案不存在"而非 403
+    assert detail.status_code == 404
+    assert detail.json()["code"] == 4000  # 角色门已过，是"档案不存在"而非 403

@@ -177,7 +177,7 @@ async def update_user(
     actor = _reload_current_user(db, current_user)
     user = UserRepo.get_by_id(db, user_id)
     if not user:
-        raise BusinessError(f"用户不存在: user_id={user_id}", code=4001)
+        raise BusinessError(f"用户不存在: user_id={user_id}", code=4000)
 
     changed = {k: v for k, v in request.items() if k in UPDATEABLE_FIELDS and v is not None}
 

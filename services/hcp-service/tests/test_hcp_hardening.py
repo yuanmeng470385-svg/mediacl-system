@@ -79,8 +79,8 @@ def test_get_hcp_non_int_id_returns_400_param_error(client):
 def test_get_hcp_missing_returns_422_business_error(client):
     """E4：缺档案 → BusinessError 422 {code:4001, message, data} 统一形状"""
     resp = client.get("/api/v1/hcps/999")
-    assert resp.status_code == 422
-    assert resp.json() == {"code": 4001, "message": "医生档案不存在", "data": None}
+    assert resp.status_code == 404
+    assert resp.json() == {"code": 4000, "message": "医生档案不存在", "data": None}
 
 
 def test_profile_update_non_int_hcp_id_returns_400(client):
@@ -96,8 +96,8 @@ def test_profile_update_missing_hcp_returns_422(client):
         "/api/v1/hcps/profile-update",
         json={"hcp_id": 999, "source": "visit"},
     )
-    assert resp.status_code == 422
-    assert resp.json() == {"code": 4001, "message": "医生档案不存在", "data": None}
+    assert resp.status_code == 404
+    assert resp.json() == {"code": 4000, "message": "医生档案不存在", "data": None}
 
 
 # ==================== E5：请求体非 dict → ParamError ====================

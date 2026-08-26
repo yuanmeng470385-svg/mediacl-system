@@ -265,10 +265,10 @@ async def get_document(
 ):
     doc = _manager(db).repo.get(doc_id)
     if not doc:
-        raise BusinessError("文档不存在", code=4001)
+        raise BusinessError("文档不存在", code=4000)
     # M26: 未上架文档（draft/rejected/archived）对非审核角色不可见（rep 看不到全文）
     if doc.status != "ready" and not _can_view_all_documents(current_user):
-        raise BusinessError("文档不存在或无权访问", code=4001)
+        raise BusinessError("文档不存在或无权访问", code=4000)
     return success(doc.to_dict())
 
 

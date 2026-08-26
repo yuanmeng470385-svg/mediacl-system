@@ -319,7 +319,7 @@ def test_handle_nonexistent_request_fails():
                     json={"action": "rejected", "response": "查无此人"})
     # BusinessError → HTTP 422（共享 exception_handler 映射；同 qualifications
     # 「备案记录不存在」的既有测试约定 test_qualifications.py:332）
-    assert r.status_code == 422
+    assert r.status_code == 404
 
 
 def test_handle_rejected_keeps_user_untouched(audit_mock):

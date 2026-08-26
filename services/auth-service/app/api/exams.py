@@ -173,7 +173,7 @@ async def update_question(
 ):
     q = db.query(ExamQuestion).filter(ExamQuestion.id == question_id).first()
     if not q:
-        raise BusinessError("题目不存在", code=4001)
+        raise BusinessError("题目不存在", code=4000)
     if q.review_status == "approved":
         raise BusinessError("已审核通过的题目不可修改，请先驳回或重建", code=4001)
     data = _validate_question(payload)
@@ -210,7 +210,7 @@ async def review_question(
 ):
     q = db.query(ExamQuestion).filter(ExamQuestion.id == question_id).first()
     if not q:
-        raise BusinessError("题目不存在", code=4001)
+        raise BusinessError("题目不存在", code=4000)
     if q.review_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
     if not isinstance(payload, dict):
@@ -255,7 +255,7 @@ async def ai_generate_questions(
     material_id = payload.get("material_id")
     mat = db.query(TrainingMaterial).filter(TrainingMaterial.id == material_id).first() if material_id else None
     if not mat or mat.status != "active":
-        raise BusinessError("培训材料不存在", code=4001)
+        raise BusinessError("培训材料不存在", code=4000)
     count = payload.get("count") or 5
     if not isinstance(count, int) or not (1 <= count <= 20):
         raise ParamError("count 必须是 1-20 的整数")
@@ -343,7 +343,7 @@ async def submit_exam(
     rows = db.query(ExamQuestion).filter(ExamQuestion.id.in_(q_ids)).all()
     by_id = {q.id: q for q in rows}
     if len(rows) != len(set(q_ids)):
-        raise BusinessError("存在不存在的题目", code=4001)
+        raise BusinessError("存在不存在的题目", code=4000)
     if any(q.review_status != "approved" for q in rows):
         raise BusinessError("存在未上架的题目，请重新开始考试", code=4001)
 
@@ -351,7 +351,7 @@ async def submit_exam(
     for a in answers:
         q = by_id.get(a.get("question_id"))
         if q is None:
-            raise BusinessError("存在不存在的题目", code=4001)
+            raise BusinessError("存在不存在的题目", code=4000)
         if _score_match(a.get("selected"), q.answer):
             correct += 1
     # H-1：判分基数取会话题数（与作答数一致，语义上以试卷为准）

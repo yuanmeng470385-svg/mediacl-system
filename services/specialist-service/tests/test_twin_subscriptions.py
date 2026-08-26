@@ -141,18 +141,18 @@ def test_activate_returns_twin_and_subscribed_flag(fresh_state):
     assert data["subscription_status"] == "subscribed"
 
 
-def test_activate_unknown_or_expired_token_4001(fresh_state):
+def test_activate_unknown_or_expired_token_4000(fresh_state):
     # 未知 token
     resp = client.post("/api/v1/share-links/nope/activate", headers=_token(1))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
     # 已过期 token
     _add(ShareLink(id=1, twin_id=1, url_token="expired", created_by=1,
                    expire_at=datetime.utcnow() - timedelta(hours=1)))
     resp = client.post("/api/v1/share-links/expired/activate", headers=_token(1))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 # ==================== subscribe ====================
@@ -216,18 +216,18 @@ def test_subscribe_idempotent_for_same_twin(fresh_state):
     assert fresh_state.await_count == 1  # 幂等分支不写审计
 
 
-def test_subscribe_inactive_twin_4001(fresh_state):
+def test_subscribe_inactive_twin_4000(fresh_state):
     # 停用 twin
     resp = client.post("/api/v1/twin-subscriptions",
                        json={"twin_id": 3, "consent_agreed": True}, headers=_token(1))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
     # 不存在 twin
     resp = client.post("/api/v1/twin-subscriptions",
                        json={"twin_id": 999, "consent_agreed": True}, headers=_token(1))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 # ==================== list ====================

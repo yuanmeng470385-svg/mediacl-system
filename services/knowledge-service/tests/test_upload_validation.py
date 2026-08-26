@@ -370,7 +370,7 @@ def test_get_draft_as_rep_forbidden(monkeypatch):
     manager.repo.doc = _StubDoc(doc_id=3, status="draft")
     client = _make_client(monkeypatch, role="rep", manager=manager)
     resp = client.get("/api/v1/knowledge/documents/3")
-    assert resp.status_code == 422
+    assert resp.status_code == 404
     assert "无权访问" in resp.json()["message"]
 
 
@@ -379,7 +379,7 @@ def test_get_rejected_as_rep_forbidden(monkeypatch):
     manager.repo.doc = _StubDoc(doc_id=3, status="rejected")
     client = _make_client(monkeypatch, role="rep", manager=manager)
     resp = client.get("/api/v1/knowledge/documents/3")
-    assert resp.status_code == 422
+    assert resp.status_code == 404
 
 
 def test_get_draft_as_admin_ok(monkeypatch):

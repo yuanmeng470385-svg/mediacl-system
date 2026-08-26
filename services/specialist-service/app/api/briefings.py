@@ -52,6 +52,6 @@ async def get_briefing(
         .first()
     )
     if not row:
-        raise BusinessError("简报不存在", code=4001)
+        raise BusinessError("简报不存在", code=4000)
     b, s = row
     return success({**b.to_dict(), "twin_name": s.name})

@@ -274,7 +274,7 @@ async def handle_privacy_request(
     if not req:
         raise BusinessError("请求不存在")
     if req.status in ("done", "rejected"):
-        raise BusinessError("该请求已处理完毕，不能重复处理")
+        raise BusinessError("该请求已处理完毕，不能重复处理", code=4001)
 
     doctor = db.query(User).filter(
         User.id == req.doctor_id, User.role == "doctor"
@@ -285,7 +285,7 @@ async def handle_privacy_request(
         if req.request_type == "correct":
             fields = (req.content or {}).get("fields") or {}
             if not fields.get("full_name") and not fields.get("phone"):
-                raise BusinessError("更正请求缺少待更正字段，请驳回并让医生重新提交")
+                raise BusinessError("更正请求缺少待更正字段，请驳回并让医生重新提交", code=4001)
             if fields.get("full_name"):
                 doctor.full_name = str(fields["full_name"])[:100]
             if fields.get("phone"):

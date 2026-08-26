@@ -55,7 +55,7 @@ async def track_read(
         raise ParamError("请求体必须是 JSON 对象")
     rec = db.query(CardPushRecord).filter(CardPushRecord.id == push_id).first()
     if not rec or rec.doctor_id != current_user["id"]:
-        raise BusinessError("推送记录不存在", code=4001)
+        raise BusinessError("推送记录不存在", code=4000)
     status = payload.get("read_status")
     if status and status not in VALID_STATUS:
         raise ParamError("read_status 不合法")
@@ -85,7 +85,7 @@ async def submit_feedback(
         raise ParamError("feedback 必填且不超过 500 字符")
     rec = db.query(CardPushRecord).filter(CardPushRecord.id == push_id).first()
     if not rec or rec.doctor_id != current_user["id"]:
-        raise BusinessError("推送记录不存在", code=4001)
+        raise BusinessError("推送记录不存在", code=4000)
     was_useful = rec.feedback == "useful"
     rec.feedback = feedback
     if feedback in ("useful", "useless"):

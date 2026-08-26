@@ -184,7 +184,7 @@ async def practice_turn(
         raise ParamError("message 不能为空")
     session = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
     if not session or session.representative_id != current_user["id"]:
-        raise BusinessError("陪练会话不存在", code=4001)
+        raise BusinessError("陪练会话不存在", code=4000)
     if session.status != "in_progress":
         raise BusinessError("会话已结束", code=4001)
 
@@ -224,7 +224,7 @@ async def complete_session(
 ):
     session = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
     if not session or session.representative_id != current_user["id"]:
-        raise BusinessError("陪练会话不存在", code=4001)
+        raise BusinessError("陪练会话不存在", code=4000)
     if session.status != "in_progress":
         raise BusinessError("会话已结束", code=4001)
     turns = session.turn_count or 0
@@ -385,7 +385,7 @@ async def review_objection_script(
     """审核异议话术：approve/reject，reject 必填 reason，仅 pending 可审"""
     script = db.query(ObjectionScript).filter(ObjectionScript.id == script_id).first()
     if not script:
-        raise BusinessError("异议话术不存在", code=4001)
+        raise BusinessError("异议话术不存在", code=4000)
     if script.review_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
     if not isinstance(payload, dict):

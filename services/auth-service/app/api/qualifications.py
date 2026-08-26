@@ -253,7 +253,7 @@ async def review_qualification(
         RepresentativeQualification.id == qualification_id
     ).first()
     if not qual:
-        raise BusinessError("备案记录不存在", code=4001)
+        raise BusinessError("备案记录不存在", code=4000)
     if qual.audit_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
 

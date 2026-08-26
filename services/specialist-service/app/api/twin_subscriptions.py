@@ -1,10 +1,10 @@
 """医生端分身订阅 + 分享链接激活（一期 B）
 
 契约（2026-08-17 Task 6）：
-- POST /api/v1/share-links/{token}/activate —— 任意登录；token 不存在/过期 → BusinessError 4001
+- POST /api/v1/share-links/{token}/activate —— 任意登录；token 不存在/过期 → BusinessError 4000
   「链接不存在或已过期」；返回 {twin:{id,name,status}, subscribed, subscription_status}，
   twin 信息手写 dict（不含 bailian_app_id 等内部字段）。
-- POST /api/v1/twin-subscriptions —— 任意登录；twin 必须 active（不存在/停用 → 4001）；
+- POST /api/v1/twin-subscriptions —— 任意登录；twin 必须 active（不存在/停用 → 4000）；
   consent_agreed != True → ParamError「须先签署知情同意」；已订阅同 twin → 幂等返回现有订阅
   （不重复写 consent）；新建写 DoctorConsent（version=CONSENT_VERSION, consent_type='twin'）
   + DoctorTwinSubscription（status=subscribed）；审计 action=twin_subscribe。
@@ -68,7 +68,7 @@ async def create_share_link(
         raise ParamError("twin_id 必须是整数")
     specialist = db.query(Specialist).filter(Specialist.id == twin_id).first()
     if not specialist or specialist.status != "active":
-        raise BusinessError("分身不存在或未启用", code=4001)
+        raise BusinessError("分身不存在或未启用", code=4000)
 
     expire_days = request.get("expire_days", 30)
     expire_at = None
@@ -132,15 +132,15 @@ async def activate_share_link(
 ):
     """激活分享链接：校验 token 有效期，返回 twin 信息 + 本人是否已订阅。
 
-    token 不存在或已过期统一 4001「链接不存在或已过期」（不区分，防枚举）。
+    token 不存在或已过期统一 4000「链接不存在或已过期」（不区分，防枚举）。
     """
     link = db.query(ShareLink).filter(ShareLink.url_token == token).first()
     if not link or (link.expire_at and link.expire_at < datetime.utcnow()):
-        raise BusinessError("链接不存在或已过期", code=4001)
+        raise BusinessError("链接不存在或已过期", code=4000)
 
     specialist = db.query(Specialist).filter(Specialist.id == link.twin_id).first()
     if not specialist:
-        raise BusinessError("链接不存在或已过期", code=4001)
+        raise BusinessError("链接不存在或已过期", code=4000)
 
     existing = db.query(DoctorTwinSubscription).filter(
         DoctorTwinSubscription.doctor_id == current_user["id"],
@@ -178,7 +178,7 @@ async def subscribe_twin(
 
     twin = db.query(Specialist).filter(Specialist.id == twin_id).first()
     if not twin or twin.status != "active":
-        raise BusinessError("专员不存在或已停用", code=4001)
+        raise BusinessError("专员不存在或已停用", code=4000)
 
     existing = db.query(DoctorTwinSubscription).filter(
         DoctorTwinSubscription.doctor_id == current_user["id"],
@@ -257,7 +257,7 @@ async def toggle_subscription(
         DoctorTwinSubscription.twin_id == twin_id,
     ).first()
     if not sub:
-        raise BusinessError("订阅不存在", code=4001)
+        raise BusinessError("订阅不存在", code=4000)
 
     before_value = sub.to_dict()
     sub.status = status

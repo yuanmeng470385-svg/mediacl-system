@@ -327,8 +327,8 @@ def test_submit_unknown_question_rejected():
     resp = client.post("/api/v1/exams/submit", json={"answers": [
         {"question_id": 999, "selected": [0]},
     ], "session_token": _session(1, [999])}, headers=_token(1, "rep"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 def test_submit_rejects_duplicate_question():

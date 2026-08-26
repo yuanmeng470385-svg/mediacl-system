@@ -93,7 +93,7 @@ async def get_material(
 ):
     mat = db.query(TrainingMaterial).filter(TrainingMaterial.id == material_id).first()
     if not mat or mat.status != "active":
-        raise BusinessError("培训材料不存在", code=4001)
+        raise BusinessError("培训材料不存在", code=4000)
     return success(mat.to_dict())
 
 
@@ -106,7 +106,7 @@ async def update_material(
 ):
     mat = db.query(TrainingMaterial).filter(TrainingMaterial.id == material_id).first()
     if not mat or mat.status != "active":
-        raise BusinessError("培训材料不存在", code=4001)
+        raise BusinessError("培训材料不存在", code=4000)
     data = _validate_payload(payload)
     before = {"title": mat.title, "content": mat.content, "material_type": mat.material_type}
     mat.title = data["title"]
@@ -134,7 +134,7 @@ async def archive_material(
 ):
     mat = db.query(TrainingMaterial).filter(TrainingMaterial.id == material_id).first()
     if not mat or mat.status != "active":
-        raise BusinessError("培训材料不存在", code=4001)
+        raise BusinessError("培训材料不存在", code=4000)
     mat.status = "archived"
     db.commit()
     db.refresh(mat)

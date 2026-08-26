@@ -124,8 +124,10 @@ def _code_to_http_status(code: int) -> int:
         return 401       # 认证错误 → 401
     if 3000 <= code < 4000:
         return 403       # 权限错误 → 403
+    if code == 4000:
+        return 404       # 资源不存在 → 404（2026-08-26 统一：4000 专指资源不存在）
     if 4000 <= code < 5000:
-        return 422       # 业务错误 → 422
+        return 422       # 其余业务错误 → 422
     if 5000 <= code < 6000:
         return 500       # 系统错误 → 500
     if 6000 <= code < 7000:

@@ -105,12 +105,12 @@ def test_interactions_rep_only_sees_own(client, monkeypatch):
     app.dependency_overrides[get_current_user] = _fake_current_user
 
 
-def test_interactions_422_business_error_when_hcp_missing(client, monkeypatch):
+def test_interactions_404_business_error_when_hcp_missing(client, monkeypatch):
     """E4（2026-08-13）：缺档案从裸 HTTPException 404 改为 BusinessError
     code 4001 —— 统一形状 {code,message,data}（HTTP 422），语义码更准确"""
     monkeypatch.setattr(
         hcps_api.HcpRepo, "get", staticmethod(lambda db, hcp_id: None),
     )
     resp = client.get("/api/v1/hcps/999/interactions")
-    assert resp.status_code == 422
-    assert resp.json() == {"code": 4001, "message": "医生档案不存在", "data": None}
+    assert resp.status_code == 404
+    assert resp.json() == {"code": 4000, "message": "医生档案不存在", "data": None}

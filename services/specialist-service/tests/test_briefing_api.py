@@ -170,11 +170,11 @@ def test_get_other_rep_briefing_404_business(fresh_state):
                         content={"summary": "s", "doctors": []}, status="ready"),
     )
     resp = client.get("/api/v1/briefings/1", headers=_token(1, "rep"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
-def test_get_missing_4001(fresh_state):
+def test_get_missing_4000(fresh_state):
     resp = client.get("/api/v1/briefings/999", headers=_token(1, "rep"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000

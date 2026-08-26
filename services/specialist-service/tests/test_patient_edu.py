@@ -186,8 +186,8 @@ def test_publish_requires_own_record(fresh_state):
     db.commit()
     db.close()
     resp = client.post("/api/v1/patient-edu/1/publish", json={}, headers=_token(4, "doctor"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000
 
 
 def test_publish_already_shared_4001(fresh_state):

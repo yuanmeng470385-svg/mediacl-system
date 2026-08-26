@@ -339,5 +339,5 @@ def test_review_missing_row(fresh_state):
         json={"verdict": "approve"},
         headers=_token(2, "admin"),
     )
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000

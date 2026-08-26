@@ -131,7 +131,7 @@ async def review_template(
 ):
     t = db.query(PatientEduTemplate).filter(PatientEduTemplate.id == template_id).first()
     if not t:
-        raise BusinessError("模板不存在", code=4001)
+        raise BusinessError("模板不存在", code=4000)
     if t.review_status != "pending":
         raise BusinessError("当前状态不可审核", code=4001)
     if not isinstance(payload, dict):
@@ -168,7 +168,7 @@ async def review_edu(
     """三期 M：审核患教内容 approve/reject；reject 必填 reason；仅 pending 可审。"""
     rec = db.query(EduContentRecord).filter(EduContentRecord.id == record_id).first()
     if not rec:
-        raise BusinessError("患教记录不存在", code=4001)
+        raise BusinessError("患教记录不存在", code=4000)
     if rec.audit_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
     if not isinstance(payload, dict):
@@ -267,7 +267,7 @@ async def my_edu_records(
 def _get_own_record(db: Session, record_id: int, doctor_id: int) -> EduContentRecord:
     rec = db.query(EduContentRecord).filter(EduContentRecord.id == record_id).first()
     if not rec or rec.doctor_id != doctor_id:
-        raise BusinessError("患教记录不存在", code=4001)
+        raise BusinessError("患教记录不存在", code=4000)
     return rec
 
 

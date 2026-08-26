@@ -201,7 +201,7 @@ def test_create_product_not_exists_business_error(monkeypatch):
     resp = _crud_client(db, monkeypatch).post(
         "/api/v1/specialists", json={"name": "A", "product_id": 999},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 404
     body = resp.json()
     assert body["code"] == 4000
     assert "产品不存在" in body["message"]
@@ -264,7 +264,7 @@ def test_update_product_not_exists_business_error(monkeypatch):
     resp = _crud_client(db, monkeypatch).put(
         "/api/v1/specialists/1", json={"product_id": 999},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 404
     assert "产品不存在" in resp.json()["message"]
 
 

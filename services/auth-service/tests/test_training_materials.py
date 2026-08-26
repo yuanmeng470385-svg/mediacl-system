@@ -160,7 +160,7 @@ def test_delete_archives(fresh_state):
     audit_mock.assert_awaited_once()
 
 
-def test_missing_row_422():
+def test_missing_row_404():
     resp = client.put("/api/v1/training-materials/999", json={"title": "x"}, headers=_token(2, "admin"))
-    assert resp.status_code == 422
-    assert resp.json()["code"] == 4001
+    assert resp.status_code == 404
+    assert resp.json()["code"] == 4000

@@ -228,7 +228,7 @@ async def skill_detail(
     admin/manager 仅返回元数据（无 content/skill_weights），访问仍记审计。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
-        raise BusinessError("Skill 不存在", code=4001)
+        raise BusinessError("Skill 不存在", code=4000)
     await write_audit_log(
         action="skill_detail_view", user_id=current_user["id"],
         resource_type="skill_package", resource_id=str(sk.id),
@@ -249,7 +249,7 @@ async def review_skill(
     """审核：approve/reject。审核人受控查看 skill_weights（读后写审计）。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
-        raise BusinessError("Skill 不存在", code=4001)
+        raise BusinessError("Skill 不存在", code=4000)
     if sk.audit_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
     if not isinstance(payload, dict):
@@ -294,7 +294,7 @@ async def off_shelf_skill(
     下架记录存档 skill_off_shelves + 审计。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
-        raise BusinessError("Skill 不存在", code=4001)
+        raise BusinessError("Skill 不存在", code=4000)
     if sk.off_shelf_status != "active":
         raise BusinessError("该 Skill 已下架", code=4001)
     if not isinstance(payload, dict):

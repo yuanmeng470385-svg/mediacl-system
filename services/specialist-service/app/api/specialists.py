@@ -637,7 +637,7 @@ async def freeze_specialist(
         raise ParamError("冻结必须填写理由")
     spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not spec:
-        raise BusinessError("分身不存在", code=4001)
+        raise BusinessError("分身不存在", code=4000)
     if spec.status == "frozen":
         raise BusinessError("分身已处于冻结状态", code=4001)
     spec.status = "frozen"
@@ -663,7 +663,7 @@ async def unfreeze_specialist(
     """解冻分身：frozen → active + 审计"""
     spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not spec:
-        raise BusinessError("分身不存在", code=4001)
+        raise BusinessError("分身不存在", code=4000)
     if spec.status != "frozen":
         raise BusinessError("分身未处于冻结状态", code=4001)
     spec.status = "active"
@@ -730,7 +730,7 @@ async def set_twin_style(
     """分身风格设置（需求 4.3(2)）：写 persona.style"""
     spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not spec:
-        raise BusinessError("分身不存在", code=4001)
+        raise BusinessError("分身不存在", code=4000)
     _assert_twin_owner(spec, current_user)
     style = _validate_style(payload)
     persona = dict(spec.persona) if spec.persona else {}
@@ -750,7 +750,7 @@ async def pause_twin(
     """暂停本人分身（4.3(5)）：status→paused"""
     spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not spec:
-        raise BusinessError("分身不存在", code=4001)
+        raise BusinessError("分身不存在", code=4000)
     _assert_twin_owner(spec, current_user)
     if spec.status != "active":
         raise BusinessError("仅工作中的分身可暂停", code=4001)
@@ -769,7 +769,7 @@ async def resume_twin(
     """启用本人分身：paused→active"""
     spec = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not spec:
-        raise BusinessError("分身不存在", code=4001)
+        raise BusinessError("分身不存在", code=4000)
     _assert_twin_owner(spec, current_user)
     if spec.status != "paused":
         raise BusinessError("仅已暂停的分身可启用", code=4001)

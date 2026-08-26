@@ -188,7 +188,7 @@ async def review_cert(
         DoctorCertification.id == cert_id
     ).first()
     if not cert:
-        raise BusinessError("认证记录不存在", code=4001)
+        raise BusinessError("认证记录不存在", code=4000)
     if cert.cert_status != "pending":
         raise BusinessError("当前状态不可审核（仅待审核可审）", code=4001)
 

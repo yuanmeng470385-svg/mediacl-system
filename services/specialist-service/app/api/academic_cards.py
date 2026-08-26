@@ -250,7 +250,7 @@ async def push_card(
         AcademicCard.status == "active",
     ).first()
     if not card:
-        raise BusinessError("卡片不存在", code=4001)
+        raise BusinessError("卡片不存在", code=4000)
 
     # 该代表的全部分身
     my_twins = db.query(Specialist.id).filter(Specialist.representative_id == current_user["id"]).all()

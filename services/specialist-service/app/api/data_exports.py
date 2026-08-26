@@ -132,7 +132,7 @@ async def review_export_request(
     """合规部审批：approve → 生成对话明细 xlsx + expires_at；reject 必填 reason。"""
     req = db.query(ExportRequest).filter(ExportRequest.id == request_id).first()
     if not req:
-        raise BusinessError("导出申请不存在", code=4001)
+        raise BusinessError("导出申请不存在", code=4000)
     if req.status != "pending":
         raise BusinessError("当前状态不可审批（仅待审批可审）", code=4001)
     # M-2：本人申请本人批 = 自审自批，一律拒绝（含 admin）
@@ -185,9 +185,9 @@ async def download_export(
     """审批通过后下载对话明细 xlsx（expires_at 未过期）。"""
     req = db.query(ExportRequest).filter(ExportRequest.id == request_id).first()
     if not req or req.status != "approved":
-        raise BusinessError("导出申请不存在或未通过审批", code=4001)
+        raise BusinessError("导出申请不存在或未通过审批", code=4000)
     if req.expires_at and req.expires_at < datetime.utcnow():
         raise BusinessError("导出文件已过期，请重新申请", code=4001)
     if not req.file_url or not os.path.exists(req.file_url):
-        raise BusinessError("导出文件不存在", code=4001)
+        raise BusinessError("导出文件不存在", code=4000)
     return FileResponse(req.file_url, filename=f"conversations_export_{req.id}.xlsx")
