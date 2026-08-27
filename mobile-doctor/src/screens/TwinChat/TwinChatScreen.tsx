@@ -1,10 +1,11 @@
 /**
- * 分身对话页（照 mobile ChatScreen 气泡+加载态范式，无 WS 流式）：
- *   - REST 发问走 twinAPI.chat（POST /api/v1/specialists/{id}/chat）
+ * 分身对话页（2026-08-26 挂账收尾：REST → WS 流式，照 rep 端 ChatScreen 范式）：
+ *   - WS 流式优先（openChatWs：start→delta*→done），8s 未收到 start 帧降级 REST
+ *   - REST 兜底 twinAPI.chat（POST /api/v1/specialists/{id}/chat）
  *   - 顶部常驻"该分身由 AI 生成"标识条（合规要求，不可关闭）
  *   - blocked 态渲染后端安全话术 + 违规提示明细
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -20,6 +21,8 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import Icon, { ActionIcons } from '../../components/Icon';
 import { twinAPI } from '../../api/twin';
+import { apiClient } from '../../api/client';
+import { openChatWs } from '../../services/wsChat';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { RootStackParamList } from '../../navigation/types';
 import type { ChatViolation } from '../../types';
@@ -57,7 +60,97 @@ export default function TwinChatScreen() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);   // WS 流式生成中
+  const [streamText, setStreamText] = useState('');    // 当前增量累积
+  const wsRef = useRef<ReturnType<typeof openChatWs> | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  /**
+   * WS 流式优先：8s 内未收到 start 帧即清理并返回 false → handleSend 降级 REST。
+   * onDone 时把最终答案以普通 assistant 消息入列（带 citations/violations/blocked）。
+   * 结果已定（done/error/8s 超时）后迟到的帧一律忽略，防止降级 REST 后重复入列。
+   */
+  const tryStream = async (text: string, token: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let started = false;
+      let settled = false;
+      let retried = false;                             // 未开始断线仅重试一次
+      const timer = setTimeout(() => {
+        if (!started) { cleanup(); resolve(false); }
+      }, 8000);
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timer);
+        if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      };
+      const open = () => {
+        const ws = openChatWs(twinId, token, {
+          onStart: () => {
+            if (settled) return;
+            started = true; setStreaming(true); setStreamText('');
+          },
+          onDelta: (t) => {
+            if (settled) return;
+            setStreamText(t);
+          },
+          onDone: (d) => {
+            if (settled) return;
+            settled = true;
+            started = true;
+            clearTimeout(timer);
+            setStreamText('');
+            setStreaming(false);
+            // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细）
+            const violationText = violationTextOf(d.violations);
+            const content = d.blocked
+              ? [d.text, violationText && `（${violationText}）`]
+                  .filter(Boolean)
+                  .join('')
+              : d.text;
+            const aiMsg: Message = {
+              id: `a_${Date.now()}`,
+              role: 'assistant',
+              content,
+              citations: (d.citations ?? []) as Message['citations'],
+              blocked: d.blocked ?? false,
+              violations: d.violations,
+            };
+            setMessages((prev) => [...prev, aiMsg]);
+            wsRef.current = null;
+            resolve(true);
+          },
+          onError: (m) => {
+            if (settled) return;
+            // 未收到 start 帧就断开（网络瞬断/链路失败）→ 重连一次再试；
+            // 已开始生成后断开 → 直接 REST 降级（避免生成一半的数据错乱）
+            if (!started && !retried) {
+              retried = true;
+              wsRef.current = null;
+              open();
+              return;
+            }
+            settled = true;
+            started = true;
+            clearTimeout(timer);
+            setStreaming(false);
+            setStreamText('');
+            wsRef.current = null;
+            resolve(false);
+          },
+        });
+        wsRef.current = ws;
+        ws.sendQuestion(text);
+      };
+      open();
+    });
+  };
+
+  // 卸载时关闭未完成的 WS，避免内存泄漏/迟到回调 setState
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, []);
 
   const handleSend = async () => {
     const text = input.trim();
@@ -69,6 +162,11 @@ export default function TwinChatScreen() {
     setLoading(true);
 
     try {
+      const token = (await apiClient.getToken()) || '';
+      const ok = await tryStream(text, token);
+      if (ok) return;                                  // WS 完成（含 done），不走 REST
+
+      // ---- REST 降级（WS 8s 超时/断开/服务端异常）----
       const response = await twinAPI.chat(twinId, text);
       const violationText = violationTextOf(response.violations);
       const aiMsg: Message = {
@@ -166,7 +264,11 @@ export default function TwinChatScreen() {
 
       <FlatList
         ref={flatListRef}
-        data={messages}
+        data={streaming || streamText ? [...messages, {
+          id: 'streaming',
+          role: 'assistant',
+          content: streamText || '正在思考...',
+        }] : messages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
