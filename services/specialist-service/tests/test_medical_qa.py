@@ -209,3 +209,37 @@ def test_answer_blocked_masked_and_audited(monkeypatch, client):
     assert len(audit_calls) == 1
     assert audit_calls[0]["action"] == "medical_qa"
     assert audit_calls[0]["ai_involved"] is True
+
+
+def test_medical_qa_reranks_by_profile(monkeypatch, client):
+    """学术偏好接入（2026-08-27）：_retrieve 后应调 get_profile + reorder_results，
+    并把当前医生 id 传给 get_profile（无偏好 → reorder 原序，仍走 reorder 调用）。"""
+    from app.core import preference_ranking
+    captured = {}
+    results = [{"title": "指南A", "url": "http://a", "doc_id": "d1", "content": "内容A"}]
+
+    def fake_get_profile(db, doctor_id):
+        captured["doctor_id"] = doctor_id
+        return None  # 无偏好 → reorder 原序（仍走 reorder 调用）
+
+    def fake_reorder(results, profile):
+        captured["called"] = True
+        return results
+
+    async def _retrieve(query, top_k=5):
+        return {"results": results, "source": "es", "empty": False}
+
+    def _qwen_json(prompt):
+        return {"answer": "依据 [0]", "cited": [0]}
+
+    monkeypatch.setattr(preference_ranking, "get_profile", fake_get_profile)
+    monkeypatch.setattr(preference_ranking, "reorder_results", fake_reorder)
+    monkeypatch.setattr("app.api.medical.check_compliance", _check_pass)
+    monkeypatch.setattr("app.api.medical.write_audit_log", _audit)
+    monkeypatch.setattr("app.api.medical._retrieve", _retrieve)
+    monkeypatch.setattr("app.api.medical._qwen_json", _qwen_json)
+
+    resp = client.post("/api/v1/medical/qa", json={"question": "肿瘤治疗"})
+    assert resp.status_code == 200
+    assert captured.get("called") is True
+    assert captured.get("doctor_id") == 7

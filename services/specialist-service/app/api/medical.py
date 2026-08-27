@@ -137,7 +137,11 @@ async def medical_qa(
 
     # Step 2 检索 + 生成（qwen 直调丢线程池，不阻塞事件循环）
     retrieved = await _retrieve(question)
-    results = retrieved.get("results") or []
+    # 学术偏好接入（2026-08-27 spec）：按医生偏好 re-rank 检索片段（只变顺序，
+    # 回答/JSON 契约不变；closed/无偏好由 reorder_results 内部回退原序）
+    from app.core import preference_ranking
+    profile = preference_ranking.get_profile(db, current_user["id"])
+    results = preference_ranking.reorder_results(retrieved.get("results") or [], profile)
     prompt = _build_prompt(question, results)
     try:
         generated = await asyncio.to_thread(_qwen_json, prompt)
