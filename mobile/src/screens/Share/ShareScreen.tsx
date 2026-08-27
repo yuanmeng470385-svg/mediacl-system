@@ -1,13 +1,12 @@
 /**
- * 分身分享页 —— 选择数字专员分身 → 生成分享链接 → 列表展示 + 复制。
- * 零新依赖：复制用 Alert 弹出完整 share_url 让用户长按复制（RN 内置 Clipboard 已废弃，
- * @react-native-clipboard/clipboard 是额外原生依赖，暂不引入）。
- * 临床精准风
+ * 分身分享页 —— 选择数字专员分身 → 生成分享链接 → 列表展示 + 分享。
+ * 分享走 RN 内置 Share API（系统分享面板，Android/iOS 均支持，零新依赖）：
+ * 分享面板可直接复制/发给微信/保存，取代此前 Alert 弹 URL（用户无法真正分享出去）。
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
+  ActivityIndicator, RefreshControl, Alert, Share,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import Icon from '../../components/Icon';
@@ -77,9 +76,18 @@ export default function ShareScreen() {
   };
 
   const handleCopy = (item: ShareLinkItem) => {
-    Alert.alert('分享链接', item.share_url || '（无链接地址）', [
-      { text: '知道了' },
-    ]);
+    const url = item.share_url;
+    if (!url) {
+      Alert.alert('无分享链接', '该分身暂无分享链接，请先生成。', [{ text: '知道了' }]);
+      return;
+    }
+    // RN 内置 Share API：调起系统分享面板（可复制/发给微信等），零新依赖
+    Share.share({
+      title: `MedAgent 分身分享：${item.twin_name || `分身 #${item.twin_id}`}`,
+      message: `我在 MedAgent 给你分享一位数字员工「${item.twin_name || `分身 #${item.twin_id}`}」，点击链接即可添加：${url}`,
+    }).catch(() => {
+      /* 用户取消分享面板，静默 */
+    });
   };
 
   const renderLink = ({ item }: { item: ShareLinkItem }) => (

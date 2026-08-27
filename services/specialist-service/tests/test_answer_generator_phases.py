@@ -246,6 +246,63 @@ def test_generate_stream_injects_preference_context(monkeypatch):
     assert "肿瘤" in captured["prompt"]
 
 
+def _spec_with_style():
+    """带 persona.style 的分身桩（对应 set_twin_style / style-test 产物结构）"""
+    return Specialist(
+        id=1, name="测试专员", bailian_app_id="app-1",
+        persona={"style": {"formal_level": "标准学术", "reply_length": "详尽", "opening_mode": "直切主题"}},
+        knowledge_scope="", compliance_level="internal",
+    )
+
+
+def test_generate_stream_injects_persona_style(monkeypatch):
+    """分身风格写而不读收尾（2026-08-27）：persona.style 注入 prompt。
+
+    set_twin_style / style-test 写入的 formal_level/reply_length/opening_mode
+    此前全仓无消费方，对话不受影响；注入后百炼 chat_stream 收到的 prompt
+    应含风格设定。无 persona 时（_spec 默认 persona=""）原样返回。
+    """
+    captured = {}
+
+    class FakeBailian:
+        async def chat_stream(self, app_id, prompt, session_id=None):
+            captured["prompt"] = prompt
+            yield {"type": "delta", "text": "好的"}
+            yield {"type": "done", "text": "好的"}
+
+    g = _mk(monkeypatch, _check_pass)
+    g.bailian = FakeBailian()
+
+    async def run():
+        frames = [f async for f in g.generate_stream(
+            question="肿瘤怎么治疗", specialist=_spec_with_style(), user_id=2, db=None)]
+        return frames
+
+    asyncio.run(run())
+    assert "正式程度：标准学术" in captured["prompt"]
+    assert "回复长度：详尽" in captured["prompt"]
+    assert "开场方式：直切主题" in captured["prompt"]
+
+
+def test_generate_no_persona_style_unchanged(monkeypatch):
+    """无 persona.style → question 原样（零扰动）。"""
+    captured = {}
+
+    class FakeBailian:
+        async def chat(self, app_id, prompt, session_id=None):
+            captured["prompt"] = prompt
+            return {"text": "好的", "citations": [], "dialog_id": "dlg-1"}
+
+    g = _mk(monkeypatch, _check_pass)
+    g.bailian = FakeBailian()
+
+    async def run():
+        await g.generate(question="肿瘤怎么治疗", specialist=_spec(), user_id=2, db=None)
+
+    asyncio.run(run())
+    assert "分身风格设定" not in captured["prompt"]
+
+
 def test_generate_injects_preference_context(monkeypatch):
     """Task 4 追加（2026-08-27）：REST 核心接口 generate 与 WS 流式同口径注入偏好。
 

@@ -50,6 +50,32 @@ def _inject_preference(question: str, db, user_id: int) -> str:
     return question
 
 
+def _inject_persona_style(question: str, specialist) -> str:
+    """分身 persona.style → prompt 风格注入（写而不读收尾 2026-08-27）。
+
+    代表在分身管理设置/风格测试产出的 persona.style（formal_level /
+    reply_length / opening_mode）此前全仓无消费方，对话完全不受影响。
+    本函数把风格设定作为提示注入，让「风格设置」真正作用于回答。
+
+    - 无 persona/style（或读取异常）→ 原样返回 question（零扰动）
+    - 只注入分身自身设定，不改任何医学事实；合规/流式门禁不动
+    - 与 _inject_preference 同拼接模式，REST generate 与 WS generate_stream 共用
+    """
+    try:
+        persona = getattr(specialist, "persona", None) or {}
+        style = persona.get("style") or {}
+    except Exception:
+        return question
+    parts = []
+    for key, label in (("formal_level", "正式程度"), ("reply_length", "回复长度"), ("opening_mode", "开场方式")):
+        v = style.get(key)
+        if v:
+            parts.append(f"{label}：{v}")
+    if not parts:
+        return question
+    return f"{question}\n（分身风格设定——请在回答中体现：" + "；".join(parts) + "）"
+
+
 class AnswerGenerator:
     """答案生成器"""
 
@@ -91,6 +117,7 @@ class AnswerGenerator:
 
         # 学术偏好接入（2026-08-27 spec）：与 generate_stream 同口径，REST 核心接口同样注入。
         question = _inject_preference(question, db, user_id)
+        question = _inject_persona_style(question, specialist)
 
         try:
             start_time = time.time()
@@ -250,6 +277,7 @@ class AnswerGenerator:
         # 学术偏好接入（2026-08-27 spec）：偏好作为 prompt 上下文注入（带事实约束）。
         # 百炼路径与降级 qwen 路径共用此 question；closed/无偏好 → 空片段不注入。
         question = _inject_preference(question, db, user_id)
+        question = _inject_persona_style(question, specialist)
 
         try:
             start_time = time.time()

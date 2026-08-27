@@ -20,7 +20,7 @@ type RowAction = 'profile' | 'notifications' | 'compliance' | 'coming' | 'about'
 
 const sections: { title: string; items: { icon: string; label: string; desc: string; action: RowAction }[] }[] = [
   { title: '个人资料', items: [
-    { icon: 'account', label: '编辑资料', desc: '姓名、手机号、区域', action: 'profile' },
+    { icon: 'account', label: '查看资料', desc: '姓名、手机号、区域（只读）', action: 'profile' },
     { icon: 'shield-account', label: '账号安全', desc: '密码、绑定设备', action: 'coming' },
   ]},
   { title: '工作', items: [
