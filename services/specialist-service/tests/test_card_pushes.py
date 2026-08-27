@@ -28,6 +28,7 @@ from shared.models.product import Product
 from shared.models.user import User
 
 from shared.models.doctor import DoctorTwinSubscription
+from shared.models.doctor_profile import DoctorProfile
 
 import app.api.academic_cards as ac_api
 from app.main import app
@@ -69,7 +70,7 @@ def _token(user_id: int, role: str) -> dict:
 def fresh_state(monkeypatch):
     tables = [User.__table__, Specialist.__table__, Product.__table__, AcademicCard.__table__,
               CardPushRecord.__table__, Notification.__table__, DoctorTwinSubscription.__table__,
-              Conversation.__table__, ConversationFeedback.__table__]
+              Conversation.__table__, ConversationFeedback.__table__, DoctorProfile.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -129,6 +130,49 @@ def test_push_only_subscribed_doctors(fresh_state):
     assert body["code"] == 0
     assert body["data"]["pushed"] == 1
     assert body["data"]["skipped"] == 1
+
+
+def test_push_records_matched_interest_by_doctor(monkeypatch, fresh_state):
+    from app.core import preference_ranking
+
+    class FakeProf:
+        def __init__(self, areas):
+            self.interest_areas = areas
+            self.preferred_doc_type = None
+            self.preferred_style = None
+            self.closed = False
+
+    # doctor 2 兴趣含"肿瘤"、doctor 4 兴趣为"心血管" → 各自 matched_interest 正确
+    monkeypatch.setattr(
+        preference_ranking, "get_profiles_batch",
+        lambda db, ids: {2: FakeProf(["肿瘤"]), 4: FakeProf(["心血管"])},
+    )
+
+    db = TestSession()
+    db.add(User(id=4, username="doctor2", full_name="李医生", phone="13800000004", role="doctor", status="active"))
+    db.add(AcademicCard(id=1, representative_id=1, title="肿瘤免疫治疗新进展",
+                        content={"conclusion": "x"}, is_ai_generated=True))
+    db.add(Specialist(id=1, name="分身", product_id=1, status="active", representative_id=1))
+    db.add(DoctorTwinSubscription(id=1, doctor_id=2, twin_id=1, status="subscribed",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))
+    db.add(DoctorTwinSubscription(id=2, doctor_id=4, twin_id=1, status="subscribed",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))
+    db.commit()
+    db.close()
+
+    resp = client.post("/api/v1/academic-cards/1/push", json={"doctor_ids": [2, 4]},
+                       headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["pushed"] == 2
+    assert body["data"]["skipped"] == 0
+
+    db = TestSession()
+    push = db.query(CardPushRecord).filter_by(card_id=1).all()
+    by_doc = {r.doctor_id: r.matched_interest for r in push}
+    assert by_doc[2] is True
+    assert by_doc[4] is False
+    db.close()
 
 
 def test_doctor_inbox_lists_pushes():

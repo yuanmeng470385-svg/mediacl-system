@@ -258,6 +258,10 @@ async def push_card(
     if not twin_ids:
         raise BusinessError("请先生成分身再推送", code=4001)
 
+    # 学术偏好接入（2026-08-27 spec）：批量读目标医生偏好，循环内标 matched_interest
+    from app.core import preference_ranking
+    profiles = preference_ranking.get_profiles_batch(db, doctor_ids)
+
     pushed = 0
     skipped = 0
     for doctor_id in doctor_ids:
@@ -279,6 +283,7 @@ async def push_card(
             doctor_id=doctor_id,
             specialist_id=sub.twin_id,
             read_status="unread",
+            matched_interest=preference_ranking.matched_interest(card.title, profiles.get(doctor_id)),
         ))
         db.add(Notification(
             user_id=doctor_id,
