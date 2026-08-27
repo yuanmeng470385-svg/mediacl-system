@@ -244,3 +244,37 @@ def test_generate_stream_injects_preference_context(monkeypatch):
     assert frames[-1]["type"] == "done"
     assert "不得改变医学事实" in captured["prompt"]
     assert "肿瘤" in captured["prompt"]
+
+
+def test_generate_injects_preference_context(monkeypatch):
+    """Task 4 追加（2026-08-27）：REST 核心接口 generate 与 WS 流式同口径注入偏好。
+
+    mock get_profile 返回偏好画像 → 断言百炼 chat 收到的 prompt 同时含
+    「不得改变医学事实」硬约束与兴趣领域关键词。db=None 时仍应注入
+    （get_profile 被 mock，直接返回画像）。
+    """
+    from app.core import preference_ranking
+    captured = {}
+
+    def fake_get_profile(db, doctor_id):
+        class P:
+            interest_areas = ["肿瘤"]
+            preferred_doc_type = None
+            preferred_style = "简洁"
+            closed = False
+        return P()
+
+    class FakeBailian:
+        async def chat(self, app_id, prompt, session_id=None):
+            captured["prompt"] = prompt
+            return {"text": "好的", "citations": [], "dialog_id": "dlg-1"}
+
+    monkeypatch.setattr(preference_ranking, "get_profile", fake_get_profile)
+    g = _mk(monkeypatch, _check_pass)
+    g.bailian = FakeBailian()
+
+    result = asyncio.run(g.generate(
+        question="肿瘤怎么治疗", specialist=_spec(), user_id=2, db=None))
+    assert result["answer"] == "好的"
+    assert "不得改变医学事实" in captured["prompt"]
+    assert "肿瘤" in captured["prompt"]

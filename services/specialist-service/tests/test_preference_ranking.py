@@ -111,6 +111,11 @@ def test_get_profile_db_error_returns_none():
     assert get_profile(FakeDb(raise_on_query=True), 7) is None
 
 
+def test_get_profile_malformed_row_returns_none():
+    """读取异常（含畸形行）→ None：查询返回无 closed/interest_areas 字段的对象时不得抛异常"""
+    assert get_profile(FakeDb(first=object()), 7) is None
+
+
 def test_get_profiles_batch_filters_closed_and_empty():
     p1 = FakeProfile(areas=["肿瘤"], doctor_id=1)
     p2 = FakeProfile(areas=["心血管"], closed=True, doctor_id=2)

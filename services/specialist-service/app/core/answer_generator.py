@@ -30,6 +30,26 @@ from app.core.activity_registry import (
 logger = logging.getLogger(__name__)
 
 
+def _inject_preference(question: str, db, user_id: int) -> str:
+    """学术偏好接入（2026-08-27 spec）：把医生学术偏好作为 prompt 上下文注入。
+
+    事实零扰动：preference_context 生成的片段自带「不得改变医学事实、
+    不得省略关键信息」硬约束；本函数只做字符串拼接，不改任何医学内容。
+
+    - 百炼路径与降级 qwen 路径共用注入后的 question（REST generate 与
+      WS generate_stream 均以本函数返回值为准）。
+    - closed/空偏好/读取异常 → preference_context 返回空串 → 原样返回 question。
+    - get_profile 内部已兜底：db 为 None 或读取异常 → None。
+    """
+    from app.core import preference_ranking
+    pref = preference_ranking.preference_context(
+        preference_ranking.get_profile(db, user_id)
+    )
+    if pref:
+        return f"{question}\n{pref}"
+    return question
+
+
 class AnswerGenerator:
     """答案生成器"""
 
@@ -68,6 +88,10 @@ class AnswerGenerator:
             }
         """
         request_id = str(uuid.uuid4())
+
+        # 学术偏好接入（2026-08-27 spec）：与 generate_stream 同口径，REST 核心接口同样注入。
+        question = _inject_preference(question, db, user_id)
+
         try:
             start_time = time.time()
 
@@ -225,13 +249,7 @@ class AnswerGenerator:
 
         # 学术偏好接入（2026-08-27 spec）：偏好作为 prompt 上下文注入（带事实约束）。
         # 百炼路径与降级 qwen 路径共用此 question；closed/无偏好 → 空片段不注入。
-        # get_profile 内部已兜底：db 为 None 或读取异常 → None → preference_context 返回空串。
-        from app.core import preference_ranking
-        pref = preference_ranking.preference_context(
-            preference_ranking.get_profile(db, user_id)
-        )
-        if pref:
-            question = f"{question}\n{pref}"
+        question = _inject_preference(question, db, user_id)
 
         try:
             start_time = time.time()

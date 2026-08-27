@@ -15,9 +15,9 @@ def get_profile(db: Session, doctor_id: int) -> Optional[DoctorProfile]:
     """读医生偏好画像；closed 或空兴趣 → None（调用方回退基线）。读取异常 → None。"""
     try:
         p = db.query(DoctorProfile).filter(DoctorProfile.doctor_id == doctor_id).first()
+        return p if (p and not p.closed and p.interest_areas) else None
     except Exception:
         return None
-    return p if (p and not p.closed and p.interest_areas) else None
 
 
 def get_profiles_batch(db: Session, doctor_ids: List[int]) -> Dict[int, Optional[DoctorProfile]]:
