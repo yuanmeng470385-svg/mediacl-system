@@ -33,7 +33,6 @@ from shared.common.db_session import SessionLocal
 from shared.models.user import User
 
 from app.db.repositories.visit_repo import VisitRepo
-from app.services.compliance_client import check_compliance
 from app.services.realtime_asr import MockRealtimeAsrClient, RealtimeAsrClient
 from app.constants import AI_SUMMARY_PLACEHOLDER, VISIT_STATUS_CANCELLED
 
@@ -205,13 +204,11 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             await websocket.close(code=4500)  # 服务端未配置
             return
 
-        # 断句完成落库的最后一句缓冲：on_sentence 与会话收尾存在 db 关闭竞态，
-        # 落库失败会静默丢失 → 缓冲该句，会话收尾（finally）兜底落库
-        last_final_text = None
-
+        # 2026-08-27：ASR 只回推转写帧不落库（落库统一走前端 REST 带 speaker），
+        # 会话收尾只回推 completed 帧 —— 无落库缓冲
         async def on_sentence(text: str, index: int, is_final: bool, speaker=None):
-            nonlocal last_final_text
-            # 回推增量/断句给 App（统一携带 speaker 字段：双方分离，缺省 rep）。
+            # 回推增量/断句给 App（统一携带 speaker 字段：NLS 不支持分离，缺省 rep，
+            # 真实说话人由移动端手动标注经 REST transcript 提交）。
             # send 失败（客户端断开/发送竞争/连接关闭后 starlette send 抛 RuntimeError）
             # 不中断转写处理 —— 与 _check_later 同一容错模式，失败仅跳过推送
             try:
@@ -223,75 +220,11 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
 
             except (ConcurrencyError, ConnectionClosed, RuntimeError):
                 logger.info("客户端已断开或发送竞争，跳过断句推送")
-            # 断句完成：追加到拜访记录 + 实时合规检查
-            if is_final:
-                # fail-closed：Mock 会话的文本绝不落库（防止假转写污染证据库）
-                if is_mock:
-                    logger.warning("Mock 转写文本不落库: %s", text[:50])
-                else:
-                    try:
-                        # 行锁 + 状态复查（F7/F12 与 REST 追加同口径）：已结束/已取消的
-                        # 拜访不再追加转写（证据已封存）；并发追加串行化不互相覆盖
-                        rec = VisitRepo.get(db, visit_id, for_update=True)
-                        if rec and rec.status == VISIT_STATUS_CANCELLED:
-                            logger.warning("拜访已取消，WS 转写不追加: visit_id=%s", visit_id)
-                        elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
-                            logger.warning("拜访已结束，WS 转写不追加: visit_id=%s", visit_id)
-                        elif rec:
-                            rec.conversation_transcript = (rec.conversation_transcript or "") + text + "\n"
-                            db.commit()
-                        last_final_text = None  # 落库成功（或明确跳过），清空缓冲
-                    except Exception as exc:
-                        # 落库失败（如 db 已关闭的竞态）→ 缓冲该句，会话收尾兜底
-                        logger.error("断句落库失败，留待会话收尾兜底: visit_id=%s err=%s", visit_id, exc)
-                        last_final_text = text
-                async def _check_later():
-                    try:
-                        compliance = await check_compliance(
-                            text,
-                            {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
-                        )
-                        violations = compliance.get("violations") or []
-                        blocked = bool(compliance.get("blocked"))
-                        # F3（2026-08-13）：violations 非空即推送合规帧 —— warn 级违规
-                        # 也要实时告警（旧实现只推 blocked），帧内保留 blocked 布尔
-                        # 区分轻重（移动端 default case 忽略未知字段，不影响旧客户端）
-                        if blocked or violations:
-                            async with send_lock:
-                                await websocket.send_json({
-                                    "type": "compliance",
-                                    "blocked": blocked,
-                                    "violations": violations,
-                                })
-                        # F3：warn 级违规同样落库 —— 与 REST process_transcript 同口径
-                        # （violations 累加不整句覆盖、blocked 取或），保证 evidence 完整。
-                        # 与断句落库同一状态守卫：已结束/已取消的拜访不再追加合规标记
-                        # （证据已封存）；并发追加以行锁串行化
-                        if violations:
-                            try:
-                                rec = VisitRepo.get(db, visit_id, for_update=True)
-                                if rec and rec.status == VISIT_STATUS_CANCELLED:
-                                    logger.warning("拜访已取消，合规标记不追加: visit_id=%s", visit_id)
-                                elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
-                                    logger.warning("拜访已结束，合规标记不追加: visit_id=%s", visit_id)
-                                elif rec:
-                                    existing_flags = rec.compliance_flags or {"violations": []}
-                                    existing_violations = existing_flags.get("violations") or []
-                                    existing_violations.extend(violations)
-                                    rec.compliance_flags = {
-                                        "violations": existing_violations,
-                                        "blocked": existing_flags.get("blocked", False) or blocked,
-                                    }
-                                    db.commit()
-                            except Exception as exc:
-                                logger.error("合规标记落库失败: visit_id=%s err=%s", visit_id, exc)
-                    except (ConcurrencyError, ConnectionClosed, RuntimeError):
-                        # 客户端已断开 / 发送竞争 / 连接关闭后 starlette send 抛 RuntimeError：
-                        # 跳过推送，不是合规检查失败
-                        logger.info("客户端已断开或发送竞争，跳过合规推送")
-                    except Exception as exc:
-                        logger.error("实时合规检查失败: %s", exc)
-                asyncio.create_task(_check_later())  # 不阻塞转写流（<2s 承诺）
+            # 2026-08-27 双方分离重构：ASR WS 不再直接落库/做合规 —— 此前 final 句
+            # 在 WS 端落库（无 speaker 前缀、speaker 不分、医生话也判违规），前端 REST
+            # 带 speaker 的提交被 F5 去重跳过 → 手动标注完全失效。落库+合规统一走前端
+            # REST sendTranscript（带 speaker：医生话跳过代表合规、落库 [医生] 前缀）。
+            # ASR WS 只负责转写回推（sentence/completed 帧）。
 
         await asr.start(on_sentence=on_sentence)
 
@@ -349,28 +282,8 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
             logger.info(f"客户端断开: visit_id={visit_id}")
         finally:
             await asr.close()
-            # 收尾兜底落库：on_sentence 缓冲的最后一句；会话已关闭则跳过并记日志。
-            # B1（2026-08-13）：兜底路径与主路径（F12）同守卫 —— 行锁 + 状态复查，
-            # 已取消/已结束的拜访不再追加（证据已封存，兜底不得绕过守卫）
-            if last_final_text:
-                if getattr(db, "is_active", True):
-                    try:
-                        rec = VisitRepo.get(db, visit_id, for_update=True)
-                        if rec and rec.status == VISIT_STATUS_CANCELLED:
-                            logger.warning("拜访已取消，收尾兜底不追加最后一句: visit_id=%s", visit_id)
-                        elif rec and rec.ai_summary and rec.ai_summary != AI_SUMMARY_PLACEHOLDER:
-                            logger.warning("拜访已结束，收尾兜底不追加最后一句: visit_id=%s", visit_id)
-                        elif rec:
-                            rec.conversation_transcript = (rec.conversation_transcript or "") + last_final_text + "\n"
-                            db.commit()
-                            logger.info("收尾兜底落库最后一句: visit_id=%s", visit_id)
-                    except Exception as exc:
-                        logger.error("收尾兜底落库失败: %s", exc)
-                else:
-                    logger.warning(
-                        "会话已关闭，最后一句未落库（可用 end_visit 的 full_transcript 补齐）: visit_id=%s",
-                        visit_id,
-                    )
+            # 2026-08-27：ASR 不落库（落库统一走前端 REST sendTranscript 带 speaker），
+            # 会话收尾只回推 completed 帧。
             try:
                 async with send_lock:
                     await websocket.send_json({"type": "completed"})

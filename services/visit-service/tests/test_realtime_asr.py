@@ -203,9 +203,6 @@ class TestAsrWebSocketFlow:
 
         monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession())
 
-        async def _fake_compliance(text, context=None):
-            return {"blocked": False, "violations": [], "risk_level": "none"}
-        monkeypatch.setattr(asr_ws, "check_compliance", _fake_compliance)
         monkeypatch.delenv("NLS_APPKEY", raising=False)
         monkeypatch.setenv("NLS_MOCK", "1")
 
@@ -228,33 +225,6 @@ class TestAsrWebSocketFlow:
                 ws.send_text(json.dumps({"type": "stop"}))
                 done = ws.receive_json()
                 assert done["type"] == "completed"
-
-    def test_ws_check_later_swallows_runtime_error(self, monkeypatch, caplog):
-        """后台合规推送抛 RuntimeError（连接关闭后 starlette send 场景）→ 捕获不炸"""
-        import logging
-        from app.api import asr_ws
-
-        caplog.set_level(logging.INFO, logger="app.api.asr_ws")
-        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession())
-        monkeypatch.delenv("NLS_APPKEY", raising=False)
-        monkeypatch.setenv("NLS_MOCK", "1")
-
-        async def _compliance_raises_runtime_error(text, context=None):
-            # 模拟连接关闭后 starlette send 抛的 RuntimeError（后台推送路径）
-            raise RuntimeError("Cannot call 'send' once a close message has been sent")
-        monkeypatch.setattr(asr_ws, "check_compliance", _compliance_raises_runtime_error)
-
-        token = create_token(7, "rep1", "rep")
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/visits/1/asr") as ws:
-                ws.send_text(json.dumps({"type": "auth", "token": token}))
-                ws.receive_json()  # ready
-                ws.send_bytes(b"\x00" * 3200)
-                ws.receive_json()  # 中间结果
-                ws.receive_json()  # 断句完成 → 触发 _check_later（合规抛 RuntimeError）
-            time.sleep(0.3)  # 等后台任务收尾
-        assert "跳过合规推送" in caplog.text
-
 
 # ---------- F3 回归（2026-08-13）：warn 级违规也推合规帧 + 落库 compliance_flags ----------
 
@@ -306,105 +276,38 @@ class _FakeAsrQueryWithRecord:
         return self._record
 
 
-def _run_ws_warn_flow(monkeypatch, compliance_fn):
-    """跑一轮 NLS_MOCK WS 会话，返回 (合规帧, session)"""
-    from app.api import asr_ws
-    session = _FakeAsrSessionWithRecord()
-    monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
-    monkeypatch.delenv("NLS_APPKEY", raising=False)
-    monkeypatch.setenv("NLS_MOCK", "1")
-    monkeypatch.setattr(asr_ws, "check_compliance", compliance_fn)
+class TestAsrWsNoPersist:
+    """2026-08-27 双方分离重构：ASR WS 只转写回推，不落库/不推合规帧。
 
-    token = create_token(7, "rep1", "rep")
-    compliance_frame = None
-    with TestClient(app) as client:
-        with client.websocket_connect("/ws/visits/1/asr") as ws:
-            ws.send_text(json.dumps({"type": "auth", "token": token}))
-            ws.receive_json()  # ready
-            ws.send_bytes(b"\x00" * 3200)
-            for _ in range(3):
-                frame = ws.receive_json()
-                if frame.get("type") == "compliance":
-                    compliance_frame = frame
-                    break
-            ws.send_text(json.dumps({"type": "stop"}))
-            ws.receive_json()  # completed
-        time.sleep(0.3)  # 等后台任务落库收尾
-    return compliance_frame, session
+    落库+合规统一走前端 REST sendTranscript（带 speaker 手动标注）；ASR WS
+    的 final 句仅回推 sentence 帧（speaker 缺省 rep，NLS 不支持分离）。
+    transcript / compliance_flags 不再由 WS 端写入。
+    """
 
-
-class TestAsrWebSocketComplianceFrames:
-    """F3：WS 实时合规帧——warn 级违规推送 + compliance_flags 落库（与 REST 同口径）"""
-
-    def test_warn_violations_push_frame_and_persist_flags(self, monkeypatch):
-        """violations 非空、blocked=False（warn 级）→ 推送合规帧（blocked=False 区分轻重）+ 落库"""
-
-        async def _warn_compliance(text, context=None):
-            return {"blocked": False, "risk_level": "medium",
-                    "violations": [{"rule_code": "R002", "severity": "warn", "matched_text": text}]}
-
-        frame, session = _run_ws_warn_flow(monkeypatch, _warn_compliance)
-        assert frame is not None, "warn 级违规也应推送合规帧"
-        assert frame["blocked"] is False
-        assert len(frame["violations"]) == 1
-        assert frame["violations"][0]["rule_code"] == "R002"
-        # 落库与 REST 同口径：violations 累加、blocked 取或
-        flags = session.record.compliance_flags
-        assert flags is not None, "warn 级违规应落库 compliance_flags"
-        assert flags["blocked"] is False
-        assert len(flags["violations"]) == 1
-
-    def test_blocked_violations_push_frame_and_persist_blocked_flag(self, monkeypatch):
-        """blocked=True 路径不受重构影响：帧带 blocked=True，落库 blocked 取或"""
-
-        async def _blocked_compliance(text, context=None):
-            return {"blocked": True, "risk_level": "high",
-                    "violations": [{"rule_code": "R001", "severity": "high", "matched_text": text}]}
-
-        frame, session = _run_ws_warn_flow(monkeypatch, _blocked_compliance)
-        assert frame is not None
-        assert frame["blocked"] is True
-        assert len(frame["violations"]) == 1
-        flags = session.record.compliance_flags
-        assert flags["blocked"] is True
-        assert len(flags["violations"]) == 1
-
-    def test_warn_frame_pushed_but_flags_not_appended_after_visit_ended(self, monkeypatch):
-        """会话中拜访被 end（证据封存）：帧仍然推送（实时告警），但 compliance_flags 不追加
-
-        连接时拜访仍在进行中（B4 后已结束拜访在连接建立即被拒）；会话进行中拜访被
-        并发 end —— 状态守卫在每句落库时生效：帧照推、落库跳过。
-        """
-
-        async def _warn_compliance(text, context=None):
-            return {"blocked": False, "risk_level": "medium",
-                    "violations": [{"rule_code": "R002", "severity": "warn", "matched_text": text}]}
-
+    def test_final_sentence_pushed_but_not_persisted(self, monkeypatch):
+        """final 句回推 sentence 帧，但不落库、不推 compliance 帧"""
         from app.api import asr_ws
         session = _FakeAsrSessionWithRecord()
         monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
         monkeypatch.delenv("NLS_APPKEY", raising=False)
         monkeypatch.setenv("NLS_MOCK", "1")
-        monkeypatch.setattr(asr_ws, "check_compliance", _warn_compliance)
-
         token = create_token(7, "rep1", "rep")
-        frame = None
+        frames = []
         with TestClient(app) as client:
             with client.websocket_connect("/ws/visits/1/asr") as ws:
                 ws.send_text(json.dumps({"type": "auth", "token": token}))
                 ws.receive_json()  # ready
-                session.record.ai_summary = "真实总结已生成"  # 会话中拜访被并发 end
-                ws.send_bytes(b"\x00" * 3200)
-                for _ in range(3):
-                    f = ws.receive_json()
-                    if f.get("type") == "compliance":
-                        frame = f
-                        break
+                ws.send_bytes(bytes(3200))
+                frames.append(ws.receive_json())  # 中间结果
+                frames.append(ws.receive_json())  # 断句完成
                 ws.send_text(json.dumps({"type": "stop"}))
                 ws.receive_json()  # completed
             time.sleep(0.3)
-        assert frame is not None and frame["blocked"] is False
-        assert session.record.compliance_flags is None, "已结束拜访不应追加合规标记"
+        # 回推了 sentence 帧（含 final 断句），但不落库/不推合规帧
+        assert any(f.get("type") == "sentence" and f.get("final") for f in frames), "应回推 final 断句帧"
+        assert not any(f.get("type") == "compliance" for f in frames), "ASR WS 不再推合规帧"
+        assert session.record.conversation_transcript == "", "ASR WS 不落库转写"
+        assert session.record.compliance_flags is None, "ASR WS 不落库合规标记"
 
 
 # ---------- B4 回归（2026-08-13）：连接建立时拜访已结束/已取消 → error 帧 + 4404 ----------
@@ -451,60 +354,6 @@ class TestAsrWsVisitStateGuard:
 
 
 # ---------- B1 回归（2026-08-13）：收尾兜底落库与主路径同守卫 ----------
-
-class TestAsrWsFallbackPersist:
-    """B1：兜底路径（last_final_text 收尾追加）加 for_update + 状态复查"""
-
-    def test_fallback_persist_skips_ended_visit(self, monkeypatch, caplog):
-        """主路径断句落库失败 → 缓冲末句；收尾兜底时拜访已结束 → 放弃追加并记日志"""
-        import logging
-        from app.api import asr_ws
-        from app.services.realtime_asr import MockRealtimeAsrClient
-
-        caplog.set_level(logging.INFO, logger="app.api.asr_ws")
-        session = _FakeAsrSessionWithRecord()
-        monkeypatch.setattr(asr_ws, "SessionLocal", lambda: session)
-
-        async def _ok_compliance(text, context=None):
-            return {"blocked": False, "violations": [], "risk_level": "none"}
-        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
-
-        # is_mock=False（假 ASR 客户端）→ 断句走真实落库路径（Mock 模式不落库）
-        monkeypatch.setattr(
-            asr_ws, "_get_asr_client",
-            lambda: (MockRealtimeAsrClient(sentences=["收尾前的末句"], interval=0), False),
-        )
-
-        calls = {"n": 0}
-
-        def _flaky_get(db, visit_id, for_update=False):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return session.record  # 连接建立的状态守卫（进行中，放行）
-            if calls["n"] == 2:
-                raise RuntimeError("simulated db failure")  # 主路径落库失败 → 缓冲
-            # 收尾兜底路径：期间拜访已被 end（证据已封存）
-            session.record.ai_summary = "真实总结已生成"
-            return session.record
-
-        monkeypatch.setattr(asr_ws, "VisitRepo", SimpleNamespace(get=_flaky_get))
-
-        token = create_token(7, "rep1", "rep")
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/visits/1/asr") as ws:
-                ws.send_text(json.dumps({"type": "auth", "token": token}))
-                ws.receive_json()  # ready
-                ws.send_bytes(b"\x00" * 3200)
-                ws.receive_json()  # 中间结果
-                ws.receive_json()  # 断句完成（主路径落库失败 → 缓冲末句）
-                ws.send_text(json.dumps({"type": "stop"}))
-                ws.receive_json()  # completed（finally 兜底落库已执行）
-            time.sleep(0.3)
-
-        # 兜底路径状态守卫：已结束 → 末句不追加（证据封存），且记日志
-        assert session.record.conversation_transcript == "", "已结束拜访兜底不应追加末句"
-        assert "收尾兜底不追加" in caplog.text, "应记日志说明放弃追加"
-
 
 # ---------- B5 回归（2026-08-13）：finish 等 TranscriptionCompleted 事件 ----------
 
@@ -634,9 +483,6 @@ class TestAsrWsLimits:
     @staticmethod
     def _patch_session(monkeypatch, asr_ws, user_id=7):
         monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession(user_id=user_id))
-        async def _ok_compliance(text, context=None):
-            return {"blocked": False, "violations": [], "risk_level": "none"}
-        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
         monkeypatch.delenv("NLS_APPKEY", raising=False)
         monkeypatch.setenv("NLS_MOCK", "1")
 
@@ -673,9 +519,6 @@ class TestAsrWsLimits:
 
         holder = {"uid": 7}
         monkeypatch.setattr(asr_ws, "SessionLocal", lambda: _FakeAsrSession(user_id=holder["uid"]))
-        async def _ok_compliance(text, context=None):
-            return {"blocked": False, "violations": [], "risk_level": "none"}
-        monkeypatch.setattr(asr_ws, "check_compliance", _ok_compliance)
         monkeypatch.delenv("NLS_APPKEY", raising=False)
         monkeypatch.setenv("NLS_MOCK", "1")
 
