@@ -194,9 +194,14 @@ export default function VisitInProgressScreen() {
           // 空实现仅满足 AsrCallbacks 类型约束，实际从不触发
           onReady: () => {},
           // 增量句：转写进行中在底部栏上方显示一行"转写中：<当前文本>"，带说话人标签
-          onSentence: (text, _final, speaker) => {
+          onSentence: (text, isFinal, speaker) => {
             setLiveText(text);
             if (speaker) setLiveSpeaker(speaker);
+            // 2026-08-27 修复：final 句立即落库（此前只在松手 onCompleted 提交
+            // 最后一句，按住期间的多句全丢 →"只能识别一句"）。用当前手动标注说话人。
+            if (isFinal && text && text.trim()) {
+              addTranscript(text.trim(), currentSpeakerRef.current);
+            }
           },
           // ASR WS compliance 帧：与 transcript 的 compliance_alerts 同一套映射与展示状态
           onCompliance: (blocked, violations) => {
@@ -341,7 +346,7 @@ export default function VisitInProgressScreen() {
           {(keyNodes.length > 0 || aiSuggestion) && (
             <View style={styles.sideSection}>
               <View style={styles.sideTitleRow}>
-                <Icon name="bulb-outline" size={14} color={Colors.primary} />
+                <Icon name="lightbulb-outline" size={14} color={Colors.primary} />
                 <Text style={styles.sideTitle}>AI 实时推荐</Text>
               </View>
               {keyNodes.slice(-5).map((n, i) => (
