@@ -12,16 +12,22 @@ from shared.models.doctor_profile import DoctorProfile
 
 
 def get_profile(db: Session, doctor_id: int) -> Optional[DoctorProfile]:
-    """读医生偏好画像；closed 或空兴趣 → None（调用方回退基线）。"""
-    p = db.query(DoctorProfile).filter(DoctorProfile.doctor_id == doctor_id).first()
+    """读医生偏好画像；closed 或空兴趣 → None（调用方回退基线）。读取异常 → None。"""
+    try:
+        p = db.query(DoctorProfile).filter(DoctorProfile.doctor_id == doctor_id).first()
+    except Exception:
+        return None
     return p if (p and not p.closed and p.interest_areas) else None
 
 
 def get_profiles_batch(db: Session, doctor_ids: List[int]) -> Dict[int, Optional[DoctorProfile]]:
-    """批量读（IN 一次查询），未查到的医生不在 dict（调用方按无偏好处理）。"""
+    """批量读（IN 一次查询），未查到的医生不在 dict（调用方按无偏好处理）。读取异常 → {}。"""
     if not doctor_ids:
         return {}
-    rows = db.query(DoctorProfile).filter(DoctorProfile.doctor_id.in_(doctor_ids)).all()
+    try:
+        rows = db.query(DoctorProfile).filter(DoctorProfile.doctor_id.in_(doctor_ids)).all()
+    except Exception:
+        return {}
     return {r.doctor_id: r for r in rows if r and not r.closed and r.interest_areas}
 
 
