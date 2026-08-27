@@ -43,6 +43,8 @@ class CardPushRecord(Base, TimestampMixin):
     read_at = Column(DateTime)
     tracked_seconds = Column(Integer, default=0)
     feedback = Column(String(500))
+    # 学术偏好接入（2026-08-27）：该医生兴趣是否匹配卡片主题；可空（历史推送不填充）
+    matched_interest = Column(Boolean)
 
     def to_dict(self) -> dict:
         return {

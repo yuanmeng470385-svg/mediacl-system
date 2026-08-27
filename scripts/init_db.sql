@@ -516,6 +516,7 @@ CREATE TABLE IF NOT EXISTS card_push_records (
     read_at TIMESTAMP,
     tracked_seconds INTEGER NOT NULL DEFAULT 0,
     feedback VARCHAR(500),                                -- useful/useless/追问文本
+    matched_interest BOOLEAN,  -- 学术偏好接入（2026-08-27）：医生兴趣是否匹配卡片主题；可空
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     CONSTRAINT uq_push UNIQUE (card_id, doctor_id)
