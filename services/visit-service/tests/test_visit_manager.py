@@ -907,6 +907,45 @@ def test_process_transcript_duplicate_tail_skips_detection():
     assert rec.compliance_flags is None  # 未写合规标记
 
 
+def test_process_transcript_speaker_doctor_prefix_and_skips_compliance():
+    """双方分离（2026-08-27）：speaker=doctor 落库带 [医生] 前缀 + 跳过代表合规
+
+    doctor 的话不判代表违规（医生随口说不算代表推广违规）；rep 话落库 [代表] 前缀
+    并正常合规检查。前缀用于记录/展示区分说话人。
+    """
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    calls = []
+
+    async def spy_compliance(content, context=None, **kw):
+        calls.append(content)
+        return {"blocked": False, "violations": [], "risk_level": "none"}
+
+    orig = vm_module.check_compliance
+    vm_module.check_compliance = spy_compliance
+    try:
+        mgr = VisitManager(tingwu=FakeTingwu())
+        start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+        visit_id = start["id"]
+
+        # doctor 话：跳过合规检查 + [医生] 前缀
+        r1 = asyncio.run(mgr.process_transcript(db, visit_id, user_id=1,
+                                                text_content="这药副作用大吗", speaker="doctor"))
+        assert r1["compliance"]["blocked"] is False
+        assert r1["compliance"]["violations"] == []
+        assert len(calls) == 0, "doctor 话不应触发代表合规检查"
+
+        # rep 话：正常合规检查 + [代表] 前缀
+        asyncio.run(mgr.process_transcript(db, visit_id, user_id=1,
+                                           text_content="这个药效果很好"))
+        assert len(calls) == 1, "rep 话应触发合规检查"
+
+        rec = FakeDb._records[visit_id]
+        assert rec.conversation_transcript == "[医生] 这药副作用大吗\n[代表] 这个药效果很好\n"
+    finally:
+        vm_module.check_compliance = orig
+
+
 def test_process_transcript_non_duplicate_still_appends():
     """F5 反例：非重复句走正常路径（追加 + 检测），去重不误伤"""
     from app.core.visit_manager import VisitManager
@@ -920,7 +959,7 @@ def test_process_transcript_non_duplicate_still_appends():
 
     result = asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="第二句转写"))
     assert result.get("duplicate") is None
-    assert rec.conversation_transcript == "第一句转写\n第二句转写\n"
+    assert rec.conversation_transcript == "第一句转写\n[代表] 第二句转写\n"
     assert len(spy_detector.calls) == 1  # 正常执行了异议检测
 
 

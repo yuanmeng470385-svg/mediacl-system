@@ -472,6 +472,7 @@ class VisitManager:
         user_id: int,
         audio_url: Optional[str] = None,
         text_content: Optional[str] = None,
+        speaker: str = "rep",
     ) -> Dict:
         """处理拜访中对话：ASR 转写 + 合规实时检查 + 异议识别
 
@@ -519,11 +520,17 @@ class VisitManager:
                 "ai_suggestion": None,
             }
 
-        # 合规实时检查（D）
-        compliance = await check_compliance(
-            text_content,
-            {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
-        )
+        # 双方分离（2026-08-27）：NLS 实时识别不支持声纹分离，speaker 由移动端
+        # 手动标注（rep/doctor）。合规只盯代表话术（speaker=rep）；医生的话不判
+        # 代表违规（跳过合规检查，violations 不累积）。异议识别两者都做（医生
+        # 异议是核心信号，代表补充也可能有异议）。
+        if speaker == "doctor":
+            compliance = {"blocked": False, "violations": [], "risk_level": "none"}
+        else:
+            compliance = await check_compliance(
+                text_content,
+                {"user_id": user_id, "type": "live_conversation", "visit_id": visit_id},
+            )
         # 异议识别（规则 + 语义，语义不可用自动降级）。B6：detect 内部是同步千问
         # 调用，包到线程池执行，防阻塞事件循环（与 end_visit 直调同模式）
         objection_result = await asyncio.to_thread(self.detector.detect, text_content)
@@ -538,8 +545,10 @@ class VisitManager:
         if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
             raise BusinessError(f"拜访已结束，不能追加转写: visit_id={visit_id}")
 
-        # 追加转写 + 累积合规标记（不整句覆盖，保留全部违规证据）
-        record.conversation_transcript = (record.conversation_transcript or "") + text_content + "\n"
+        # 追加转写 + 累积合规标记（不整句覆盖，保留全部违规证据）。
+        # 双方分离（2026-08-27）：行首 [代表]/[医生] 前缀落库，供记录/展示/摘要区分说话人
+        prefix = "[代表] " if speaker == "rep" else "[医生] "
+        record.conversation_transcript = (record.conversation_transcript or "") + prefix + text_content + "\n"
         existing_flags = record.compliance_flags or {"violations": []}
         existing_violations = existing_flags.get("violations") or []
         existing_violations.extend(compliance.get("violations", []))
@@ -585,11 +594,17 @@ class VisitManager:
 
         转写以 "\n" 分段追加（每句一行），末段 = 最后一个非空行；仅整段相等才算
         重复（不用 endswith —— 新句恰好是末句后缀时不应误判去重）。
+        2026-08-27 双方分离：落库行带 [代表]/[医生] 前缀，比较时忽略前缀。
         """
         if not existing or not text:
             return False
         parts = [p.strip() for p in existing.split("\n") if p.strip()]
-        return bool(parts) and parts[-1] == text
+        if not parts:
+            return False
+        last = parts[-1]
+        import re
+        last = re.sub(r"^\[(代表|医生)\] ", "", last)
+        return last == text
 
     # ==================== 拜访中：LLM 实时推荐（关键节点 + 话术建议） ====================
 

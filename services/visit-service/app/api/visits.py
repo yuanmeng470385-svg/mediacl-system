@@ -157,15 +157,18 @@ async def process_transcript(
     request = _body_as_dict(request, "transcript")
     audio_url = request.get("audio_url")
     text_content = request.get("text")
+    speaker = request.get("speaker", "rep")
     if audio_url is not None and not isinstance(audio_url, str):
         raise ParamError("audio_url 必须是字符串")
     if text_content is not None and not isinstance(text_content, str):
         raise ParamError("text 必须是字符串")
     if not audio_url and not text_content:
         raise ParamError("audio_url 和 text 至少提供一个")
+    if speaker not in ("rep", "doctor"):
+        raise ParamError("speaker 必须是 rep（代表）或 doctor（医生）")
     result = await _visit_manager.process_transcript(
         db, visit_id, current_user["id"],
-        audio_url=audio_url, text_content=text_content,
+        audio_url=audio_url, text_content=text_content, speaker=speaker,
     )
     return success(result)
 

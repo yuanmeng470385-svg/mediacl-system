@@ -47,8 +47,11 @@ export default function VisitInProgressScreen() {
   const [textModalVisible, setTextModalVisible] = useState(false);  // 手动输入对话 modal
   const [manualText, setManualText] = useState('');
   const [manualSpeaker, setManualSpeaker] = useState<'rep' | 'hcp'>('rep');
+  // 当前说话人（双方分离手动标注，2026-08-27）：NLS 实时识别不支持声纹分离，
+  // 代表在按住说话前切换"代表/医生"；ASR 与手动输入统一用当前说话人提交
+  const [currentSpeaker, setCurrentSpeaker] = useState<'rep' | 'hcp'>('rep');
+  const currentSpeakerRef = useRef<'rep' | 'hcp'>('rep');
   const [liveText, setLiveText] = useState('');           // 转写增量文本（onSentence 更新）
-  // ASR 帧的说话人标签（visit-service 新字段 'rep'/'doctor'，缺省 undefined → 按代表处理）
   const [liveSpeaker, setLiveSpeaker] = useState<string | undefined>(undefined);
   const asrSessionRef = useRef<ReturnType<typeof connectAsrStreaming> | null>(null);
   const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
@@ -79,7 +82,11 @@ export default function VisitInProgressScreen() {
     setTranscript((prev) => [...prev, seg]);
     setSending(true);
     try {
-      const result = await visitAPI.sendTranscript(visitId, { text });
+      // 双方分离（2026-08-27）：speaker 随转写提交，医生的话后端跳过代表合规、落库带 [医生] 前缀
+      const result = await visitAPI.sendTranscript(visitId, {
+        text,
+        speaker: speaker === 'hcp' ? 'doctor' : 'rep',
+      });
       if (result.objections?.length) setObjections((prev) => [...prev, ...result.objections]);
       if (result.compliance_alerts?.length) {
         setComplianceAlerts((prev) => [...prev, ...result.compliance_alerts]);
@@ -212,7 +219,8 @@ export default function VisitInProgressScreen() {
             setLiveText('');
             setLiveSpeaker(undefined);
             if (fullText && fullText.trim()) {
-              await addTranscript(fullText.trim(), speaker === 'doctor' ? 'hcp' : 'rep'); // 走异议/合规检测 + 落库
+              // 双方分离（2026-08-27）：NLS 不返回说话人，用代表手动标注的当前说话人
+              await addTranscript(fullText.trim(), currentSpeakerRef.current); // 走异议/合规检测 + 落库
             }
           },
         });
@@ -401,6 +409,24 @@ export default function VisitInProgressScreen() {
         </View>
       )}
 
+      {/* 说话人切换（双方分离手动标注 2026-08-27）：按住录音/输入前先切换当前说话人，
+          医生的话后端跳过代表合规、落库带 [医生] 前缀 */}
+      <View style={styles.speakerSwitchRow}>
+        <Text style={styles.speakerSwitchLabel}>当前说话人</Text>
+        {(['rep', 'hcp'] as const).map((s) => (
+          <TouchableOpacity
+            key={s}
+            style={[styles.speakerSwitchBtn, currentSpeaker === s && styles.speakerSwitchActive]}
+            onPress={() => { setCurrentSpeaker(s); currentSpeakerRef.current = s; }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.speakerSwitchText, currentSpeaker === s && styles.speakerSwitchTextActive]}>
+              {s === 'rep' ? '代表' : '医生'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* 底部操作栏 */}
       <View style={styles.bottomBar}>
         <TouchableOpacity
@@ -565,6 +591,19 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md, borderRadius: BorderRadius.full,
   },
   dismissText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
+  speakerSwitchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
+    backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.divider,
+  },
+  speakerSwitchLabel: { fontSize: FontSize.xs, color: Colors.textSecondary, marginRight: Spacing.xs },
+  speakerSwitchBtn: {
+    paddingHorizontal: Spacing.lg, paddingVertical: 6, borderRadius: BorderRadius.full,
+    backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.divider,
+  },
+  speakerSwitchActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  speakerSwitchText: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  speakerSwitchTextActive: { color: Colors.textWhite, fontWeight: '600' },
   bottomBar: {
     flexDirection: 'row', padding: Spacing.md, paddingBottom: 34,
     backgroundColor: Colors.white, borderTopWidth: 1, borderTopColor: Colors.divider, gap: Spacing.sm,

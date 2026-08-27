@@ -399,12 +399,15 @@ export const visitAPI = {
     };
   },
 
-  /** 上传转写文本（实时转写）——把后端的 compliance/objections 键位映射为屏幕消费形状 */
+  /** 上传转写文本（实时转写）——把后端的 compliance/objections 键位映射为屏幕消费形状。
+   *  speaker：双方分离手动标注（rep=代表 / doctor=医生，2026-08-27）；
+   *  医生的话后端跳过代表合规检查，落库带 [医生] 前缀 */
   async sendTranscript(
     visitId: number,
     data: {
       text?: string;
       audio_url?: string;
+      speaker?: 'rep' | 'doctor';
     }
   ): Promise<TranscriptResult> {
     const raw = await apiClient.request<any>(

@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from app.services.realtime_asr import (
-    MockRealtimeAsrClient, RealtimeAsrClient, nls_speaker_enabled, _sign_params, _percent_encode,
+    MockRealtimeAsrClient, RealtimeAsrClient, _sign_params, _percent_encode,
 )
 from app.api.asr_ws import _map_speaker
 from app.main import app
@@ -90,30 +90,20 @@ class TestAsrWebSocket:
 
 
 class TestSpeakerSeparation:
-    """需求 2.2.2 双方分离：NLS_SPEAKER_ENABLED 配置 + speaker 信息透传"""
+    """需求 2.2.2 双方分离（2026-08-27 修正）：
 
-    def test_nls_speaker_enabled_parsing(self, monkeypatch):
-        """NLS_SPEAKER_ENABLED env 解析：1/true/yes/on 开启，其余关闭（默认 false）"""
-        monkeypatch.delenv("NLS_SPEAKER_ENABLED", raising=False)
-        assert nls_speaker_enabled() is False
-        for v in ("1", "true", "TRUE", "yes", "on"):
-            monkeypatch.setenv("NLS_SPEAKER_ENABLED", v)
-            assert nls_speaker_enabled() is True, f"值 {v!r} 应视为开启"
-        monkeypatch.setenv("NLS_SPEAKER_ENABLED", "0")
-        assert nls_speaker_enabled() is False
+    NLS SpeechTranscriber 实时识别不支持说话人分离（协议文档参数表/事件无
+    speaker 字段），enable_speaker_identity/speaker_diarization 为无效参数已移除。
+    双方分离改由移动端手动标注（REST transcript 提交 speaker），ASR 帧缺省 rep。
+    """
 
-    def test_start_payload_speaker_params(self, monkeypatch):
-        """StartTranscription 参数：默认不带说话人分离；开启后带 enable_speaker_identity 等"""
+    def test_start_payload_has_no_speaker_separation(self, monkeypatch):
+        """StartTranscription 参数：不含（已移除的）说话人分离参数"""
         client = RealtimeAsrClient(app_key="test-appkey")
-        monkeypatch.delenv("NLS_SPEAKER_ENABLED", raising=False)
         payload = client._build_start_payload()
         assert payload["enable_intermediate_result"] is True  # 原有参数不受影响
         assert "enable_speaker_identity" not in payload
         assert "speaker_diarization" not in payload
-        monkeypatch.setenv("NLS_SPEAKER_ENABLED", "1")
-        payload = client._build_start_payload()
-        assert payload["enable_speaker_identity"] is True
-        assert payload["speaker_diarization"] == "speaker_change_detection"
 
     def test_mock_client_pushes_speaker_rep(self):
         """Mock 客户端：回推帧带 speaker="rep"（无真实说话人信息，固定 rep）"""

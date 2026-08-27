@@ -13,7 +13,6 @@
 配置（.env）：
   - NLS_APPKEY：NLS 管控台项目 Appkey（必填）
   - ALIYUN_ACCESS_KEY_ID / ALIYUN_ACCESS_KEY_SECRET：换取临时 Token（已有）
-  - NLS_SPEAKER_ENABLED：1 时开启说话人分离（需求 2.2.2"双方分离"，默认关闭）
 未配置 NLS_APPKEY 时使用 MockRealtimeAsrClient（文本模拟，开发/测试用）。
 """
 
@@ -40,11 +39,6 @@ NLS_TOKEN_URL = os.getenv("NLS_TOKEN_URL", "https://nls-meta.cn-shanghai.aliyunc
 # 断句完成的回调签名：async def on_sentence(text: str, index: int, is_final: bool, speaker=None)
 # speaker：说话人信息（Mock 固定 "rep"；真实 NLS 为 speaker_id/channel 原始值，由上层映射）
 SentenceHandler = Callable[[str, int, bool, Optional[str]], Awaitable[None]]
-
-
-def nls_speaker_enabled() -> bool:
-    """NLS_SPEAKER_ENABLED → 是否开启说话人分离（1/true/yes/on 视为开启，默认关闭）"""
-    return os.getenv("NLS_SPEAKER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
 
 
 # ==================== 临时 Token（阿里云通用 RPC 签名） ====================
@@ -147,15 +141,11 @@ class RealtimeAsrClient:
             "enable_inverse_text_normalization": True,
             "max_sentence_silence": 800,
         }
-        if nls_speaker_enabled():
-            # 说话人分离（需求 2.2.2"双方分离"）：
-            #   enable_speaker_identity=true 开启说话人分离；
-            #   speaker_diarization="speaker_change_detection" 按说话人变化断句
-            #   （也可填 "2-8" 指定说话人数范围）。
-            # 注意：参数名/取值以阿里云 NLS 实时识别（SpeechTranscriber）文档为准；
-            # 无真实 NLS 环境，此处待真机确认，如与文档不符仅需改本方法。
-            payload["enable_speaker_identity"] = True
-            payload["speaker_diarization"] = "speaker_change_detection"
+        # 2026-08-27 真机 + NLS WebSocket 协议文档确认：SpeechTranscriber 实时
+        # 识别不支持说话人分离（StartTranscription 参数表/事件里均无 speaker 字段，
+        # enable_speaker_identity/speaker_diarization 为无效参数，已移除）。
+        # 断句靠 VAD + max_sentence_silence（200-2000ms，默认 800ms）。
+        # "双方分离"（需求 2.2.2）改由移动端手动标注说话人（rep/doctor），见 visits.py。
         return payload
 
     async def start(self, on_sentence: SentenceHandler) -> None:

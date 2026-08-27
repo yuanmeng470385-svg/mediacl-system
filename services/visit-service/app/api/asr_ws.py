@@ -4,8 +4,9 @@
 
 移动端连上后：
   1. 以 Binary Frame 推送 PCM 音频（16k/16bit/单声道）
-  2. 服务端转发 NLS 实时语音识别，逐句回推 JSON（speaker 字段：双方分离，
-     有真实说话人信息时映射为 "rep"/"doctor"，无信息缺省 "rep"）：
+  2. 服务端转发 NLS 实时语音识别，逐句回推 JSON（speaker 字段：NLS 实时识别
+     不支持说话人分离（2026-08-27 文档确认），缺省 "rep"；双方分离由移动端
+     手动标注，经 REST transcript 提交 speaker）：
        {"type": "sentence", "index": 1, "text": "...", "speaker": "rep"}          # 中间结果
        {"type": "sentence", "index": 1, "text": "...", "final": true, "speaker": "rep"}   # 断句完成
        {"type": "compliance", "blocked": true, "violations": [...]}     # 该句合规拦截
@@ -219,6 +220,7 @@ async def ws_visit_asr(websocket: WebSocket, visit_id: int):
                         "type": "sentence", "index": index, "text": text, "final": is_final,
                         "speaker": _map_speaker(speaker),
                     })
+
             except (ConcurrencyError, ConnectionClosed, RuntimeError):
                 logger.info("客户端已断开或发送竞争，跳过断句推送")
             # 断句完成：追加到拜访记录 + 实时合规检查
