@@ -222,6 +222,17 @@ class AnswerGenerator:
         发给客户端）。阻断时产出 compliance 帧（客户端可据此提示）+ 掩码 done。
         """
         request_id = str(uuid.uuid4())
+
+        # 学术偏好接入（2026-08-27 spec）：偏好作为 prompt 上下文注入（带事实约束）。
+        # 百炼路径与降级 qwen 路径共用此 question；closed/无偏好 → 空片段不注入。
+        # get_profile 内部已兜底：db 为 None 或读取异常 → None → preference_context 返回空串。
+        from app.core import preference_ranking
+        pref = preference_ranking.preference_context(
+            preference_ranking.get_profile(db, user_id)
+        )
+        if pref:
+            question = f"{question}\n{pref}"
+
         try:
             start_time = time.time()
 

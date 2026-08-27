@@ -205,3 +205,42 @@ def test_generate_stream_aclose_still_idle(monkeypatch):
     first = asyncio.run(run())
     assert first["type"] == "delta"
     assert registry.get(1) is None  # 断开后 finally 置 idle
+
+
+def test_generate_stream_injects_preference_context(monkeypatch):
+    """Task 4（2026-08-27）：医生学术偏好作为 prompt 上下文注入（含事实约束）。
+
+    mock get_profile 返回偏好画像 → 断言百炼 chat_stream 收到的 prompt
+    同时含「不得改变医学事实」硬约束与兴趣领域关键词。db=None 时仍应注入
+    （get_profile 被 mock，直接返回画像）。
+    """
+    from app.core import preference_ranking
+    captured = {}
+
+    def fake_get_profile(db, doctor_id):
+        class P:
+            interest_areas = ["肿瘤"]
+            preferred_doc_type = None
+            preferred_style = "简洁"
+            closed = False
+        return P()
+
+    class FakeBailian:
+        async def chat_stream(self, app_id, prompt, session_id=None):
+            captured["prompt"] = prompt
+            yield {"type": "delta", "text": "好的"}
+            yield {"type": "done", "text": "好的"}
+
+    monkeypatch.setattr(preference_ranking, "get_profile", fake_get_profile)
+    g = _mk(monkeypatch, _check_pass)
+    g.bailian = FakeBailian()
+
+    async def run():
+        frames = [f async for f in g.generate_stream(
+            question="肿瘤怎么治疗", specialist=_spec(), user_id=2, db=None)]
+        return frames
+
+    frames = asyncio.run(run())
+    assert frames[-1]["type"] == "done"
+    assert "不得改变医学事实" in captured["prompt"]
+    assert "肿瘤" in captured["prompt"]
