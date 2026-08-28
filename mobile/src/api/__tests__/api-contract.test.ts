@@ -179,6 +179,45 @@ describe('visitAPI', () => {
     expect(r).toEqual({ follow_up_plan: '', suggested_date: '' });
   });
 
+  it('endVisit / followUp / prepareVisit 客户端超时放宽到 120s（不再被默认 30s 掐断，2026-08-28 超时链修复）', async () => {
+    // fetch mock 必须响应 abort signal：真 fetch 会因 abort reject AbortError，
+    // 永不 resolve 的普通 mock 抓不到超时行为
+    fetchMock = jest.fn().mockImplementation((_url: string, init: any) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const e = new Error('Aborted');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      })
+    );
+    (global as any).fetch = fetchMock;
+    jest.useFakeTimers();
+    try {
+      const PENDING = 'PENDING' as any;
+      let endErr: any = PENDING;
+      let followErr: any = PENDING;
+      let prepErr: any = PENDING;
+      let getErr: any = PENDING;
+      visitAPI.endVisit(1).catch((e) => { endErr = e; });
+      visitAPI.followUp(1).catch((e) => { followErr = e; });
+      visitAPI.prepareVisit({ hcpId: 1 }).catch((e) => { prepErr = e; });
+      visitAPI.getById(1).catch((e) => { getErr = e; });
+      await jest.advanceTimersByTimeAsync(30_500);
+      expect(endErr).toBe(PENDING);      // 120s 未到，不允许被默认 30s 掐断
+      expect(followErr).toBe(PENDING);
+      expect(prepErr).toBe(PENDING);     // pre-visit 走专员链路（60s），30s 同样会掐断
+      expect(getErr).not.toBe(PENDING);  // 对照：默认路由 30s 正常触发
+      expect(getErr.message).toContain('请求超时');
+      await jest.advanceTimersByTimeAsync(90_000);
+      expect(endErr.message).toContain('请求超时');
+      expect(followErr.message).toContain('请求超时');
+      expect(prepErr.message).toContain('请求超时');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('list 解包 pagination 嵌套并映射 items（hcp_name / planned_date / ai_summary）', async () => {
     fetchMock.mockResolvedValueOnce(okResponse({
       items: [

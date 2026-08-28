@@ -5,7 +5,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, Modal,
-  Alert, ActivityIndicator, PermissionsAndroid, Platform,
+  Alert, ActivityIndicator, PermissionsAndroid, Platform, BackHandler,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -41,6 +41,10 @@ export default function VisitInProgressScreen() {
   const [aiSuggestion, setAiSuggestion] = useState<AiSuggestion | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [sending, setSending] = useState(false);
+  // 结束拜访生成中（导航防御 2026-08-28）：endVisit 是同步 AI 生成（正常 ~3s，
+  // qwen 慢时最长 120s），在途期间锁全部操作 + 遮罩 + 拦物理返回 —— 中途退出
+  // 正是"结束拜访黑屏"边界（从已卸载屏幕 navigation.replace）
+  const [ending, setEnding] = useState(false);
   const [showRedLine, setShowRedLine] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -56,6 +60,8 @@ export default function VisitInProgressScreen() {
   const asrSessionRef = useRef<ReturnType<typeof connectAsrStreaming> | null>(null);
   const recordingRef = useRef(false); // recording 状态的 ref 镜像，供卸载清理读取
   const pressInFlightRef = useRef(false); // 双按守卫：一次按下只允许一条 press 链（防双会话泄漏）
+  const endingRef = useRef(false); // ending 的 ref 镜像：Alert 回调闭包里读 state 是旧值，双确认守卫必须用 ref
+  const mountedRef = useRef(true); // 导航防御：endVisit 在途期间屏幕被卸载 → settle 后不再 replace
   const timerRef = useRef<ReturnType<typeof setInterval>>();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -66,10 +72,22 @@ export default function VisitInProgressScreen() {
 
   // 卸载清理：停止录音（释放麦克风）、关闭 ASR WS，避免原生层持续录音与孤儿会话
   useEffect(() => () => {
+    mountedRef.current = false; // 导航防御：本屏已卸载，在途 endVisit settle 后不得再导航
     if (recordingRef.current) stopRecording().catch(() => {});
     asrSessionRef.current?.close();
     asrSessionRef.current = null;
   }, []);
+
+  // 导航防御：endVisit 在途时拦截 Android 物理返回（gestureEnabled 只禁 iOS
+  // 手势，拦不住物理键）—— 生成中退出后从已卸载屏幕 replace 正是黑屏来源
+  useEffect(() => {
+    if (!ending) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      Alert.alert('提示', '正在生成拜访总结，请稍候…');
+      return true;
+    });
+    return () => sub.remove();
+  }, [ending]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -114,20 +132,33 @@ export default function VisitInProgressScreen() {
 
   // 只调一次 end：结果放进 navigation params 传给 VisitEndScreen，避免第二次 end 触发后端"已结束"锁。
   // 只成功才导航；失败弹错误提示（不静默吞错）。"已结束"（后端幂等锁拒绝重复 end）→
-  // 直接进总结页 —— VisitEndScreen 用 getById fallback 拉取已生成的总结
+  // 直接进总结页 —— VisitEndScreen 用 getById fallback 拉取已生成的总结。
+  // 导航防御（2026-08-28）：在途 ending 态（ref 守卫防两个确认弹窗排队双发），
+  // 屏幕被卸载后 settle 一律不再 navigation.replace —— Android native-stack
+  // 在 dismiss 后 replace 正是"结束拜访黑屏"的来源；后端已照常完成，报告可
+  // 从工作台/拜访详情重看
   const handleEndVisit = () => {
+    if (endingRef.current) return;
     Alert.alert('结束拜访', '确认结束本次拜访并生成总结？', [
       { text: '取消', style: 'cancel' },
       { text: '确认结束', onPress: async () => {
+        if (endingRef.current) return;
+        endingRef.current = true;
+        setEnding(true);
         try {
           const summary = await visitAPI.endVisit(visitId);
+          if (!mountedRef.current) return;
           navigation.replace('VisitEnd', { visitId, summary });
         } catch (e: any) {
+          if (!mountedRef.current) return;
           if (String(e?.message || '').includes('已结束')) {
             navigation.replace('VisitEnd', { visitId });
           } else {
             Alert.alert('结束拜访失败', e?.message || '请稍后重试');
           }
+        } finally {
+          endingRef.current = false;
+          if (mountedRef.current) setEnding(false);
         }
       }},
     ]);
@@ -263,7 +294,7 @@ export default function VisitInProgressScreen() {
     <View style={styles.container}>
       {/* 头部 */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} disabled={ending}>
           <Icon name={ActionIcons.back} size={22} color={Colors.textWhite} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -403,6 +434,17 @@ export default function VisitInProgressScreen() {
         </View>
       )}
 
+      {/* 结束拜访生成中遮罩（导航防御）：覆盖红线弹窗之上，锁全部可见操作 */}
+      {ending && (
+        <View style={styles.endingOverlay}>
+          <View style={styles.endingBox}>
+            <ActivityIndicator size="large" color={Colors.primary} />
+            <Text style={styles.endingText}>AI 正在生成拜访总结...</Text>
+            <Text style={styles.endingHint}>请勿退出，通常几秒内完成</Text>
+          </View>
+        </View>
+      )}
+
       {/* 转写中提示行（speaker 标签有就显示，没有就不显示，向后兼容） */}
       {(transcribing || liveText) && (
         <View style={{ paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, backgroundColor: Colors.primarySurface }}>
@@ -437,7 +479,7 @@ export default function VisitInProgressScreen() {
         <TouchableOpacity
           style={[styles.simBtn, recording && { backgroundColor: Colors.danger }]}
           onPress={handleVoice}
-          disabled={sending || transcribing}
+          disabled={sending || transcribing || ending}
         >
           <Icon name={recording ? 'stop-circle' : 'microphone'} size={16} color={Colors.textWhite} />
           <Text style={styles.simBtnText}>{recording ? '停止录音' : '录音'}</Text>
@@ -445,13 +487,13 @@ export default function VisitInProgressScreen() {
         <TouchableOpacity
           style={styles.simBtn}
           onPress={() => { setManualText(''); setManualSpeaker('rep'); setTextModalVisible(true); }}
-          disabled={sending || transcribing}
+          disabled={sending || transcribing || ending}
         >
           <Icon name="keyboard-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.simBtnText}>输入文字</Text>
         </TouchableOpacity>
-        {/* G5：sending（transcript POST 在途）时禁用结束 —— 在途句未落库就结束会丢末句 */}
-        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing || sending}>
+        {/* G5：sending（transcript POST 在途）时禁用结束 —— 在途句未落库就结束会丢末句；ending 双保险 */}
+        <TouchableOpacity style={styles.endBtn} onPress={handleEndVisit} disabled={recording || transcribing || sending || ending}>
           <Icon name="stop-circle-outline" size={16} color={Colors.textWhite} />
           <Text style={styles.endBtnText}>结束</Text>
         </TouchableOpacity>
@@ -582,6 +624,19 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center', alignItems: 'center', zIndex: 100,
   },
+  endingOverlay: {
+    ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center', zIndex: 200,
+  },
+  endingBox: {
+    backgroundColor: Colors.white, borderRadius: BorderRadius.xl,
+    padding: Spacing.xxl, alignItems: 'center', margin: Spacing.xxl,
+  },
+  endingText: {
+    marginTop: Spacing.md, fontSize: FontSize.md,
+    color: Colors.textPrimary, fontWeight: '600',
+  },
+  endingHint: { marginTop: Spacing.xs, fontSize: FontSize.xs, color: Colors.textHint },
   redLineBox: {
     backgroundColor: Colors.white, margin: Spacing.xxxl,
     borderRadius: BorderRadius.xl, padding: Spacing.xxl,

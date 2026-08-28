@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   Share,
+  BackHandler,
 } from 'react-native';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
@@ -50,6 +51,15 @@ export default function VisitEndScreen() {
     if (!initialSummary) loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 导航防御（2026-08-28）：loadSummary 在途（重入本页自己调 endVisit，最长
+  // 120s）时拦截 Android 物理返回 —— 中途退出丢掉报告展示入口；屏幕上有
+  // 加载指示器，静默拦截即可。拜访后端状态不受影响，极端情况可从详情页重看
+  useEffect(() => {
+    if (!loading) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [loading]);
 
   const loadSummary = async () => {
     try {

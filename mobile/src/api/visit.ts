@@ -57,6 +57,15 @@ const VALID_SENTIMENTS = ['positive', 'neutral', 'negative'];
 export const AI_SUMMARY_PLACEHOLDER = '（AI 总结生成失败，拜访尚未结束，可重试结束拜访）';
 
 /**
+ * 同步 AI 生成接口（endVisit / followUp）的客户端超时：后端 end_visit 直调
+ * qwen（60s 读超时 × 重试 1 次）+ 合规检查（10s ×3），最坏 ~150s；网关已为
+ * 这两个路由开 120s carve-out（gateway main.py，2026-08-28），客户端同步放宽 ——
+ * 旧 30s 会先于后端掐断，用户重试只能排在后端行锁后再超时一次（"结束拜访
+ * 卡死几分钟"的来源之一）
+ */
+const AI_SYNC_TIMEOUT_MS = 120000;
+
+/**
  * 把后端 to_dict 的 ai_summary（字符串）解析为 VisitSummary。
  * 结构化字段（key_points/hcp_interests/hcp_objections/next_visit_plan）优先读记录顶层
  * （后端 to_dict 独立列），其次读 ai_summary JSON 内部（兼容 JSON 字符串形态）。
@@ -364,10 +373,13 @@ export const visitAPI = {
     hcpId: number;
     productId?: number;
   }): Promise<VisitPrepareData> {
+    // 超时链修复补遗（2026-08-28）：prepare_visit 走专员链路生成推荐
+    // （specialist_client 60s），默认 30s 会先掐断 → 与 endVisit 同步放宽
     const raw = await apiClient.request<any>(
       'POST',
       '/api/v1/visits/pre-visit',
       { hcp_id: params.hcpId, product_id: params.productId },
+      AI_SYNC_TIMEOUT_MS,
     );
     return mapPrepareResult(raw);
   },
@@ -426,7 +438,9 @@ export const visitAPI = {
   async endVisit(visitId: number): Promise<VisitSummary & { retryable?: boolean }> {
     const raw = await apiClient.request<any>(
       'POST',
-      `/api/v1/visits/${visitId}/end`
+      `/api/v1/visits/${visitId}/end`,
+      undefined,
+      AI_SYNC_TIMEOUT_MS
     );
     if (typeof raw?.ai_summary === 'string' && raw.ai_summary === AI_SUMMARY_PLACEHOLDER) {
       return { ...mapEndResult(raw), retryable: true };
@@ -471,7 +485,9 @@ export const visitAPI = {
   async followUp(visitId: number): Promise<FollowUpResult> {
     const raw = await apiClient.request<any>(
       'POST',
-      `/api/v1/visits/${visitId}/follow-up`
+      `/api/v1/visits/${visitId}/follow-up`,
+      undefined,
+      AI_SYNC_TIMEOUT_MS
     );
     return mapFollowUpResult(raw);
   },

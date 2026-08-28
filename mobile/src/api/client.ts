@@ -9,14 +9,6 @@ import { API_HOST, API_SCHEME } from '../config';
 // 开发环境用本地网关，生产环境用正式地址；host 集中定义在 src/config.ts（真机联调改一处）
 const API_BASE_URL = `${API_SCHEME}://${API_HOST}:8000`;
 
-interface RequestOptions {
-  method: string;
-  path: string;
-  data?: any;
-  params?: Record<string, any>;  // GET 查询参数
-  timeout?: number;
-}
-
 class APIClient {
   private baseURL: string;
   private token: string | null = null;
@@ -48,10 +40,17 @@ class APIClient {
     await AsyncStorage.removeItem('medagent_token');
   }
 
+  /**
+   * JSON 请求通道。timeoutMs：单次调用超时（默认 30s）；同步 AI 生成类接口
+   * （endVisit / followUp，后端 qwen 60s×2 + 合规 10s×3 最坏 ~150s）需放宽到
+   * 120s —— 否则客户端 30s 先于网关/后端掐断，用户重试只能排在后端行锁后
+   * 再超时一次（表现为"结束拜访卡死几分钟"，2026-08-28 超时链修复）
+   */
   async request<T>(
     method: string,
     path: string,
-    dataOrParams?: any
+    dataOrParams?: any,
+    timeoutMs: number = 30000
   ): Promise<T> {
     const token = await this.getToken();
     const headers: Record<string, string> = {
@@ -79,9 +78,9 @@ class APIClient {
       body = JSON.stringify(dataOrParams);
     }
 
-    // 超时控制
+    // 超时控制（per-call 可覆盖，见 request 的 timeoutMs 文档）
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
