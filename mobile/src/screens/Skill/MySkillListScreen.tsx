@@ -79,7 +79,7 @@ export default function MySkillListScreen() {
       <View style={[styles.card, Shadow.card]}>
         <View style={styles.cardHead}>
           <View style={styles.iconBox}>
-            <Icon name="creation-outline" size={18} color={Colors.primary} />
+            <Icon name="creation" size={18} color={Colors.primary} />
           </View>
           <Text style={styles.name} numberOfLines={1}>{item.name || `Skill #${item.id}`}</Text>
           <View style={[styles.statusBadge, { backgroundColor: badge.bg }]}>
@@ -145,7 +145,7 @@ export default function MySkillListScreen() {
           }
           ListEmptyComponent={
             <EmptyState
-              icon="creation-outline"
+              icon="creation"
               title="暂无 Skill"
               description="发布 Skill 后，审核通过即可上架广场"
             />
