@@ -811,9 +811,13 @@ class VisitManager:
 
         auth_token 保留参数（旧专员链路透传 JWT，直调后不再使用，接口签名兼容）
         """
-        # 行锁读：并发双 end / end+cancel / end+transcript 的读改写窗口串行化 ——
-        # 只有第一个拿到锁的请求能看到"未结束"状态，其余在锁上等，复查时拒绝
-        record = VisitRepo.get(db, visit_id, for_update=True)
+        # 批4（2026-08-28）：锁窗口收窄（与 _llm_recommend 的 F2 同款三段式）——
+        # 旧实现入口即 FOR UPDATE 且行锁跨整个 AI 生成（最坏 ~150s），期间同 visit
+        # 的 transcript 追加 / 重试 end 全部在锁上排队，叠加网关 30s 超时表现为
+        # "结束拜访卡死"。改为：无锁读+校验 → 锁外生成 → 短锁复查落库。拿到锁前
+        # 的并发状态翻转（取消 / 另一 end 完成）由锁内复查拒绝；生成期间转写
+        # 并发追加被容忍（追加句保留，摘要基于生成前全文快照，warning 留痕）。
+        record = VisitRepo.get(db, visit_id)
         if not record:
             raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
 
@@ -829,26 +833,26 @@ class VisitManager:
         # 覆盖 conversation_transcript（被标记过 R002/R006 的对话可被洗白）。
         # 收紧为：必须以现有转写为前缀（允许追加、拒绝篡改/替换）；新增部分
         # 过合规检查，violations 按 B2 去重口径累加 compliance_flags。
-        # fail-closed：check_compliance 客户端异常照旧传播（B5 语义，内容不落库）。
+        # 批4 调整：前缀校验留在此处快速失败；新增部分合规检查移到锁外（HTTP
+        # 调用不占行锁）；写回转写与 flags 合并移到锁内复查后（防覆盖并发追加）。
+        # fail-closed：check_compliance 客户端异常照旧传播（B5 语义，此阶段未落库）。
         existing_transcript = record.conversation_transcript or ""
+        if full_transcript and not full_transcript.startswith(existing_transcript):
+            raise ParamError(
+                "full_transcript 必须包含现有转写内容（仅允许追加，不能替换或篡改）"
+            )
+        # 摘要输入快照（不可变 str）：full_transcript 优先（含补传部分）；
+        # 生成期间的并发追加不进入本次摘要（锁内复查校验/留痕）
+        transcript = (full_transcript or existing_transcript) or "（无转写内容）"
+
+        # M5 新增部分合规（锁外，fail-closed 传播）；结果留到锁内合并
+        ft_compliance = None
         if full_transcript:
-            if not full_transcript.startswith(existing_transcript):
-                raise ParamError(
-                    "full_transcript 必须包含现有转写内容（仅允许追加，不能替换或篡改）"
-                )
-            record.conversation_transcript = full_transcript
             new_portion = full_transcript[len(existing_transcript):].strip()
             if new_portion:
                 ft_compliance = await check_compliance(
                     new_portion, {"user_id": user_id, "type": "user_input", "visit_id": visit_id},
                 )
-                flags = record.compliance_flags or {"violations": []}
-                flags["violations"] = _dedupe_violations(
-                    list(flags.get("violations") or []) + list(ft_compliance.get("violations") or [])
-                )
-                flags["blocked"] = bool(flags.get("blocked")) or bool(ft_compliance.get("blocked"))
-                record.compliance_flags = flags
-        transcript = record.conversation_transcript or "（无转写内容）"
 
         # M7（2026-08-14）：对话全文是用户可控内容（转写/补传），包在
         # <user_content> 定界内（与 compliance S7 同一标准），system 侧声明
@@ -964,6 +968,37 @@ class VisitManager:
                     )
                     key_points = interests = objections = follow_up = []
                     sentiment, next_plan = "neutral", {}
+
+        # ---- 批4：短锁复查落库（行锁只覆盖读改写窗口，不跨生成）----
+        # populate_existing 刷新 identity map，record 即最新已提交状态；
+        # 拿到锁前的并发变更在此统一裁决：
+        #   取消 / 另一 end 完成 → 拒绝（不覆盖对方写入）；
+        #   full_transcript 已落后于转写（生成期间被并发追加）→ 拒绝（整段写回会丢并发句）；
+        #   未带 full_transcript 的并发追加 → 容忍（不写转写字段，追加句保留）
+        record = VisitRepo.get(db, visit_id, for_update=True)
+        if not record:
+            raise BusinessError(f"拜访记录不存在: visit_id={visit_id}")
+        if record.status == VISIT_STATUS_CANCELLED:
+            raise BusinessError(f"拜访已取消，不能结束: visit_id={visit_id}")
+        if record.ai_summary and record.ai_summary != AI_SUMMARY_PLACEHOLDER:
+            raise BusinessError(f"拜访已结束，不能重复结束: visit_id={visit_id}")
+        if full_transcript:
+            if not full_transcript.startswith(record.conversation_transcript or ""):
+                raise ParamError(
+                    "full_transcript 必须包含现有转写内容（仅允许追加，不能替换或篡改）"
+                )
+            record.conversation_transcript = full_transcript
+            if ft_compliance:
+                flags = record.compliance_flags or {"violations": []}
+                flags["violations"] = _dedupe_violations(
+                    list(flags.get("violations") or []) + list(ft_compliance.get("violations") or [])
+                )
+                flags["blocked"] = bool(flags.get("blocked")) or bool(ft_compliance.get("blocked"))
+                record.compliance_flags = flags
+        elif (record.conversation_transcript or "") != existing_transcript:
+            logger.warning(
+                "end_visit 生成期间转写被并发追加，摘要基于生成前全文: visit_id=%s", visit_id
+            )
 
         # 时长 = 开始到结束的分钟数
         duration = None

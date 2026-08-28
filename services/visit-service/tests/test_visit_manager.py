@@ -1340,6 +1340,157 @@ def test_prompt_wrapping_end_visit():
     assert "聊了疗效" in wrapped, "转写内容应包在定界内"
 
 
+# ---------- 批4（2026-08-28）：end_visit 锁窗口收窄 ----------
+# 旧实现入口即 FOR UPDATE 且行锁跨整个 AI 生成（最坏 ~150s），期间同 visit 的
+# transcript 追加 / 重试 end 全部排队 → 叠加网关 30s 超时表现为"结束拜访卡死"。
+# 新三段式（与 _llm_recommend 的 F2 同款）：无锁读+校验 → 锁外生成 → 短锁复查落库。
+#
+# 坑：注入的 qwen 会被 process_transcript 的 _llm_recommend（实时推荐）共用 ——
+# "生成中途"桩若不门控会在 process 阶段提前触发，测试变成假绿。桩必须只在
+# end_visit 的生成调用上生效（以下 _is_end_generation 按提问词门控）。
+
+_END_PROMPT_MARK = "生成结构化拜访记录"  # end_visit 专属提问词（follow_up 是"跟进建议"、_llm_recommend 是"陪访助手"）
+
+
+def _is_end_generation(messages) -> bool:
+    return _END_PROMPT_MARK in str(messages)
+
+
+def _only_visit_record():
+    """从 FakeDb 类级存储里取唯一的 VisitRecord（单记录测试场景）"""
+    return next(r for r in FakeDb._records.values() if isinstance(r, VisitRecord))
+
+
+def test_end_visit_generates_outside_row_lock():
+    """生成必须发生在锁外：调用序 = 无锁读 → qwen 生成 → 短锁复查（旧实现生成前已持锁）"""
+    from app.core.visit_manager import VisitManager
+    calls = []
+    orig_get = vm_module.VisitRepo.get
+
+    def recording_get(db, visit_id, for_update=False):
+        calls.append(for_update)
+        return orig_get(db, visit_id, for_update)
+
+    class _QwenRecording:
+        def chat(self, messages, **kwargs):
+            if _is_end_generation(messages):
+                calls.append("qwen")
+            return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_QwenRecording())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="这个药价格有点贵"))
+
+    vm_module.VisitRepo.get = staticmethod(recording_get)  # 仅记录 end_visit 阶段
+    try:
+        asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+    finally:
+        vm_module.VisitRepo.get = orig_get
+
+    qwen_idx = calls.index("qwen")
+    assert not any(c is True for c in calls[:qwen_idx]), "生成前不得出现 for_update 读"
+    assert any(c is True for c in calls[qwen_idx:]), "生成后必须有短锁复查"
+
+
+def test_end_visit_cancelled_during_generation_rejected():
+    """生成期间拜访被并发取消 → 锁内复查拒绝（旧实现会把 completed 写回去覆盖取消）"""
+    from app.core.visit_manager import VisitManager
+
+    class _QwenCancelsMidFlight:
+        def chat(self, messages, **kwargs):
+            if _is_end_generation(messages):
+                _only_visit_record().status = "cancelled"
+            return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_QwenCancelsMidFlight())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="这个药价格有点贵"))
+
+    try:
+        asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+        assert False, "生成期间被取消，应抛 BusinessError"
+    except Exception as e:
+        assert "已取消" in str(e)
+    assert FakeDb._records[start["id"]].status == "cancelled", "取消状态不得被 completed 覆盖"
+
+
+def test_end_visit_ended_during_generation_rejected():
+    """生成期间另一并发 end 已完成 → 锁内复查拒绝（不覆盖已生成的总结）"""
+    from app.core.visit_manager import VisitManager
+
+    class _QwenEndsMidFlight:
+        def chat(self, messages, **kwargs):
+            if _is_end_generation(messages):
+                rec = _only_visit_record()
+                rec.ai_summary = "另一并发请求生成的总结"
+                rec.status = "completed"
+            return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_QwenEndsMidFlight())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="这个药价格有点贵"))
+
+    try:
+        asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+        assert False, "已被并发结束，应抛 BusinessError"
+    except Exception as e:
+        assert "已结束" in str(e)
+    assert FakeDb._records[start["id"]].ai_summary == "另一并发请求生成的总结", "并发总结不得被覆盖"
+
+
+def test_end_visit_transcript_appended_during_generation_preserved():
+    """生成期间转写被并发追加 → end 仍成功；追加句保留在证据里（摘要基于旧全文，容忍降级）"""
+    from app.core.visit_manager import VisitManager
+
+    class _QwenAppendsMidFlight:
+        def chat(self, messages, **kwargs):
+            if _is_end_generation(messages):
+                rec = _only_visit_record()
+                rec.conversation_transcript = (rec.conversation_transcript or "") + "[代表] 生成期间新句\n"
+            return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_QwenAppendsMidFlight())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="这个药价格有点贵"))
+
+    asyncio.run(mgr.end_visit(db, start["id"], user_id=1))
+
+    rec = FakeDb._records[start["id"]]
+    assert "生成期间新句" in rec.conversation_transcript, "并发追加的转写不得被覆盖丢失"
+    assert rec.ai_summary == _SUMMARY_JSON["summary"]
+    assert rec.status == "completed"
+
+
+def test_end_visit_full_transcript_stale_after_concurrent_append_rejected():
+    """带 full_transcript 且生成期间转写被追加 → 锁内前缀复查拒绝（防整段覆盖丢并发句）"""
+    from app.core.visit_manager import VisitManager
+
+    class _QwenAppendsMidFlight:
+        def chat(self, messages, **kwargs):
+            if _is_end_generation(messages):
+                rec = _only_visit_record()
+                rec.conversation_transcript = (rec.conversation_transcript or "") + "[代表] 生成期间新句\n"
+            return {"content": json.dumps(_SUMMARY_JSON, ensure_ascii=False)}
+
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_QwenAppendsMidFlight())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    asyncio.run(mgr.process_transcript(db, start["id"], user_id=1, text_content="这个药价格有点贵"))
+
+    # 客户端在转写追加前拿到的全文快照（不含并发新句）
+    stale_full = FakeDb._records[start["id"]].conversation_transcript
+    try:
+        asyncio.run(mgr.end_visit(db, start["id"], user_id=1, full_transcript=stale_full))
+        assert False, "full_transcript 已落后于现有转写，应拒绝"
+    except Exception as e:
+        assert "必须包含现有转写内容" in str(e)
+    assert "生成期间新句" in FakeDb._records[start["id"]].conversation_transcript, "并发句不得被覆盖"
+
+
 def test_prompt_wrapping_objection_detector_semantic():
     """M7：objection_detector 语义层 —— 转写（含注入文本）包在 <user_content> 内"""
     from app.core.objection_detector import ObjectionDetector
