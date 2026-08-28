@@ -305,7 +305,20 @@ async def proxy(request: Request, path: str):
     # 客户端看到 504）。qualifications 同样 120s carve-out。
     # B9 修复（2026-08-17）：医生端医师认证证书上传同款问题（doctorAPI 客户端
     # 超时 60s，OSS 上传慢时网关 30s 先断）—— doctors 同样 120s carve-out。
+    # 超时链修复（2026-08-28）：拜访 end / follow-up 是同步 AI 生成链（end_visit
+    # 直调 qwen 60s×2 + 合规 10s×3，最坏 ~150s），30s 网关超时先掐断 —— 客户端
+    # 看到 504 但后端 handler 继续跑完并持有 FOR UPDATE 行锁，重试 end 排在
+    # 行锁后再超时一次（表现为"结束拜访卡死几分钟"）。照 F3/B9 先例仅这几个
+    # AI 路由放宽到 120s；visits 其余路由（列表/详情/转写/取消）维持 30s。
+    # 补遗（同日）：pre-visit 走专员链路（specialist_client 60s 超时）同款先掐断
+    # 问题，一并放宽。
     if path.startswith(("api/v1/knowledge/", "api/v1/qualifications/", "api/v1/doctors/")):
+        proxy_timeout = 120.0
+    elif path.startswith("api/v1/visits/") and (
+        path == "api/v1/visits/pre-visit"
+        or path.endswith("/end")
+        or path.endswith("/follow-up")
+    ):
         proxy_timeout = 120.0
     else:
         proxy_timeout = 30.0
