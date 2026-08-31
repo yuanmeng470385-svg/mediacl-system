@@ -245,6 +245,29 @@ def test_extract_filters_out_of_range_enums(fresh_state, monkeypatch):
     }
 
 
+def test_extract_keeps_legal_non_default_enums(fresh_state, monkeypatch):
+    """防回归：合法非默认枚举值必须原样存活，不被白名单回退改写。
+    曾因 VALID_OPENING 写成 暝（U+669D）而 prompt/specialists.py 均为 暄（U+6684），
+    导致 LLM 输出合法值"先寒暄再进入"时恒被静默回退"直切主题"。"""
+    _add_session(1, rep_count=10)
+    captured = {}
+    monkeypatch.setattr(qc.QwenClient, "chat", _fake_chat(captured, draft={
+        "name": "幽默详尽风", "description": "心内科", "content": "素材",
+        "style_tags": ["幽默"],
+        "skill_weights": {"formal_level": "非常严谨", "reply_length": "详尽",
+                          "opening_mode": "先寒暄再进入"},
+    }))
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={"session_ids": [1]},
+                       headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["style_tags"] == ["幽默"]
+    assert data["skill_weights"] == {
+        "formal_level": "非常严谨", "reply_length": "详尽", "opening_mode": "先寒暄再进入",
+    }
+
+
 def test_extract_llm_missing_content_400(fresh_state, monkeypatch):
     _add_session(1, rep_count=10)
     captured = {}

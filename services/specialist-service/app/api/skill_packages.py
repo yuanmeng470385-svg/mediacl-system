@@ -31,12 +31,13 @@ SKILL_ADMIN_ROLES = ("admin", "manager", "compliance", "medical")
 VALID_AUDIT = ("pending", "approved", "rejected")
 VALID_OFF_SHELF_TYPE = ("compliance", "author")
 
-# 三期 P：风格提取草稿的枚举白名单 —— 与 specialists.py style-test、发布表单
-# （SkillReleaseScreen）逐字对齐（决策 3/12），防两处漂移
+# 三期 P：风格提取草稿的枚举白名单 —— 与 specialists.py
+# style-test 白名单逐字对齐（决策 3/12）。发布表单 SkillReleaseScreen
+# 的开场白现仍两值“先寒暄”，三值化收敛在 Task 4 处理
 VALID_STYLE_TAGS = ("严谨学术", "亲和力", "幽默", "专业")
 VALID_FORMAL = ("非常严谨", "标准学术", "略带亲和力")
 VALID_LENGTH = ("简洁", "标准", "详尽")
-VALID_OPENING = ("直切主题", "先寒暝再进入")
+VALID_OPENING = ("直切主题", "先寒暄再进入")
 
 # 每用户每日提取限额（决策 4）：走 audit-service 计数，超限拒绝重试
 EXTRACT_DAILY_LIMIT = 3
