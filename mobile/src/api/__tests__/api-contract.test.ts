@@ -2,6 +2,7 @@
  * API 契约测试：锁定每个方法实际发出的 URL / method / body 形状。
  * 这一类 bug（路径漂移、camelCase 与 snake_case 错配）编译器抓不到，
  * 2026-08-05 审计一次性发现了 7 处。
+ * 全量回归基线（2026-08-31）：mobile jest 99 / specialist-service pytest 320 / gateway pytest 88。
  */
 import { visitAPI, mapComplianceViolations, mapTranscriptResult } from '../visit';
 import { specialistAPI } from '../specialist';
@@ -9,6 +10,7 @@ import { complianceAPI } from '../compliance';
 import { hcpAPI } from '../hcp';
 import { contentAPI, mapDocType } from '../content';
 import { authAPI } from '../auth';
+import { practiceAPI, plazaAPI } from '../practice';
 
 const okResponse = (data: any = {}) => ({
   json: async () => ({ code: 0, message: 'success', data }),
@@ -475,5 +477,54 @@ describe('contentAPI', () => {
     const res = await contentAPI.getDocuments({ page: 1 });
     expect(res.items[0].type).toBe('manual');
     expect(res.items[0].title).toBe('某产品说明书');
+  });
+});
+
+describe('practiceAPI / plazaAPI 同步 AI 接口超时（三期 P）', () => {
+  // fetch mock 必须响应 abort signal：真 fetch 会因 abort reject AbortError，
+  // 永不 resolve 的普通 mock 抓不到超时行为（visitAPI 120s 测试同款）
+  const hangUntilAbort = () => {
+    fetchMock = jest.fn().mockImplementation((_url: string, init: any) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const e = new Error('Aborted');
+          e.name = 'AbortError';
+          reject(e);
+        });
+      })
+    );
+    (global as any).fetch = fetchMock;
+  };
+
+  it('extractDraft 同步等 LLM 生成草稿：30.5s 仍 PENDING、120s 才 reject（默认 30s 会先掐断）', async () => {
+    hangUntilAbort();
+    jest.useFakeTimers();
+    try {
+      const PENDING = 'PENDING' as any;
+      let err: any = PENDING;
+      plazaAPI.extractDraft([101, 102]).catch((e) => { err = e; });
+      await jest.advanceTimersByTimeAsync(30_500);
+      expect(err).toBe(PENDING);   // qwen-turbo 同步生成，120s 未到不允许被默认 30s 掐断
+      await jest.advanceTimersByTimeAsync(90_000);
+      expect(err.message).toContain('请求超时');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('complete 评分链同步等 LLM：30.5s 仍 PENDING、120s 才 reject（决策 11，与网关 carve-out 对齐）', async () => {
+    hangUntilAbort();
+    jest.useFakeTimers();
+    try {
+      const PENDING = 'PENDING' as any;
+      let err: any = PENDING;
+      practiceAPI.complete(1).catch((e) => { err = e; });
+      await jest.advanceTimersByTimeAsync(30_500);
+      expect(err).toBe(PENDING);   // 评分输出加长，客户端 120s 与网关 carve-out 同步放宽
+      await jest.advanceTimersByTimeAsync(90_000);
+      expect(err.message).toContain('请求超时');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
