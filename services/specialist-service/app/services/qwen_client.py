@@ -34,9 +34,15 @@ class QwenClient:
         model: str = None,
         temperature: float = 0.1,
         max_tokens: int = 2000,
+        timeout: float = 30.0,
     ) -> dict:
         """
         同步调用通义千问
+
+        Args:
+            timeout: 本请求超时（秒）。默认 30.0 与 __init__ 的 client 级
+                httpx.Timeout(30.0, connect=10.0) 一致——存量调用不传即零影响；
+                陪练评分/风格提取等同步长链路按需放宽（决策 11，网关已 120s carve-out）。
 
         Returns:
             {"content": "...", "usage": {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}}
@@ -48,6 +54,7 @@ class QwenClient:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=httpx.Timeout(timeout, connect=10.0),
             )
             return {
                 "content": response.choices[0].message.content,

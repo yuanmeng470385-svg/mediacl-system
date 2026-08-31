@@ -32,6 +32,10 @@ interface Scores {
   objection_handling?: number;
   communication_logic?: number;
   overall?: number;
+  /** 三期 P Task 5：风格对照评分——模版风格匹配度（0-1），未加载模版/降级时为 null */
+  style_match?: number | null;
+  /** 三期 P Task 5：所加载模版的权重回显 {formal_level, reply_length, opening_mode} */
+  template_style?: Record<string, string> | null;
   summary?: string;
   per_turn?: PerTurnScore[];
 }
@@ -126,11 +130,23 @@ export default function PracticeChatScreen() {
                 <Icon name="check-circle" size={20} color={Colors.success} />
                 <Text style={styles.scoreTitle}>陪练评分</Text>
               </View>
+              {/* 三期 P Task 5：模版风格回显（仅加载了模版 Skill 的练习才有） */}
+              {scores.template_style ? (
+                <View style={styles.styleRow}>
+                  <Text style={styles.styleRowLabel}>模版风格</Text>
+                  <Text style={styles.styleRowValue}>
+                    {formatTemplateStyle(scores.template_style)}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.scoreGrid}>
                 <ScoreCell label="证据准确" value={scores.evidence_accuracy} />
                 <ScoreCell label="异议处理" value={scores.objection_handling} />
                 <ScoreCell label="沟通逻辑" value={scores.communication_logic} />
                 <ScoreCell label="综合评分" value={scores.overall} highlight />
+                {scores.template_style ? (
+                  <ScoreCell label="风格匹配" value={scores.style_match ?? undefined} />
+                ) : null}
               </View>
 
               {scores.summary ? (
@@ -201,6 +217,15 @@ function ScoreCell({ label, value, highlight }: { label: string; value?: number;
   );
 }
 
+/**
+ * 模版风格三枚举人类可读回显（三期 P Task 5）：
+ * 正式程度 / 回复长度 / 开场白，如"标准学术 / 详尽 / 先寒暄再进入"（决策 12 三值口径）。
+ */
+function formatTemplateStyle(t: Record<string, string>): string {
+  const parts = [t.formal_level, t.reply_length, t.opening_mode].filter(Boolean);
+  return parts.length > 0 ? parts.join(' / ') : '--';
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
@@ -227,6 +252,13 @@ const styles = StyleSheet.create({
   },
   scoreHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.md },
   scoreTitle: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary },
+  styleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: Colors.backgroundAlt, borderRadius: BorderRadius.md,
+    padding: Spacing.md, marginBottom: Spacing.sm,
+  },
+  styleRowLabel: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  styleRowValue: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.textPrimary },
   scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   scoreCell: {
     width: '48%', backgroundColor: Colors.backgroundAlt, borderRadius: BorderRadius.md,

@@ -466,3 +466,149 @@ def test_complete_rejects_bool_scores(fresh_state, monkeypatch):
     assert scores["overall"] == round(min(0.9, 0.45 + 2 * 0.1), 2)  # 回退确定性基线
     assert scores["overall"] is not True
     assert body["data"]["status"] == "completed"
+
+
+# ============ 三期 P Task 5：风格对照评分（学习闭环，决策 9/10/11） ============
+
+_TEST_WEIGHTS = {"formal_level": "标准学术", "reply_length": "详尽", "opening_mode": "先寒暄再进入"}
+
+
+def _add_score_session(skill: dict | None = None):
+    """建一条 2 轮带 transcript 的 in_progress 会话；skill 非空时一并建 SkillPackage"""
+    db = TestSession()
+    if skill:
+        db.add(SkillPackage(**skill))
+    db.add(PracticeSession(
+        id=1, representative_id=1, skill_id=skill.get("id") if skill else None,
+        scenario="心内科推广", status="in_progress", turn_count=2,
+        transcript=[{"turn": 1, "role": "rep", "content": "您好，久仰久仰"},
+                    {"turn": 1, "role": "ai", "content": "医生回应"},
+                    {"turn": 2, "role": "rep", "content": "这款药降压平稳"},
+                    {"turn": 2, "role": "ai", "content": "医生再回应"}]))
+    db.commit()
+    db.close()
+
+
+def _mk_score_chat(captured: dict, style_match: str):
+    """构造捕获 messages/kwargs 的 fake chat；style_match 为回填进 JSON 的字面量（0.85/null/1.5）"""
+    from app.services import qwen_client as qc
+    content = (
+        '{"evidence_accuracy":0.8,"objection_handling":0.7,"communication_logic":0.9,"overall":0.8,'
+        f'"style_match":{style_match},'
+        '"per_turn":[{"turn":1,"evidence_accuracy":0.8,"objection_handling":0.7,'
+        '"communication_logic":0.9,"feedback":"模版要求直切主题，你的开场寒暄了 3 句"}],'
+        '"summary":"整体流畅，注意对照模版风格"}'
+    )
+
+    def fake_chat(self, messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": content, "usage": {}}
+
+    return qc, fake_chat
+
+
+def test_complete_with_skill_injects_style(fresh_state, monkeypatch):
+    # 加载 skill 的 complete：prompt 注入模版风格段 + scores 含 style_match/template_style（决策 9）
+    _add_score_session(skill=dict(id=1, name="亲和详尽风", creator_id=3, is_public=True,
+                                  audit_status="approved", skill_weights=_TEST_WEIGHTS))
+    captured = {}
+    qc, fake = _mk_score_chat(captured, "0.85")
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    user_msg = captured["messages"][1]["content"]
+    assert "本次练习加载的模版风格" in user_msg
+    assert "先寒暄再进入" in user_msg
+    # 决策 11：评分链超时放宽（输出加长 → max_tokens 2500、chat timeout=90）
+    assert captured["kwargs"]["max_tokens"] == 2500
+    assert captured["kwargs"]["timeout"] == 90.0
+    scores = body["data"]["scores"]
+    assert scores["style_match"] == 0.85
+    assert scores["template_style"] == _TEST_WEIGHTS  # 权重 dict 回显（决策 10）
+    assert "模版要求直切主题" in scores["per_turn"][0]["feedback"]  # 逐轮对照反馈随 feedback
+
+
+def test_complete_without_skill_no_style_section(fresh_state, monkeypatch):
+    # 无 skill：契约要求 style_match null、prompt 无模版段、不回显 template_style
+    _add_score_session()
+    captured = {}
+    qc, fake = _mk_score_chat(captured, "null")
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert "模版风格" not in captured["messages"][1]["content"]
+    scores = body["data"]["scores"]
+    assert scores["style_match"] is None
+    assert "template_style" not in scores
+
+
+def test_complete_style_fallback_keeps_baseline(fresh_state, monkeypatch):
+    # LLM 失败降级：四维基线照旧、style_match null（基线不伪造风格分）、template_style 照回显
+    _add_score_session(skill=dict(id=1, name="亲和详尽风", creator_id=3, is_public=True,
+                                  audit_status="approved", skill_weights=_TEST_WEIGHTS))
+    from app.services import qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "not json", "usage": {}})
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    scores = body["data"]["scores"]
+    assert scores["overall"] == round(min(0.9, 0.45 + 2 * 0.1), 2)
+    assert len(scores["per_turn"]) == 2
+    assert scores["style_match"] is None
+    assert scores["template_style"] == _TEST_WEIGHTS
+
+
+def test_complete_compliance_off_shelf_skips_injection(fresh_state, monkeypatch):
+    # 合规下架：评分照常（complete 不拦截），但不注入模版段、不回显 template_style（决策 9 与 turn 拦截对齐）
+    _add_score_session(skill=dict(id=1, name="违规下架", creator_id=3, is_public=True,
+                                  audit_status="approved", skill_weights=_TEST_WEIGHTS,
+                                  off_shelf_status="off_shelved", off_shelf_type="compliance",
+                                  off_shelf_reason="含敏感信息"))
+    captured = {}
+    qc, fake = _mk_score_chat(captured, "null")
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["status"] == "completed"
+    assert "模版风格" not in captured["messages"][1]["content"]
+    scores = body["data"]["scores"]
+    assert scores["style_match"] is None
+    assert "template_style" not in scores
+
+
+def test_complete_author_off_shelf_still_injects(fresh_state, monkeypatch):
+    # 作者申请下架：已加载用户不受影响（3.6(3)），照常注入模版风格
+    _add_score_session(skill=dict(id=1, name="作者下架", creator_id=1, is_public=True,
+                                  audit_status="approved", skill_weights=_TEST_WEIGHTS,
+                                  off_shelf_status="off_shelved", off_shelf_type="author",
+                                  off_shelf_reason="不想发了"))
+    captured = {}
+    qc, fake = _mk_score_chat(captured, "0.8")
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert "本次练习加载的模版风格" in captured["messages"][1]["content"]
+    scores = body["data"]["scores"]
+    assert scores["style_match"] == 0.8
+    assert scores["template_style"] == _TEST_WEIGHTS
+
+
+def test_complete_style_match_out_of_range_nullified(fresh_state, monkeypatch):
+    # LLM 输出 style_match 越界 → 置 null（宁缺毋假），不因新字段解析失败整体降级
+    _add_score_session(skill=dict(id=1, name="亲和详尽风", creator_id=3, is_public=True,
+                                  audit_status="approved", skill_weights=_TEST_WEIGHTS))
+    captured = {}
+    qc, fake = _mk_score_chat(captured, "1.5")
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    scores = body["data"]["scores"]
+    assert scores["style_match"] is None
+    assert scores["overall"] == 0.8  # 四维分数照常用，未回退基线
+    assert scores["template_style"] == _TEST_WEIGHTS
