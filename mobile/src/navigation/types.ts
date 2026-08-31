@@ -57,8 +57,10 @@ export type RootStackParamList = {
   Plaza: undefined;
   TwinManage: undefined;
   // Skill 生态（三期 J）
-  SkillRelease: undefined;
+  SkillRelease: { draft?: SkillDraft } | undefined;
   MySkillList: undefined;
+  // 从陪练对话提取风格草稿（三期 P）
+  SkillExtract: undefined;
 };
 
 // ========== 路由参数类型导出 ==========
@@ -89,4 +91,23 @@ export type VisitEndParams = {
 
 export type HCPDetailParams = {
   hcpId: number;
+};
+
+/**
+ * 从陪练对话提取的风格 Skill 草稿（三期 P）：
+ * specialist-service extract-draft 返回，与 releaseSkill payload 同构，
+ * 由 SkillExtractScreen replace 到 SkillRelease 做表单预填。
+ */
+export type SkillDraft = {
+  name: string;
+  description: string;
+  content: string;
+  style_tags?: string[] | null;
+  /** 沟通风格权重（枚举白名单与后端 skill_packages.py / specialists.py 对齐） */
+  skill_weights?: {
+    formal_level?: string;
+    reply_length?: string;
+    opening_mode?: string;
+  };
+  is_anonymous?: boolean;
 };

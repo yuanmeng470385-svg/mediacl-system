@@ -47,6 +47,7 @@ import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import TwinManageScreen from '../screens/Twin/TwinManageScreen';
 import SkillReleaseScreen from '../screens/Skill/SkillReleaseScreen';
 import MySkillListScreen from '../screens/Skill/MySkillListScreen';
+import SkillExtractScreen from '../screens/Skill/SkillExtractScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -219,6 +220,8 @@ export default function AppNavigator() {
             {/* Skill 生态（三期 J） */}
             <Stack.Screen name="SkillRelease" component={SkillReleaseScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="MySkillList" component={MySkillListScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 从陪练对话提取风格草稿（三期 P） */}
+            <Stack.Screen name="SkillExtract" component={SkillExtractScreen} options={{ animation: 'slide_from_right' }} />
           </>
         ) : (
           <Stack.Screen

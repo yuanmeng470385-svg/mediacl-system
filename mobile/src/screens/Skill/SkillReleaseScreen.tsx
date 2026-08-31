@@ -1,35 +1,45 @@
 /**
  * 发布 Skill（三期 J）：填写名称/说明/话术内容 + 风格标签 + 沟通风格权重 + 匿名开关，
  * 提交后进入审核（audit_status=pending），审核通过后上架广场。
+ * 三期 P：携带 draft 参数进入（SkillExtractScreen replace 过来）时预填各字段；
+ * 手动进入（无草稿）时顶部展示「从陪练对话生成」入口引导走 AI 提取链路。
  */
 import React, { useState } from 'react';
 import {
   Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import Icon from '../../components/Icon';
 import { plazaAPI } from '../../api/practice';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
+type Route = RouteProp<RootStackParamList, 'SkillRelease'>;
 
 const STYLE_TAG_OPTIONS = ['严谨学术', '亲和力', '幽默', '专业'];
 const FORMAL_OPTIONS = ['非常严谨', '标准学术', '略带亲和力'];
 const LENGTH_OPTIONS = ['简洁', '标准', '详尽'];
-const OPENING_OPTIONS = ['直切主题', '先寒暄'];
+// 与后端 specialists.py / skill_packages.py 的 opening_mode 白名单逐字对齐（决策 12）
+const OPENING_OPTIONS = ['直切主题', '先寒暄再进入'];
 
 export default function SkillReleaseScreen() {
   const navigation = useNavigation<Nav>();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [content, setContent] = useState('');
-  const [styleTags, setStyleTags] = useState<string[]>([]);
-  const [formalLevel, setFormalLevel] = useState(FORMAL_OPTIONS[1]);
-  const [replyLength, setReplyLength] = useState(LENGTH_OPTIONS[1]);
-  const [openingMode, setOpeningMode] = useState(OPENING_OPTIONS[0]);
-  const [isAnonymous, setIsAnonymous] = useState(false);
+  const route = useRoute<Route>();
+  // 三期 P：陪练提取草稿（枚举已过后端白名单过滤，预填即合法值）；手动进入时为 undefined
+  const draft = route.params?.draft;
+  const [name, setName] = useState(draft?.name ?? '');
+  const [description, setDescription] = useState(draft?.description ?? '');
+  const [content, setContent] = useState(draft?.content ?? '');
+  const [styleTags, setStyleTags] = useState<string[]>(
+    Array.isArray(draft?.style_tags) ? draft.style_tags : [],
+  );
+  const [formalLevel, setFormalLevel] = useState(draft?.skill_weights?.formal_level ?? FORMAL_OPTIONS[1]);
+  const [replyLength, setReplyLength] = useState(draft?.skill_weights?.reply_length ?? LENGTH_OPTIONS[1]);
+  const [openingMode, setOpeningMode] = useState(draft?.skill_weights?.opening_mode ?? OPENING_OPTIONS[0]);
+  const [isAnonymous, setIsAnonymous] = useState(draft?.is_anonymous ?? false);
   const [submitting, setSubmitting] = useState(false);
 
   const toggleTag = (tag: string) => {
@@ -78,6 +88,24 @@ export default function SkillReleaseScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        {/* 从陪练对话生成入口（三期 P）：无草稿时展示 */}
+        {!draft && (
+          <TouchableOpacity
+            style={styles.extractEntry}
+            onPress={() => navigation.navigate('SkillExtract')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.extractIconBox}>
+              <Icon name="creation" size={18} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.extractTitle}>从陪练对话生成</Text>
+              <Text style={styles.extractHint}>选择已结束的陪练会话，由 AI 提取你的说话风格</Text>
+            </View>
+            <Icon name="chevron-right" size={18} color={Colors.textHint} />
+          </TouchableOpacity>
+        )}
+
         {/* 基础信息 */}
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.cardTitle}>基础信息</Text>
@@ -202,6 +230,17 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: Colors.textWhite, fontSize: FontSize.lg, fontWeight: '600' },
   content: { padding: Spacing.md },
+  extractEntry: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    borderWidth: 1, borderColor: Colors.primary, borderRadius: BorderRadius.md,
+    backgroundColor: Colors.primarySurface, padding: Spacing.md, marginBottom: Spacing.md,
+  },
+  extractIconBox: {
+    width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.white,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  extractTitle: { fontSize: FontSize.md, fontWeight: '600', color: Colors.primary },
+  extractHint: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2 },
   card: { backgroundColor: Colors.card, borderRadius: BorderRadius.md, padding: Spacing.lg, marginBottom: Spacing.md },
   cardTitle: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary, marginBottom: Spacing.sm },
   label: { fontSize: FontSize.xs, color: Colors.textSecondary, marginBottom: Spacing.xs, marginTop: Spacing.xs },

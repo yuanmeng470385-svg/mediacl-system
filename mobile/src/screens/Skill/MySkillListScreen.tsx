@@ -148,6 +148,8 @@ export default function MySkillListScreen() {
               icon="creation"
               title="暂无 Skill"
               description="发布 Skill 后，审核通过即可上架广场"
+              actionLabel="从陪练对话生成"
+              onAction={() => navigation.navigate('SkillExtract')}
             />
           }
         />

@@ -3,16 +3,19 @@
  * 多选本人已完成会话（completed + turn_count≥3）→ extract-draft 同步 LLM 提取 →
  * 草稿确认卡（name/description/标签/三维度/话术摘录）→ replace 到 SkillRelease 预填发布。
  * 门槛与后端对齐：代表发言合计 ≥10 条才能生成、会话最多选 10 个。
- * 注：本屏路由（SkillExtract）与 SkillRelease 的 draft 参数由 Task 4 注册。
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
 import { plazaAPI, practiceAPI } from '../../api/practice';
+import type { RootStackParamList, SkillDraft } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 // 后端 extract_draft 门槛（specialist-service skill_packages.py）的前端镜像
 const MIN_REP_TURNS = 10;
@@ -27,15 +30,8 @@ interface SessionItem {
   created_at?: string;
 }
 
-/** 提取草稿（与后端 _validate_release_payload 输出同构；正式类型 SkillDraft 由 Task 4 在 types.ts 导出） */
-interface ExtractDraft {
-  name: string;
-  description: string;
-  content: string;
-  style_tags?: string[] | null;
-  skill_weights?: Record<string, string>;
-  is_anonymous?: boolean;
-}
+/** 提取草稿：正式类型 SkillDraft 已在 navigation/types.ts 导出（与后端 extract-draft 返回同构） */
+type ExtractDraft = SkillDraft;
 
 /** created_at（ISO）→ "MM-DD HH:mm"；解析失败返回空串 */
 function formatTime(iso?: string): string {
@@ -47,9 +43,7 @@ function formatTime(iso?: string): string {
 }
 
 export default function SkillExtractScreen() {
-  // SkillExtract / SkillRelease(draft) 路由 Task 4 才注册（types.ts/AppNavigator），
-  // 此处宽松类型；接线后换回 NativeStackNavigationProp<RootStackParamList>
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<Nav>();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -113,7 +107,7 @@ export default function SkillExtractScreen() {
   const goPractice = () => navigation.navigate('PracticeList');
   const goPublish = () => {
     if (!draft) return;
-    // Task 4 接线：SkillRelease 读 route.params.draft 预填各字段
+    // SkillRelease 读 route.params.draft 预填各字段（replace 避免返回时回到本屏）
     navigation.replace('SkillRelease', { draft });
   };
 
