@@ -162,6 +162,8 @@ def test_extract_success_prompt_and_fields(fresh_state, monkeypatch):
     assert captured["kwargs"]["model"] == "qwen-turbo"
     assert captured["kwargs"]["temperature"] == 0.3
     assert captured["kwargs"]["max_tokens"] == 2000
+    # 终审 Important（2026-08-31）：默认 30s 会使网关 120s 预算不可达，钉住 90s
+    assert captured["kwargs"]["timeout"] == 90.0
     # 成功后写审计（action + session_ids + name，决策 4 限额计数数据源）
     fresh_state.assert_awaited_once()
     _, kwargs = fresh_state.call_args

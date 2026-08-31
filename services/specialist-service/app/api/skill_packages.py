@@ -299,6 +299,9 @@ async def extract_draft(
             model="qwen-turbo",
             temperature=0.3,
             max_tokens=2000,
+            # 决策 11（终审 Important 补遗）：草稿输出与 complete 同量级，默认 30s
+            # 会在网关 120s carve-out 预算内先掐断——与 _llm_score 的 90s 对齐
+            timeout=90.0,
         )
         draft = _parse_draft(resp.get("content", ""))
     except Exception as exc:
