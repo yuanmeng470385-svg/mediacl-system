@@ -312,12 +312,22 @@ async def proxy(request: Request, path: str):
     # AI 路由放宽到 120s；visits 其余路由（列表/详情/转写/取消）维持 30s。
     # 补遗（同日）：pre-visit 走专员链路（specialist_client 60s 超时）同款先掐断
     # 问题，一并放宽。
+    # 三期 P（2026-08-31）：skill-packages/extract-draft（practice 全文直调
+    # LLM 同步生成风格草稿）与 practices/{id}/complete（收尾 LLM 深度评分）
+    # 是同步 LLM 慢链，同款 30s 先掐断问题。这两条保持独立精确匹配、勿并入
+    # 上面的 startswith 分支 —— 并入会把 skill-packages / practices 的其余
+    # 路由（release、turn、列表等）一并误伤到 120s；其余维持 30s。
     if path.startswith(("api/v1/knowledge/", "api/v1/qualifications/", "api/v1/doctors/")):
         proxy_timeout = 120.0
     elif path.startswith("api/v1/visits/") and (
         path == "api/v1/visits/pre-visit"
         or path.endswith("/end")
         or path.endswith("/follow-up")
+    ):
+        proxy_timeout = 120.0
+    elif (
+        path == "api/v1/skill-packages/extract-draft"
+        or (path.startswith("api/v1/practices/") and path.endswith("/complete"))
     ):
         proxy_timeout = 120.0
     else:
