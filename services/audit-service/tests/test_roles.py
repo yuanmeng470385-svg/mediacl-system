@@ -266,3 +266,62 @@ class TestLogsParamValidation:
         assert resp.status_code == 400
         assert resp.json()["code"] == 1000
         mock_logger.log.assert_not_called()
+
+
+class TestCountEndpointInternalAuth:
+    """三期 P 决策 4：GET /api/v1/audit/count 内部计数端点（specialist 每日提取
+    限额的数据源）。与 /log 同款 require_internal_key：internal key 可查；
+    无 key/错 key → 403 code 3001（require_internal_key 抛 403，shared 异常
+    处理器把含 code 的 detail 原样平铺）"""
+
+    KEY = "test-internal-key-20260813"
+
+    def test_count_with_internal_key_applies_filters(self, client):
+        """带 key + action/user_id/since 三过滤 → 200 total，三个过滤都生效"""
+        c, mock_db = client
+        fq = mock_db.query.return_value.filter.return_value
+        fq.count.return_value = 5
+        resp = c.get(
+            "/api/v1/audit/count",
+            headers={"X-Internal-Key": self.KEY},
+            params={"action": "skill_extract_draft", "user_id": 1,
+                    "since": "2026-08-30T16:00:00"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["code"] == 0
+        assert body["data"]["total"] == 5
+        # 三重 filter 链（多重过滤自环 stub）都下发到查询：action/user_id/timestamp
+        q = mock_db.query.return_value
+        exprs = [str(call.args[0]) for call in q.filter.call_args_list + fq.filter.call_args_list]
+        assert any("audit_logs.action" in e for e in exprs)
+        assert any("audit_logs.user_id" in e for e in exprs)
+        assert any("audit_logs.timestamp" in e for e in exprs)
+
+    def test_count_without_internal_key_rejected(self, client):
+        """无 X-Internal-Key → 403 code 3001（内部端点不裸奔）"""
+        c, mock_db = client
+        resp = c.get("/api/v1/audit/count", params={"action": "skill_extract_draft"})
+        assert resp.status_code == 403
+        assert resp.json()["code"] == 3001
+
+    def test_count_wrong_internal_key_rejected(self, client):
+        """错误 key → 403 code 3001"""
+        c, mock_db = client
+        resp = c.get(
+            "/api/v1/audit/count",
+            headers={"X-Internal-Key": "wrong-key"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["code"] == 3001
+
+    def test_count非法since返回参数错误(self, client):
+        """since 非法 ISO → 400 code 1000（照 /logs 的 A4 时间参数预检口径）"""
+        c, mock_db = client
+        resp = c.get(
+            "/api/v1/audit/count",
+            headers={"X-Internal-Key": self.KEY},
+            params={"since": "not-a-date"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["code"] == 1000

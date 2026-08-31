@@ -77,3 +77,41 @@ async def write_audit_log(
     except Exception as e:
         logger.error(f"审计日志写入失败: {e}")
         return None  # 审计失败不影响业务
+
+
+async def count_audit_logs(
+    action: str,
+    user_id: Optional[int] = None,
+    since: Optional[str] = None,
+) -> Optional[int]:
+    """
+    按条件计数审计日志（三期 P 决策 4：每日提取限额的数据源）
+
+    Args:
+        action: 操作类型（如 "skill_extract_draft"）
+        user_id: 用户 ID
+        since: 起始时间 ISO 格式（UTC）
+
+    Returns:
+        命中条数，查询失败返回 None（调用方放行——审计可用性不卡死业务，
+        与 write_audit_log 失败不阻断同语义）
+    """
+    params = {"action": action}
+    if user_id is not None:
+        params["user_id"] = user_id
+    if since:
+        params["since"] = since
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{GATEWAY_URL}/api/v1/audit/count",
+                headers=internal_headers(),
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data") or {}
+            total = data.get("total")
+            return total if isinstance(total, int) else None
+    except Exception as e:
+        logger.warning(f"审计日志计数查询失败（限额放行）: {e}")
+        return None

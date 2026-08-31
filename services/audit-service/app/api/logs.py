@@ -75,6 +75,31 @@ async def write_log(
     return success(None, "日志已记录")
 
 
+@router.get("/count")
+async def count_logs(
+    db: Session = Depends(get_db),
+    _internal: bool = Depends(require_internal_key),
+    action: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    since: Optional[str] = Query(None, description="起始时间 ISO 格式（UTC）"),
+):
+    """审计日志计数（内部接口，三期 P 决策 4）——服务间限额数据源
+    （如 specialist 的 skill_extract_draft 每日 3 次）。
+
+    挂 require_internal_key 与 /log 同款（现有 /logs 查询端点挂用户角色墙，
+    服务间调用过不去）；按 action/user_id/since 过滤返回 total。
+    """
+    since_dt = _parse_iso_time(since, "since")
+    query = db.query(AuditLog)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if user_id:
+        query = query.filter(AuditLog.user_id == user_id)
+    if since_dt:
+        query = query.filter(AuditLog.timestamp >= since_dt)
+    return success({"total": query.count()})
+
+
 # ==================== 审计日志查询 ====================
 
 @router.get("/logs")

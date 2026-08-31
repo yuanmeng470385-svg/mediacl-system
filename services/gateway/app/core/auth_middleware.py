@@ -43,6 +43,7 @@ PUBLIC_PATHS = [
 INTERNAL_PATHS = [
     "/api/v1/compliance/check",
     "/api/v1/audit/log",
+    "/api/v1/audit/count",
     "/api/v1/hcps/profile-update",
     "/api/v1/knowledge/search-internal",
 ]
