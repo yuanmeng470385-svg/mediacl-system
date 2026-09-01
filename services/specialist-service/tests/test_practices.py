@@ -655,3 +655,47 @@ def test_review_transcript_medical_allowed_rep_403(fresh_state):
 def test_review_transcript_missing_404(fresh_state):
     resp = client.get("/api/v1/practices/999/review-transcript", headers=_token(2, "admin"))
     assert resp.json()["code"] == 4000
+
+def test_turn_passes_recent_history_to_doctor(fresh_state, monkeypatch):
+    """AI 医生记忆接线（2026-09-01 修复）：turn 须把最近对话历史传给 _doctor_reply——
+    此前调用点硬编码 []，医生每轮失忆只会重复抛异议（对话两条平行线）。"""
+    db = TestSession()
+    db.add(PracticeSession(
+        id=1, representative_id=1, skill_id=None, scenario="心内科推广",
+        status="in_progress", turn_count=2,
+        transcript=[
+            {"turn": 1, "role": "rep", "content": "王主任好，想同步诺欣妥的循证数据"},
+            {"turn": 1, "role": "ai", "content": "你先说说看，数据发表在哪？"},
+            {"turn": 2, "role": "rep", "content": "PARADIGM-HF 五年随访亚组分析"},
+            {"turn": 2, "role": "ai", "content": "亚组的统计学显著性如何？"},
+        ],
+    ))
+    db.add(ObjectionScript(id=1, scenario_type="心内科", objection_content="医生异议：和竞品相比优势在哪？",
+                           review_status="approved"))
+    db.commit()
+    db.close()
+
+    captured = {}
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        captured["messages"] = messages
+        return {"content": "医生：有道理，那我们聊聊适用人群。", "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "统计口径与主研究完全一致"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user_msg = captured["messages"][1]["content"]
+    # 最近历史（含医生自己上轮的问题）进入 prompt——医生不再失忆
+    assert "医生：亚组的统计学显著性如何？" in user_msg
+    assert "代表：PARADIGM-HF" in user_msg
+    # 本轮消息单独传，历史同样被 <user_content> 防注入包裹
+    assert user_msg.count("<user_content>") >= 2
+    # 异议注入为推进语义（素材而非任务，不重复已抛过的）
+    assert "素材而非任务" in user_msg
+    assert "不要重复提出" in user_msg
+    # system 提示多轮连贯
+    assert "多轮连续对话" in captured["messages"][0]["content"]
