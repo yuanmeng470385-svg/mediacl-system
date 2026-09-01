@@ -551,6 +551,7 @@ CREATE TABLE IF NOT EXISTS skill_packages (
     skill_weights JSONB,       -- 沟通风格参数（正式度/回复长度/开场白）—— 任何 API 不返回
     description VARCHAR(200),      -- 治疗领域/一句话说明（元数据，公共列表展示）
     content TEXT,                  -- 话术素材（内容，仅审核人受控查看）
+  source_session_ids JSONB,
     off_shelf_status VARCHAR(20) NOT NULL DEFAULT 'active',  -- active/off_shelved
     off_shelf_reason VARCHAR(500),
     off_shelf_type VARCHAR(20),    -- compliance/author
