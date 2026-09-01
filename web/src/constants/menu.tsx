@@ -45,6 +45,7 @@ export const menuConfig: MenuDataItem[] = [
       { path: '/skill/list', name: '技能管理' },
       { path: '/patient-edu/list', name: '患教模板' },
       { path: '/patient-edu/review', name: '患教内容' },
+      { path: '/practice/objections', name: '异议话术' },
     ],
   },
   {

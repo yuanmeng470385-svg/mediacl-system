@@ -1,5 +1,5 @@
 import client from './client';
-import type { ApiResponse, PaginatedResponse, SkillPackage } from '../types';
+import type { ApiResponse, PaginatedResponse, SkillAuditRecord, SkillPackage } from '../types';
 
 export const skillAPI = {
   list: (params?: { page?: number; page_size?: number; audit_status?: string }) =>
@@ -15,4 +15,7 @@ export const skillAPI = {
     client.post<ApiResponse<SkillPackage>>(`/skill-packages/${id}/review`, data),
   offShelf: (id: number, data: { type: 'compliance' | 'author'; reason: string }) =>
     client.post<ApiResponse<SkillPackage>>(`/skill-packages/${id}/off-shelf`, data),
+  // 审核历史（2026-09-01 审核盲审修复）：skill_audits 全量 + 审核人姓名
+  audits: (id: number) =>
+    client.get<ApiResponse<SkillAuditRecord[]>>(`/skill-packages/${id}/audits`),
 };

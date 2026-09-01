@@ -46,6 +46,8 @@ export const ROUTE_ACCESS: Record<string, readonly string[]> = {
   '/skill/list': FOUR,
   '/patient-edu/list': FOUR,
   '/patient-edu/review': FOUR,
+  // 异议话术库 objection-scripts OBJECTION_ADMIN_ROLES（四角色）
+  '/practice/objections': FOUR,
   // 网关 system_config 硬编码 role == admin
   '/system/config': ['admin'],
 };

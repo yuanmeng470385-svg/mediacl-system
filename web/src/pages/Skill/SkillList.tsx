@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react';
 import { ProTable, ModalForm, ProFormText, ProFormSwitch } from '@ant-design/pro-components';
 import type { ProColumns, ActionType } from '@ant-design/pro-components';
-import { App, Button, Descriptions, Drawer, Input, Radio, Space, Tag, Tooltip, Typography } from 'antd';
+import { App, Button, Descriptions, Drawer, Input, Radio, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { skillAPI } from '../../services/skill';
-import type { SkillPackage } from '../../types';
+import { practiceAPI } from '../../services/practice';
+import { useAuth } from '../../context/AuthContext';
+import type { PracticeTranscript, SkillAuditRecord, SkillPackage } from '../../types';
 
 const { Text } = Typography;
 const AUDIT_MAP: Record<string, { color: string; text: string }> = {
@@ -18,11 +20,22 @@ const CREATOR_ROLE_MAP: Record<string, { color: string; text: string }> = {
   compliance: { color: 'cyan', text: '合规' },
   medical: { color: 'green', text: '医学部' },
 };
+// 键对齐后端 skill_audits.audit_result（存的是 audit_status：approved/rejected）
+const RESULT_MAP: Record<string, { color: string; text: string }> = {
+  approved: { color: 'green', text: '通过' },
+  rejected: { color: 'red', text: '驳回' },
+};
+// 与后端 skill_packages.SKILL_REVIEW_ROLES 对齐：审核裁决收敛合规/医学部，
+// admin/manager 保留受控查看（方案 B，2026-09-01）
+const SKILL_REVIEW_ROLES = ['compliance', 'medical'];
 
 export default function SkillList() {
   const actionRef = useRef<ActionType>();
   const { message } = App.useApp();
+  const { user } = useAuth();
+  const canReview = SKILL_REVIEW_ROLES.includes(user?.role || '');
   const [current, setCurrent] = useState<SkillPackage | null>(null);
+  const [audits, setAudits] = useState<SkillAuditRecord[]>([]);
   const [verdict, setVerdict] = useState<'approve' | 'reject'>('approve');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -31,12 +44,19 @@ export default function SkillList() {
   const [offType, setOffType] = useState<'compliance' | 'author'>('compliance');
   const [offReason, setOffReason] = useState('');
   const [offSubmitting, setOffSubmitting] = useState(false);
+  const [transcript, setTranscript] = useState<PracticeTranscript | null>(null);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
 
-  // 受控查看：列表接口不返回 skill_weights（隐私边界附录B-1），审核前走 detail 拿权重
+  // 受控查看：列表接口不返回 content/skill_weights/source_session_ids（隐私边界附录B-1），
+  // 审核/查看前走 detail 拿受控字段 + audits 拿审核留痕（2026-09-01 审核盲审修复）
   const openReview = async (row: SkillPackage) => {
     try {
-      const res = await skillAPI.detail(row.id);
-      setCurrent(res.data.data);
+      const [detailRes, auditsRes] = await Promise.all([
+        skillAPI.detail(row.id),
+        skillAPI.audits(row.id),
+      ]);
+      setCurrent(detailRes.data.data);
+      setAudits(auditsRes.data.data || []);
       setVerdict('approve');
       setReason('');
     } catch {
@@ -66,10 +86,17 @@ export default function SkillList() {
     }
   };
 
-  const openOffShelf = (row: SkillPackage) => {
-    setOffShelfTarget(row);
+  // 下架前也走 detail：下架裁决同样要看清被处置内容（2026-09-01）
+  const openOffShelf = async (row: SkillPackage) => {
     setOffType('compliance');
     setOffReason('');
+    setOffShelfTarget(row);
+    try {
+      const res = await skillAPI.detail(row.id);
+      setOffShelfTarget(res.data.data);
+    } catch {
+      /* 拉不到受控字段时保底展示列表元数据 */
+    }
   };
 
   const submitOffShelf = async () => {
@@ -91,22 +118,35 @@ export default function SkillList() {
     }
   };
 
+  // 审核溯源：受控查看提取来源会话的原始对话（后端记 practice_source_view 审计）
+  const openTranscript = async (sessionId: number) => {
+    setTranscriptLoading(true);
+    try {
+      const res = await practiceAPI.reviewTranscript(sessionId);
+      setTranscript(res.data.data);
+    } catch {
+      /* client.ts 拦截器已弹错误 */
+    } finally {
+      setTranscriptLoading(false);
+    }
+  };
+
+  const creatorText = (r: SkillPackage) => {
+    if (!r.creator_name) return '-';
+    const m = CREATOR_ROLE_MAP[r.creator_role || ''] || { color: 'default', text: r.creator_role || '官方' };
+    return (
+      <Space size={4}>
+        <span>{r.creator_name}</span>
+        <Tag color={m.color}>{m.text}</Tag>
+      </Space>
+    );
+  };
+
   const columns: ProColumns<SkillPackage>[] = [
     { title: '名称', dataIndex: 'name' },
+    { title: '说明', dataIndex: 'description', hideInSearch: true, ellipsis: true },
     { title: '风格标签', dataIndex: 'style_tags', hideInSearch: true, render: (_, r) => (r.style_tags || []).join(' / ') },
-    {
-      title: '创建者', dataIndex: 'creator_name', hideInSearch: true,
-      render: (_, r) => {
-        if (!r.creator_name) return '-';
-        const m = CREATOR_ROLE_MAP[r.creator_role || ''] || { color: 'default', text: r.creator_role || '官方' };
-        return (
-          <Space size={4}>
-            <span>{r.creator_name}</span>
-            <Tag color={m.color}>{m.text}</Tag>
-          </Space>
-        );
-      },
-    },
+    { title: '创建者', dataIndex: 'creator_name', hideInSearch: true, render: (_, r) => creatorText(r) },
     {
       title: '审核状态', dataIndex: 'audit_status', width: 100,
       valueEnum: { pending: '待审核', approved: '已通过', rejected: '已驳回' },
@@ -133,9 +173,8 @@ export default function SkillList() {
       title: '操作', width: 140,
       render: (_, r) => (
         <Space size="middle">
-          {r.audit_status === 'pending'
-            ? <a onClick={() => openReview(r)}>审核</a>
-            : <span style={{ color: '#999' }}>已处理</span>}
+          {/* 审核裁决收敛合规/医学部；其余管理角色保留「查看」受控详情（方案 B） */}
+          <a onClick={() => openReview(r)}>{r.audit_status === 'pending' && canReview ? '审核' : '查看'}</a>
           {r.off_shelf_status === 'active' && <a onClick={() => openOffShelf(r)}>下架</a>}
         </Space>
       ),
@@ -202,47 +241,97 @@ export default function SkillList() {
         <ProFormText name="opening_mode" label="开场白模式" initialValue="直切主题" />
         <ProFormSwitch name="is_public" label="上架代表广场" initialValue tooltip="开启后审核通过即上架广场并可在陪练场加载" />
       </ModalForm>
-      <Drawer title="技能审核" width={520} open={!!current} onClose={() => setCurrent(null)} destroyOnHidden>
+      <Drawer title={canReview ? '技能审核' : '技能详情'} width={560} open={!!current} onClose={() => setCurrent(null)} destroyOnHidden>
         {current && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Descriptions column={1} size="small">
+            <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="名称">{current.name}</Descriptions.Item>
+              <Descriptions.Item label="创建者">{creatorText(current)}</Descriptions.Item>
+              <Descriptions.Item label="说明">
+                <span style={{ whiteSpace: 'pre-wrap' }}>{current.description || '-'}</span>
+              </Descriptions.Item>
               <Descriptions.Item label="风格标签">{(current.style_tags || []).join(' / ')}</Descriptions.Item>
+              <Descriptions.Item label="话术内容（受控查看）">
+                <span style={{ whiteSpace: 'pre-wrap' }}>{current.content || '（无内容）'}</span>
+              </Descriptions.Item>
               <Descriptions.Item label="沟通风格参数（受控查看）">
                 <Text code>{JSON.stringify(current.skill_weights, null, 2)}</Text>
               </Descriptions.Item>
+              <Descriptions.Item label="提取来源会话">
+                {(current.source_session_ids || []).length
+                  ? (
+                    <Space wrap>
+                      {(current.source_session_ids || []).map((sid) => (
+                        <Button key={sid} size="small" onClick={() => openTranscript(sid)}>会话 #{sid}</Button>
+                      ))}
+                    </Space>
+                  )
+                  : '（未携带/官方模版）'}
+              </Descriptions.Item>
             </Descriptions>
-            <Radio.Group value={verdict} onChange={(e) => setVerdict(e.target.value)}>
-              <Radio.Button value="approve">通过</Radio.Button>
-              <Radio.Button value="reject">驳回</Radio.Button>
-            </Radio.Group>
-            {verdict === 'reject' && (
-              <Input.TextArea
-                rows={3}
-                placeholder="驳回原因（必填）"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                maxLength={500}
-              />
+            <div>
+              <Text type="secondary">审核历史（{audits.length}）</Text>
+              {audits.length === 0
+                ? <div style={{ color: '#999', marginTop: 4 }}>暂无审核记录</div>
+                : (
+                  <div style={{ marginTop: 4 }}>
+                    {audits.map((a) => {
+                      const m = RESULT_MAP[a.audit_result] || { color: 'default', text: a.audit_result };
+                      return (
+                        <div key={a.id} style={{ padding: '4px 0', borderBottom: '1px solid #f0f0f0' }}>
+                          <Space size={8} wrap>
+                            <Tag color={m.color}>{m.text}</Tag>
+                            <span>{a.auditor_name || '审核人 #' + a.auditor_id}</span>
+                            <Text type="secondary">{a.created_at || ''}</Text>
+                          </Space>
+                          {a.reason && <div style={{ marginTop: 2 }}>原因：{a.reason}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+            </div>
+            {canReview && (
+              <>
+                <Radio.Group value={verdict} onChange={(e) => setVerdict(e.target.value)} disabled={current.audit_status !== 'pending'}>
+                  <Radio.Button value="approve">通过</Radio.Button>
+                  <Radio.Button value="reject">驳回</Radio.Button>
+                </Radio.Group>
+                {verdict === 'reject' && current.audit_status === 'pending' && (
+                  <Input.TextArea
+                    rows={3}
+                    placeholder="驳回原因（必填）"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    maxLength={500}
+                  />
+                )}
+                <Button
+                  type="primary"
+                  block
+                  loading={submitting}
+                  onClick={submitReview}
+                  disabled={current.audit_status !== 'pending'}
+                >
+                  {current.audit_status !== 'pending' ? '当前状态不可审核' : '提交审核'}
+                </Button>
+              </>
             )}
-            <Button
-              type="primary"
-              block
-              loading={submitting}
-              onClick={submitReview}
-              disabled={current.audit_status !== 'pending'}
-            >
-              {current.audit_status !== 'pending' ? '当前状态不可审核' : '提交审核'}
-            </Button>
           </Space>
         )}
       </Drawer>
-      <Drawer title="技能下架" width={520} open={!!offShelfTarget} onClose={() => setOffShelfTarget(null)} destroyOnHidden>
+      <Drawer title="技能下架" width={560} open={!!offShelfTarget} onClose={() => setOffShelfTarget(null)} destroyOnHidden>
         {offShelfTarget && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Descriptions column={1} size="small">
+            <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="名称">{offShelfTarget.name}</Descriptions.Item>
-              <Descriptions.Item label="创建者">{offShelfTarget.creator_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建者">{creatorText(offShelfTarget)}</Descriptions.Item>
+              <Descriptions.Item label="说明">
+                <span style={{ whiteSpace: 'pre-wrap' }}>{offShelfTarget.description || '-'}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="话术内容（受控查看）">
+                <span style={{ whiteSpace: 'pre-wrap' }}>{offShelfTarget.content || '（无内容）'}</span>
+              </Descriptions.Item>
             </Descriptions>
             <Radio.Group value={offType} onChange={(e) => setOffType(e.target.value)}>
               <Radio value="compliance">合规下架</Radio>
@@ -264,6 +353,37 @@ export default function SkillList() {
             >
               确认下架
             </Button>
+          </Space>
+        )}
+      </Drawer>
+      <Drawer
+        title={transcript ? '来源会话 #' + transcript.id : '来源会话'}
+        width={520}
+        open={transcriptLoading || !!transcript}
+        onClose={() => setTranscript(null)}
+        destroyOnHidden
+      >
+        {transcriptLoading && !transcript ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : transcript && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="代表">{transcript.rep_name || '#' + transcript.representative_id}</Descriptions.Item>
+              <Descriptions.Item label="场景">{transcript.scenario}</Descriptions.Item>
+              <Descriptions.Item label="轮次">{transcript.turn_count}</Descriptions.Item>
+              <Descriptions.Item label="时间">{transcript.created_at || '-'}</Descriptions.Item>
+            </Descriptions>
+            <div>
+              <Text type="secondary">原始对话（核对提取摘录是否忠于本人原文）</Text>
+              <div style={{ marginTop: 8 }}>
+                {(transcript.transcript || []).map((t, i) => (
+                  <div key={i} style={{ marginBottom: 8 }}>
+                    <Tag color={t.role === 'rep' ? 'blue' : 'green'}>{t.role === 'rep' ? '代表' : t.role === 'doctor' ? '医生' : t.role}</Tag>
+                    <span style={{ whiteSpace: 'pre-wrap' }}>{t.content}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </Space>
         )}
       </Drawer>

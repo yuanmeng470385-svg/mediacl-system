@@ -53,10 +53,10 @@ describe('canAccess（路由→角色表）', () => {
 
   it('角色表覆盖全部已登记路由（防新增页面漏配）', () => {
     // 与 App.tsx 路由清单同步的硬断言：数量一旦变化须有意识地更新本表
-    // （App.tsx 26 条页面路由：dashboard 1 + specialist 2 + visit/knowledge 2 +
+    // （App.tsx 27 条页面路由：dashboard 1 + specialist 2 + visit/knowledge 2 +
     //  compliance 6 + data 2 + privacy/audit 2 + doctor 3 + user/filing/cert/
-    //  training/skill 5 + patient-edu 2 + system 1）
-    expect(Object.keys(ROUTE_ACCESS).length).toBe(26);
+    //  training/skill 5 + patient-edu 2 + practice/objections 1 + system 1）
+    expect(Object.keys(ROUTE_ACCESS).length).toBe(27);
   });
 });
 

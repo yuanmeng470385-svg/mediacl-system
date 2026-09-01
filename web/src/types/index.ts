@@ -409,7 +409,49 @@ export interface SkillPackage {
   skill_weights?: Record<string, any>;
   /** 话术内容：仅审核 detail 接口受控返回（隐私边界），列表/资产接口不返回 */
   content?: string;
+  /** 提取来源陪练会话 ID：仅审核 detail 接口受控返回（2026-09-01 审核溯源） */
+  source_session_ids?: number[] | null;
   created_at: string | null;
+}
+
+// ========== Skill 审核留痕与陪练溯源（2026-09-01 审核盲审修复）==========
+// 字段与 specialist-service SkillAudit.to_dict(+auditor_name join) 对齐
+export interface SkillAuditRecord {
+  id: number;
+  skill_id: number;
+  auditor_id: number;
+  auditor_name?: string | null;
+  audit_result: 'approve' | 'reject' | string;
+  reason: string | null;
+  created_at: string | null;
+}
+
+// 字段与 specialist-service GET /practices/{id}/review-transcript 对齐
+export interface PracticeTranscript {
+  id: number;
+  representative_id: number;
+  rep_name?: string | null;
+  scenario: string;
+  status: string;
+  turn_count: number;
+  transcript: { role: string; content: string; turn?: number }[];
+  created_at: string | null;
+}
+
+// ========== 异议话术库（3.2(5)，web 审核页 2026-09-01）==========
+// 字段与 specialist-service ObjectionScript.to_dict 对齐
+export interface ObjectionScript {
+  id: number;
+  scenario_type: string;
+  objection_content: string;
+  response_guidance: string | null;
+  version: string | null;
+  review_status: 'pending' | 'approved' | 'rejected';
+  review_reason: string | null;
+  reviewed_by: number | null;
+  created_by: number | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 // ========== 患教模板库（二期 I）==========

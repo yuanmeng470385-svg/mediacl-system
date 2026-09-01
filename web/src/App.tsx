@@ -31,6 +31,7 @@ const TrainingList = lazy(() => import('./pages/Training/TrainingList'));
 const SkillList = lazy(() => import('./pages/Skill/SkillList'));
 const PatientEduList = lazy(() => import('./pages/PatientEdu/PatientEduList'));
 const PatientEduReview = lazy(() => import('./pages/PatientEdu/PatientEduReview'));
+const ObjectionList = lazy(() => import('./pages/Practice/ObjectionList'));
 const DoctorStats = lazy(() => import('./pages/Doctor/DoctorStats'));
 const SystemConfig = lazy(() => import('./pages/System/SystemConfig'));
 
@@ -90,6 +91,7 @@ export default function App() {
                   <Route path="skill/list" element={<SkillList />} />
                   <Route path="patient-edu/list" element={<PatientEduList />} />
                   <Route path="patient-edu/review" element={<PatientEduReview />} />
+                  <Route path="practice/objections" element={<ObjectionList />} />
                   <Route path="doctor/stats" element={<DoctorStats />} />
                   <Route path="system/config" element={<SystemConfig />} />
                 </Route>
