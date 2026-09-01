@@ -110,4 +110,6 @@ export type SkillDraft = {
     opening_mode?: string;
   };
   is_anonymous?: boolean;
+  /** 提取来源会话 ID（2026-09-01 审核溯源）：extract 屏带入，release 提交时原样回传 */
+  source_session_ids?: number[] | null;
 };

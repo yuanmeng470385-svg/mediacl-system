@@ -32,6 +32,8 @@ export const plazaAPI = {
   releaseSkill: (payload: {
     name: string; description: string; content: string;
     style_tags?: string[]; skill_weights: Record<string, string>; is_anonymous?: boolean;
+    /** 提取来源陪练会话 ID（2026-09-01 审核溯源）：extract 链路带入，后端校验归属并留档 */
+    source_session_ids?: number[];
   }) => apiClient.request<any>('POST', '/api/v1/skill-packages/release', payload),
   mySkills: (params?: { page?: number; page_size?: number }) =>
     apiClient.request<any>('GET', '/api/v1/skill-packages/mine', params),

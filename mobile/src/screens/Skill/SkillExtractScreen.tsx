@@ -107,8 +107,12 @@ export default function SkillExtractScreen() {
   const goPractice = () => navigation.navigate('PracticeList');
   const goPublish = () => {
     if (!draft) return;
-    // SkillRelease 读 route.params.draft 预填各字段（replace 避免返回时回到本屏）
-    navigation.replace('SkillRelease', { draft });
+    // SkillRelease 读 route.params.draft 预填各字段（replace 避免返回时回到本屏）。
+    // 来源会话 ID 由本地补齐（后端 extract 不回传自己已校验过的 session_ids），
+    // release 提交时原样回传做审核溯源留档（2026-09-01）
+    navigation.replace('SkillRelease', {
+      draft: { ...draft, source_session_ids: selected },
+    });
   };
 
   return (

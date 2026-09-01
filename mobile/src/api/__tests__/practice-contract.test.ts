@@ -58,6 +58,18 @@ describe('practice/plaza/twin API', () => {
     });
   });
 
+  it('releaseSkill 携带 source_session_ids 时进 body（审核溯源 2026-09-01）', async () => {
+    await plazaAPI.releaseSkill({
+      name: '严谨型', description: '心内科', content: '话术素材',
+      skill_weights: { formal_level: '标准学术' },
+      source_session_ids: [7, 5],
+    });
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/release');
+    const body = JSON.parse(init.body);
+    expect(body.source_session_ids).toEqual([7, 5]);
+  });
+
   it('mySkills 发 GET /api/v1/skill-packages/mine', async () => {
     await plazaAPI.mySkills();
     const { url, init } = lastCall();
