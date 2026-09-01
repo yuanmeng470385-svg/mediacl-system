@@ -25,9 +25,9 @@ const RESULT_MAP: Record<string, { color: string; text: string }> = {
   approved: { color: 'green', text: '通过' },
   rejected: { color: 'red', text: '驳回' },
 };
-// 与后端 skill_packages.SKILL_REVIEW_ROLES 对齐：审核裁决收敛合规/医学部，
-// admin/manager 保留受控查看（方案 B，2026-09-01）
-const SKILL_REVIEW_ROLES = ['compliance', 'medical'];
+// 与后端 skill_packages.py 对齐：审核=全 SKILL_ADMIN_ROLES（2026-09-01 当日二调，
+// 曾收敛合规/医学部后按用户拍板恢复——小公司单账号审核；受控查看同范围）
+const SKILL_REVIEW_ROLES = ['admin', 'manager', 'compliance', 'medical'];
 
 export default function SkillList() {
   const actionRef = useRef<ActionType>();

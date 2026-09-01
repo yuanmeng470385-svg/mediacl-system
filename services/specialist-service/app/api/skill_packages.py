@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/skill-packages", tags=["skill-packages"])
 
 SKILL_ADMIN_ROLES = ("admin", "manager", "compliance", "medical")
-# 审核动作（approve/reject）收敛合规/医学部（2026-09-01 审核盲审修复批）：
-# detail 受控查看面向全量管理角色（能看者 ⊇ 能审者），裁决动作仅 SKILL_REVIEW_ROLES
-SKILL_REVIEW_ROLES = ("compliance", "medical")
+# 审核权（2026-09-01 审核盲审修复批当日二调）：曾短暂收敛 compliance/medical，
+# 用户拍板小公司单账号审核——恢复全 SKILL_ADMIN_ROLES 可审；detail 受控查看
+# 仍是全量管理角色（方案 A 保留，能审即能看）
 VALID_AUDIT = ("pending", "approved", "rejected")
 VALID_OFF_SHELF_TYPE = ("compliance", "author")
 
@@ -402,7 +402,7 @@ async def skill_detail(
 ):
     """审核详情：受控查看 content/skill_weights/source_session_ids（2026-09-01 审核盲审修复）。
     方案 A「能审即能看」：SKILL_ADMIN_ROLES 全量 expose——此前 admin/manager 仅元数据
-    可审，approve 即橡皮图章；审核裁决动作另收敛 SKILL_REVIEW_ROLES（compliance/medical）。
+    可审，approve 即橡皮图章）。审核动作同日恢复全 SKILL_ADMIN_ROLES（单账号审核），
     广场/资产列表公共口径仍不含受控字段，访问照记审计（skill_detail_view）。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
@@ -421,11 +421,11 @@ async def skill_detail(
 async def review_skill(
     skill_id: int,
     payload: dict,
-    current_user: dict = Depends(require_roles(*SKILL_REVIEW_ROLES)),
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """审核：approve/reject（2026-09-01 收敛 compliance/medical，医学/合规裁决语义）。
-    admin/manager 保留 detail 受控查看与下架管理；读后写审计照旧。"""
+    """审核：approve/reject（全 SKILL_ADMIN_ROLES——2026-09-01 曾收敛 compliance/medical
+    后按用户拍板恢复：小公司人力精简，admin 一个号即可看内容+裁决）。读后写审计照旧。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
         raise BusinessError("Skill 不存在", code=4000)

@@ -411,15 +411,16 @@ def _add_session(sid=7, rep_id=1, status="completed", turns=12):
     db.close()
 
 
-def test_review_rejects_manager_403_plan_b(fresh_state):
-    """方案 B：审核裁决收敛 compliance/medical，admin/manager 仅保留受控查看。"""
-    _add_skill(id=1)
-    resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
+def test_review_allows_manager_and_admin(fresh_state):
+    """审核权恢复全 SKILL_ADMIN_ROLES（2026-09-01 当日二调：小公司单账号审核）。"""
+    _add_skill(id=2)
+    resp = client.post("/api/v1/skill-packages/2/review", json={"verdict": "approve"},
                        headers=_token(4, "manager"))
-    assert resp.status_code == 403
-    resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
+    assert resp.json()["code"] == 0
+    _add_skill(id=3)
+    resp = client.post("/api/v1/skill-packages/3/review", json={"verdict": "reject", "reason": "内容不合规"},
                        headers=_token(2, "admin"))
-    assert resp.status_code == 403
+    assert resp.json()["code"] == 0
 
 
 def test_review_allows_compliance_writes_audit(fresh_state):
