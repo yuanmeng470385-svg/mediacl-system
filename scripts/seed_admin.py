@@ -52,7 +52,8 @@ def main() -> int:
     parser.add_argument("--username", default="admin", help="目标用户名（默认 admin）")
     parser.add_argument("--password", default=None, help="明文密码；不传则读 ADMIN_INIT_PASSWORD，仍为空则随机生成")
     parser.add_argument("--phone", default=None, help="同时设置手机号（手机验证码登录用）")
-    parser.add_argument("--create", action="store_true", help="用户不存在时自动创建（role=admin）")
+    parser.add_argument("--create", action="store_true", help="用户不存在时自动创建（角色默认 admin，可用 --role 指定）")
+    parser.add_argument("--role", default="admin", help="自动创建时的角色（admin/compliance/medical 等）")
     args = parser.parse_args()
 
     password = args.password or os.getenv("ADMIN_INIT_PASSWORD") or ""
@@ -72,7 +73,7 @@ def main() -> int:
             user = User(
                 username=args.username,
                 full_name=args.username,
-                role="admin",
+                role=args.role,
                 status="active",
             )
             db.add(user)

@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/skill-packages", tags=["skill-packages"])
 
 SKILL_ADMIN_ROLES = ("admin", "manager", "compliance", "medical")
+# 审核动作（approve/reject）收敛合规/医学部（2026-09-01 审核盲审修复批）：
+# detail 受控查看面向全量管理角色（能看者 ⊇ 能审者），裁决动作仅 SKILL_REVIEW_ROLES
+SKILL_REVIEW_ROLES = ("compliance", "medical")
 VALID_AUDIT = ("pending", "approved", "rejected")
 VALID_OFF_SHELF_TYPE = ("compliance", "author")
 
@@ -137,6 +140,28 @@ def _validate_release_payload(payload: dict) -> dict:
     }
 
 
+def _validate_source_sessions(db: Session, user_id: int, session_ids, label: str = "session_ids") -> list:
+    """提取来源会话校验（extract-draft 与 release 溯源共用，2026-09-01）：
+    1~10 个 int、本人、completed、单会话 >=3 轮；去重后返回会话列表。"""
+    if (
+        not isinstance(session_ids, list)
+        or not 1 <= len(session_ids) <= 10
+        or not all(isinstance(i, int) and not isinstance(i, bool) for i in session_ids)
+    ):
+        raise ParamError("%s 必须是 1~10 个会话 ID 数组" % label)
+    sessions = []
+    for sid in dict.fromkeys(session_ids):  # 去重：同会话传两次不重复计数
+        s = db.query(PracticeSession).filter(PracticeSession.id == sid).first()
+        if not s or s.representative_id != user_id:
+            raise ParamError("陪练会话不存在或非本人会话")
+        if s.status != "completed":
+            raise ParamError("仅已完成的陪练会话可提取")
+        if (s.turn_count or 0) < 3:
+            raise ParamError("该会话轮次不足（需至少 3 轮）")
+        sessions.append(s)
+    return sessions
+
+
 @router.post("")
 async def create_skill(
     payload: dict,
@@ -215,12 +240,18 @@ async def release_skill(
     """三期 J：代表发布 Skill 到公共空间 → pending，审核通过后上代表侧广场。
     is_public=True（发布意图）；/public 广场按 audit_status=approved 过滤，pending 不可见。"""
     data = _validate_release_payload(payload)
+    # 溯源留档（2026-09-01 审核盲审修复批）：提取->发布链路携带来源会话，校验同 extract 门槛
+    source_ids = payload.get("source_session_ids")
+    if source_ids is not None:
+        _validate_source_sessions(db, current_user["id"], source_ids, label="source_session_ids")
+        source_ids = list(dict.fromkeys(source_ids))
     sk = SkillPackage(
         name=data["name"], creator_id=current_user["id"],
         description=data["description"], content=data["content"],
         is_public=True, is_anonymous=data["is_anonymous"],
         audit_status="pending", style_tags=data["style_tags"], heat=0,
         skill_weights=data["skill_weights"],
+        source_session_ids=source_ids,
     )
     db.add(sk)
     db.commit()
@@ -228,7 +259,7 @@ async def release_skill(
     await write_audit_log(
         action="skill_release", user_id=current_user["id"],
         resource_type="skill_package", resource_id=str(sk.id),
-        after_value={"name": sk.name, "description": sk.description},
+        after_value={"name": sk.name, "description": sk.description, "source_session_ids": source_ids},
         request_id=get_request_id() or None,
     )
     return success(sk.to_dict())
@@ -250,22 +281,9 @@ async def extract_draft(
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
     session_ids = payload.get("session_ids")
-    if (
-        not isinstance(session_ids, list)
-        or not 1 <= len(session_ids) <= 10
-        or not all(isinstance(i, int) and not isinstance(i, bool) for i in session_ids)
-    ):
+    if not isinstance(session_ids, list) or not session_ids:
         raise ParamError("session_ids 必须是 1~10 个会话 ID 数组")
-    sessions = []
-    for sid in dict.fromkeys(session_ids):  # 去重：同会话传两次不重复计数
-        s = db.query(PracticeSession).filter(PracticeSession.id == sid).first()
-        if not s or s.representative_id != current_user["id"]:
-            raise ParamError("陪练会话不存在或非本人会话")
-        if s.status != "completed":
-            raise ParamError("仅已完成的陪练会话可提取")
-        if (s.turn_count or 0) < 3:
-            raise ParamError("该会话轮次不足（需至少 3 轮）")
-        sessions.append(s)
+    sessions = _validate_source_sessions(db, current_user["id"], session_ids)
     sessions.sort(key=lambda s: s.id)  # 创建序即时间正序
     rep_turns = [
         t for s in sessions for t in (s.transcript or [])
@@ -382,8 +400,10 @@ async def skill_detail(
     current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """审核详情：受控查看 skill_weights（仅审核人 compliance/medical，隐私边界附录B-1）。
-    admin/manager 仅返回元数据（无 content/skill_weights），访问仍记审计。"""
+    """审核详情：受控查看 content/skill_weights/source_session_ids（2026-09-01 审核盲审修复）。
+    方案 A「能审即能看」：SKILL_ADMIN_ROLES 全量 expose——此前 admin/manager 仅元数据
+    可审，approve 即橡皮图章；审核裁决动作另收敛 SKILL_REVIEW_ROLES（compliance/medical）。
+    广场/资产列表公共口径仍不含受控字段，访问照记审计（skill_detail_view）。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
         raise BusinessError("Skill 不存在", code=4000)
@@ -393,7 +413,7 @@ async def skill_detail(
         after_value={"name": sk.name},
         request_id=get_request_id() or None,
     )
-    expose_weights = current_user["role"] in ("compliance", "medical")
+    expose_weights = current_user["role"] in SKILL_ADMIN_ROLES
     return success(sk.to_dict(expose_weights=expose_weights))
 
 
@@ -401,10 +421,11 @@ async def skill_detail(
 async def review_skill(
     skill_id: int,
     payload: dict,
-    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    current_user: dict = Depends(require_roles(*SKILL_REVIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """审核：approve/reject。审核人受控查看 skill_weights（读后写审计）。"""
+    """审核：approve/reject（2026-09-01 收敛 compliance/medical，医学/合规裁决语义）。
+    admin/manager 保留 detail 受控查看与下架管理；读后写审计照旧。"""
     sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
     if not sk:
         raise BusinessError("Skill 不存在", code=4000)
@@ -438,6 +459,26 @@ async def review_skill(
         request_id=get_request_id() or None,
     )
     return success(sk.to_dict())
+
+
+@router.get("/{skill_id}/audits")
+async def skill_audits(
+    skill_id: int,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """审核历史（2026-09-01 审核盲审修复批）：skill_audits 全量 + 审核人姓名，审核抽屉留痕展示。"""
+    sk = db.query(SkillPackage).filter(SkillPackage.id == skill_id).first()
+    if not sk:
+        raise BusinessError("Skill 不存在", code=4000)
+    rows = (
+        db.query(SkillAudit, User.full_name)
+        .outerjoin(User, SkillAudit.auditor_id == User.id)
+        .filter(SkillAudit.skill_id == skill_id)
+        .order_by(SkillAudit.id.desc())
+        .all()
+    )
+    return success([{**a.to_dict(), "auditor_name": name} for a, name in rows])
 
 
 @router.post("/{skill_id}/off-shelf")

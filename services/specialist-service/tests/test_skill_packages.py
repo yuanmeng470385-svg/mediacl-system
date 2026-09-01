@@ -21,6 +21,7 @@ from sqlalchemy.pool import StaticPool
 from shared.common.auth import create_token
 from shared.common.db_session import get_db
 from shared.models.base import Base
+from shared.models.practice import PracticeSession
 from shared.models.skill import SkillAudit, SkillPackage, SkillOffShelf
 from shared.models.user import User
 
@@ -60,7 +61,8 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, SkillPackage.__table__, SkillAudit.__table__, SkillOffShelf.__table__]
+    tables = [User.__table__, SkillPackage.__table__, SkillAudit.__table__, SkillOffShelf.__table__,
+              PracticeSession.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -68,6 +70,8 @@ def fresh_state(monkeypatch):
         User(id=1, username="rep01", full_name="张代表", phone="13800000001", role="rep", status="active"),
         User(id=2, username="admin", full_name="管理员", phone="13800000000", role="admin", status="active"),
         User(id=3, username="medical", full_name="医学部", phone="13800000003", role="medical", status="active"),
+        User(id=4, username="manager", full_name="销售经理", phone="13800000004", role="manager", status="active"),
+        User(id=5, username="compliance", full_name="合规部", phone="13800000005", role="compliance", status="active"),
     ])
     db.commit()
     db.close()
@@ -123,14 +127,16 @@ def test_create_skill_public_flag(fresh_state):
     assert "skill_weights" not in body["data"]
 
 
-def test_detail_hides_content_weights_from_admin(fresh_state):
-    _add_skill(id=1, content="话术素材")
+def test_detail_exposes_content_to_admin_plan_a(fresh_state):
+    """方案 A（2026-09-01 审核盲审修复）：SKILL_ADMIN_ROLES 全量受控可见——
+    此前 admin/manager 仅元数据可审，approve 即橡皮图章；能看者 ⊇ 能审者。"""
+    _add_skill(id=1, content="话术素材", source_session_ids=[7])
     resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(2, "admin"))
     body = resp.json()
     assert body["code"] == 0
-    # admin 仅返回元数据，无 content/skill_weights（内容/权重仅审核人可见）
-    assert "content" not in body["data"]
-    assert "skill_weights" not in body["data"]
+    assert body["data"]["content"] == "话术素材"
+    assert body["data"]["skill_weights"] == {"formal_level": "标准学术"}
+    assert body["data"]["source_session_ids"] == [7]
     # rep 无权限查看详情
     resp = client.get("/api/v1/skill-packages/1/detail", headers=_token(1, "rep"))
     assert resp.status_code == 403
@@ -149,7 +155,7 @@ def test_detail_exposes_content_to_medical(fresh_state):
 def test_review_approve_sets_public(fresh_state):
     _add_skill(id=1)
     resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
-                       headers=_token(2, "admin"))
+                       headers=_token(5, "compliance"))
     body = resp.json()
     assert body["code"] == 0
     assert body["data"]["audit_status"] == "approved"
@@ -160,7 +166,7 @@ def test_review_approve_sets_public(fresh_state):
 def test_review_reject_requires_reason():
     _add_skill(id=1)
     resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "reject"},
-                       headers=_token(2, "admin"))
+                       headers=_token(5, "compliance"))
     assert resp.status_code == 400
     assert resp.json()["code"] == 1000
 
@@ -391,3 +397,96 @@ def test_off_shelf_twice_4001(fresh_state):
                        headers=_token(2, "admin"))
     assert resp.status_code == 422
     assert resp.json()["code"] == 4001
+
+# ========== 2026-09-01 审核盲审修复批：方案 B 审核收敛 + 溯源留档 ==========
+
+def _add_session(sid=7, rep_id=1, status="completed", turns=12):
+    db = TestSession()
+    db.add(PracticeSession(
+        id=sid, representative_id=rep_id, skill_id=None, scenario="心内科推广",
+        status=status, turn_count=turns,
+        transcript=[{"turn": 1, "role": "rep", "content": "主任您好"}],
+    ))
+    db.commit()
+    db.close()
+
+
+def test_review_rejects_manager_403_plan_b(fresh_state):
+    """方案 B：审核裁决收敛 compliance/medical，admin/manager 仅保留受控查看。"""
+    _add_skill(id=1)
+    resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
+                       headers=_token(4, "manager"))
+    assert resp.status_code == 403
+    resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 403
+
+
+def test_review_allows_compliance_writes_audit(fresh_state):
+    _add_skill(id=1)
+    resp = client.post("/api/v1/skill-packages/1/review", json={"verdict": "approve"},
+                       headers=_token(5, "compliance"))
+    assert resp.json()["code"] == 0
+    db = TestSession()
+    rows = db.query(SkillAudit).all()
+    db.close()
+    assert len(rows) == 1 and rows[0].audit_result == "approved"
+    fresh_state.assert_awaited()
+
+
+def test_audits_lists_history_with_auditor_name(fresh_state):
+    _add_skill(id=1)
+    client.post("/api/v1/skill-packages/1/review", json={"verdict": "reject", "reason": "内容不合规"},
+                headers=_token(5, "compliance"))
+    resp = client.get("/api/v1/skill-packages/1/audits", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert len(body["data"]) == 1
+    row = body["data"][0]
+    assert row["audit_result"] == "rejected"
+    assert row["reason"] == "内容不合规"
+    assert row["auditor_name"] == "合规部"
+    # rep 不可见审核历史
+    resp = client.get("/api/v1/skill-packages/1/audits", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_release_stores_source_session_ids(fresh_state):
+    """溯源留档：release 携带来源会话（校验本人+completed+>=3轮）后落库并在审计 after_value。"""
+    _add_session(7)
+    _add_session(8)
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+        "source_session_ids": [7, 8, 7],
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    db = TestSession()
+    sk = db.query(SkillPackage).filter(SkillPackage.creator_id == 1).first()
+    db.close()
+    assert sk.source_session_ids == [7, 8]  # 去重落库
+    args, kwargs = fresh_state.call_args
+    assert kwargs["after_value"]["source_session_ids"] == [7, 8]
+
+
+def test_release_rejects_foreign_session(fresh_state):
+    _add_session(7, rep_id=999)
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+        "source_session_ids": [7],
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert resp.status_code == 400
+    assert "非本人" in body["message"]
+
+
+def test_release_rejects_unfinished_session(fresh_state):
+    _add_session(7, status="in_progress", turns=0)
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+        "source_session_ids": [7],
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 400

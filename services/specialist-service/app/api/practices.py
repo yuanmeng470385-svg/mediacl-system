@@ -14,7 +14,9 @@ from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
 from shared.models.practice import ObjectionScript, PracticeSession
 from shared.models.skill import SkillPackage
+from shared.models.user import User
 
+from app.api.skill_packages import SKILL_ADMIN_ROLES  # noqa: E402 -- 审核溯源角色复用单一事实源
 from app.services.audit_client import write_audit_log
 from app.services.compliance_client import check_compliance
 from app.services.qwen_client import QwenClient
@@ -454,3 +456,34 @@ async def review_objection_script(
         request_id=get_request_id() or None,
     )
     return success(script.to_dict())
+
+@router.get("/{session_id}/review-transcript")
+async def review_transcript(
+    session_id: int,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """审核溯源（2026-09-01 Skill 审核盲审修复批）：受控查看陪练会话原始 transcript。
+    供 Skill 审核人核对「提取摘录是否忠于本人原文」（LLM 幻觉/夹带终审防线）；访问记审计。"""
+    s = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
+    if not s:
+        raise BusinessError("陪练会话不存在", code=4000)
+    rep_name = db.query(User.full_name).filter(User.id == s.representative_id).scalar()
+    await write_audit_log(
+        action="practice_source_view",
+        user_id=current_user["id"],
+        resource_type="practice_session",
+        resource_id=str(s.id),
+        after_value={"scenario": s.scenario, "turn_count": s.turn_count},
+        request_id=get_request_id() or None,
+    )
+    return success({
+        "id": s.id,
+        "representative_id": s.representative_id,
+        "rep_name": rep_name,
+        "scenario": s.scenario,
+        "status": s.status,
+        "turn_count": s.turn_count,
+        "transcript": s.transcript or [],
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    })

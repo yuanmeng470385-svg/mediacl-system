@@ -612,3 +612,46 @@ def test_complete_style_match_out_of_range_nullified(fresh_state, monkeypatch):
     assert scores["style_match"] is None
     assert scores["overall"] == 0.8  # 四维分数照常用，未回退基线
     assert scores["template_style"] == _TEST_WEIGHTS
+
+# ========== 2026-09-01 审核盲审修复批：受控查看陪练原始 transcript ==========
+
+def _add_completed_session(sid=7, rep_id=1):
+    db = TestSession()
+    db.add(PracticeSession(
+        id=sid, representative_id=rep_id, skill_id=None, scenario="心内科推广",
+        status="completed", turn_count=12,
+        transcript=[
+            {"turn": 1, "role": "rep", "content": "主任您好"},
+            {"turn": 1, "role": "ai", "content": "你好，请讲"},
+        ],
+    ))
+    db.commit()
+    db.close()
+
+
+def test_review_transcript_admin_sees_transcript_and_audits(fresh_state):
+    _add_completed_session(7)
+    resp = client.get("/api/v1/practices/7/review-transcript", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    data = body["data"]
+    assert data["id"] == 7
+    assert data["rep_name"] == "张代表"  # join users 取姓名
+    assert data["turn_count"] == 12
+    assert len(data["transcript"]) == 2
+    args, kwargs = fresh_state.call_args
+    assert kwargs["action"] == "practice_source_view"
+    assert kwargs["resource_id"] == "7"
+
+
+def test_review_transcript_medical_allowed_rep_403(fresh_state):
+    _add_completed_session(7)
+    resp = client.get("/api/v1/practices/7/review-transcript", headers=_token(3, "medical"))
+    assert resp.json()["code"] == 0
+    resp = client.get("/api/v1/practices/7/review-transcript", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_review_transcript_missing_404(fresh_state):
+    resp = client.get("/api/v1/practices/999/review-transcript", headers=_token(2, "admin"))
+    assert resp.json()["code"] == 4000
