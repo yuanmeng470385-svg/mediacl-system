@@ -699,3 +699,44 @@ def test_turn_passes_recent_history_to_doctor(fresh_state, monkeypatch):
     assert "不要重复提出" in user_msg
     # system 提示多轮连贯
     assert "多轮连续对话" in captured["messages"][0]["content"]
+
+def test_doctor_prompt_marks_style_as_reps_template(fresh_state, monkeypatch):
+    """风格模版归属澄清（2026-09-02）：skill_weights=代表本人的风格模版（三期 P 语义），
+    注入医生 prompt 须写明「对方的风格模版…不是你的风格」——此前写「风格参数：…」
+    未说明归属，医生易把自己的表达往模版上靠；未加载 Skill 时不再出现风格行。"""
+    db = TestSession()
+    db.add(SkillPackage(id=1, name="严谨学术风", creator_id=3, is_public=True,
+                        audit_status="approved",
+                        skill_weights={"formal_level": "标准学术", "reply_length": "简洁"}))
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=1, scenario="心内科推广",
+                           status="in_progress", turn_count=0))
+    db.add(PracticeSession(id=2, representative_id=1, skill_id=None, scenario="肿瘤科推广",
+                           status="in_progress", turn_count=0))
+    db.commit()
+    db.close()
+
+    captured = []
+    from app.services import qwen_client as qc
+
+    def fake_chat(self, messages, **kwargs):
+        captured.append(messages)
+        return {"content": "医生：请介绍下这款药的优势。", "usage": {}}
+
+    monkeypatch.setattr(qc.QwenClient, "chat", fake_chat)
+    monkeypatch.setattr(practices_api, "check_compliance", AsyncMock(return_value={"blocked": False}))
+
+    # 加载了 Skill：风格行须声明归属 + 带出权重
+    resp = client.post("/api/v1/practices/1/turn", json={"message": "您好，这款药降压平稳"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user_msg = captured[0][1]["content"]
+    assert "对方的风格模版（供你参考判断其表达，不是你的风格）" in user_msg
+    assert "正式程度" in user_msg and "简洁" in user_msg
+    assert "风格参数：" not in user_msg
+
+    # 未加载 Skill：不出现任何风格行（不再谎称默认「标准学术」模版）
+    resp = client.post("/api/v1/practices/2/turn", json={"message": "您好"},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user_msg2 = captured[1][1]["content"]
+    assert "风格模版" not in user_msg2 and "风格参数" not in user_msg2
