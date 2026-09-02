@@ -491,3 +491,60 @@ def test_release_rejects_unfinished_session(fresh_state):
         "source_session_ids": [7],
     }, headers=_token(1, "rep"))
     assert resp.status_code == 400
+
+
+def test_create_rejects_invalid_weight_enum():
+    resp = client.post("/api/v1/skill-packages", json={
+        "name": "严谨学术风", "style_tags": ["严谨学术"],
+        "skill_weights": {"formal_level": "超级随意"},
+    }, headers=_token(3, "medical"))
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == 1000
+    assert "formal_level" in body["message"]
+
+
+def test_release_rejects_invalid_weight_enum(fresh_state):
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"reply_length": "超长"},
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["code"] == 1000
+    assert "reply_length" in body["message"]
+
+
+def test_release_accepts_valid_partial_weights(fresh_state):
+    """键存在才校验：只带部分枚举键（或自定义非枚举键）不误伤。"""
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "非常严谨", "custom_note": "自定义"},
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+
+
+def test_weights_enums_match_specialists_whitelist():
+    """跨文件枚举一致性（2026-09-02）：skill_packages 与 specialists 白名单逐字对齐，
+    防止单边改动导致发布通过、陪练评分口径对不上。"""
+    import app.api.specialists as specialists_api
+    assert sp_api.VALID_FORMAL == specialists_api.VALID_FORMAL
+    assert sp_api.VALID_LENGTH == specialists_api.VALID_LENGTH
+    assert sp_api.VALID_OPENING == specialists_api.VALID_OPENING
+
+
+def test_mine_returns_own_content_not_weights(fresh_state):
+    """T5-4（2026-09-02）挂账收口：/mine 本人回看 content；weights 仍不吐（附录 B-1）。"""
+    db = TestSession()
+    db.add(SkillPackage(id=2, name="我的", creator_id=1, is_public=True, is_anonymous=False,
+                        audit_status="approved", style_tags=["严谨"], heat=5,
+                        skill_weights={"formal_level": "标准学术"}, content="正文话术素材"))
+    db.commit()
+    db.close()
+    resp = client.get("/api/v1/skill-packages/mine", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    item = body["data"]["items"][0]
+    assert item["content"] == "正文话术素材"
+    assert "skill_weights" not in item
+    assert "source_session_ids" not in item

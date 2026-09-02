@@ -740,3 +740,21 @@ def test_doctor_prompt_marks_style_as_reps_template(fresh_state, monkeypatch):
     assert resp.json()["code"] == 0
     user_msg2 = captured[1][1]["content"]
     assert "风格模版" not in user_msg2 and "风格参数" not in user_msg2
+
+
+def test_list_sessions_omits_transcript(fresh_state):
+    """T5-3（2026-09-02）：GET /practices 分页瘦身——列表不携带 transcript。"""
+    _add_completed_session(7)
+    resp = client.get("/api/v1/practices", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    item = next(i for i in body["data"]["items"] if i["id"] == 7)
+    assert "transcript" not in item
+    assert item["turn_count"] == 12  # 其余字段不受影响
+
+
+def test_session_to_dict_transcript_switch():
+    """to_dict 开关单测：默认 True 保持创建/收尾响应兼容，False 剔除 key。"""
+    s = PracticeSession(id=1, representative_id=1, scenario="心内科", transcript=[{"turn": 1}])
+    assert s.to_dict()["transcript"] == [{"turn": 1}]
+    assert "transcript" not in s.to_dict(include_transcript=False)

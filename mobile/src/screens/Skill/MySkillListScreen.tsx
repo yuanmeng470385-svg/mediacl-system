@@ -2,7 +2,8 @@
  * 我的 Skill（三期 J）：展示本人发布的 Skill 列表。
  * 每条：名称 + 审核状态徽标 + 热度(heat) + 好评率(approval_rate)，
  * 下架（off_shelf_status === 'off_shelved'）时红字提示下架原因。
- * 后端 mine 接口不返回 content/skill_weights，本屏仅展示元数据。
+ * 2026-09-02 挂账收口：后端 /mine 现返回 content 供本人回看（可展开/收起）；
+ * skill_weights 仍不返回（附录 B-1），本屏只展示内容不展示风格参数。
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -26,6 +27,7 @@ interface MySkillItem {
   approval_rate?: number | null;
   off_shelf_status?: string;
   off_shelf_reason?: string;
+  content?: string;  // 2026-09-02：本人回看自己发布的话术内容
 }
 
 const AUDIT_BADGE: Record<string, { label: string; color: string; bg: string }> = {
@@ -40,6 +42,7 @@ export default function MySkillListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -56,6 +59,18 @@ export default function MySkillListScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const toggleContent = (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -97,6 +112,18 @@ export default function MySkillListScreen() {
             <Text style={styles.metaText}>好评率 {formatRate(item.approval_rate)}</Text>
           </View>
         </View>
+
+        {item.content != null && (
+          <View style={styles.contentBox}>
+            <TouchableOpacity style={styles.contentToggle} onPress={() => toggleContent(item.id)} activeOpacity={0.7}>
+              <Icon name={expanded.has(item.id) ? 'chevron-up' : 'chevron-down'} size={14} color={Colors.primary} />
+              <Text style={styles.contentToggleText}>内容回看</Text>
+            </TouchableOpacity>
+            {expanded.has(item.id) && (
+              <Text style={styles.contentText}>{item.content}</Text>
+            )}
+          </View>
+        )}
 
         {offShelved && (
           <View style={styles.offShelfBox}>
@@ -195,6 +222,13 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xl, marginTop: Spacing.md },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { fontSize: FontSize.xs, color: Colors.textSecondary },
+  contentBox: {
+    marginTop: Spacing.sm, backgroundColor: Colors.primarySurface,
+    borderRadius: BorderRadius.sm, padding: Spacing.sm,
+  },
+  contentToggle: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  contentToggleText: { fontSize: FontSize.xs, color: Colors.primary, fontWeight: '600' },
+  contentText: { marginTop: Spacing.xs, fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
   offShelfBox: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: Colors.dangerLight, borderRadius: BorderRadius.sm,

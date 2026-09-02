@@ -42,6 +42,21 @@ VALID_FORMAL = ("非常严谨", "标准学术", "略带亲和力")
 VALID_LENGTH = ("简洁", "标准", "详尽")
 VALID_OPENING = ("直切主题", "先寒暄再进入")
 
+
+def _validate_weights_enums(weights: dict) -> None:
+    """T5-2（2026-09-02）：create/release 的 skill_weights 枚举校验。
+    键存在才校验（对齐 specialists._validate_style 口径）；extract-draft 走
+    LLM 输出归一回退（非法值→默认值）不动——草稿可改，落库必须合法。"""
+    for key, valid in (
+        ("formal_level", VALID_FORMAL),
+        ("reply_length", VALID_LENGTH),
+        ("opening_mode", VALID_OPENING),
+    ):
+        v = weights.get(key)
+        if v is not None and v not in valid:
+            raise ParamError(f"{key} 仅可取 {'/'.join(valid)}")
+
+
 # 每用户每日提取限额（决策 4）：走 audit-service 计数，超限拒绝重试
 EXTRACT_DAILY_LIMIT = 3
 
@@ -110,6 +125,7 @@ def _validate_payload(payload: dict) -> dict:
     weights = payload.get("skill_weights")
     if not isinstance(weights, dict) or not weights:
         raise ParamError("skill_weights 必须是非空对象（沟通风格参数）")
+    _validate_weights_enums(weights)
     return {"name": name, "skill_weights": weights, "style_tags": payload.get("style_tags")}
 
 
@@ -130,6 +146,7 @@ def _validate_release_payload(payload: dict) -> dict:
     weights = payload.get("skill_weights")
     if not isinstance(weights, dict) or not weights:
         raise ParamError("skill_weights 必须是非空对象（沟通风格参数）")
+    _validate_weights_enums(weights)
     style_tags = payload.get("style_tags")
     if style_tags is not None and not isinstance(style_tags, list):
         raise ParamError("style_tags 必须是数组")
@@ -351,7 +368,14 @@ async def my_skills(
     q = db.query(SkillPackage).filter(SkillPackage.creator_id == current_user["id"])
     total = q.count()
     rows = q.order_by(SkillPackage.id.desc()).offset(p.offset).limit(p.limit).all()
-    return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
+    # 2026-09-02 挂账收口：本人可回看自己发布的话术内容——仅补 content；
+    # skill_weights/source_session_ids 仍不吐（附录 B-1：风格参数口径未放开到 /mine）
+    items = []
+    for s in rows:
+        d = s.to_dict()
+        d["content"] = s.content
+        items.append(d)
+    return success(paginate(items, total, p.page, p.page_size))
 
 
 @router.get("/asset-list")

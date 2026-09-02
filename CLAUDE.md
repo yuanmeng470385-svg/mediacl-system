@@ -86,7 +86,7 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-20 全量 822 = 8 服务 803 + shared 19；此后各批增量见各段——2026-09-02 时点：specialist 331 / gateway 88 / visit 117 / audit 32 / mobile jest 100；auth 另有 7 skipped——本机 Redis 未起，7 个 Lua 并发用例跳过）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-20 全量 822 = 8 服务 803 + shared 19；此后各批增量见各段——2026-09-02 时点：specialist 338 / gateway 88 / visit 117 / audit 32 / mobile jest 100；auth 另有 7 skipped——本机 Redis 未起，7 个 Lua 并发用例跳过）
 cd services/auth-service && python -m pytest tests/ -v        # 152 passed + 7 skipped（2026-08-21 三期 L 全量回归实测，本机 Redis 未起——7 个跳过为验证码并发 consume Lua 用例，Redis 起时 159；2026-08-19 二期 E 实测 135（Redis 已起）；含备案资质 / 医生认证 / 培训材料 test_training_materials 8 / 题库考试 test_exams 19（二期 F 修复 fae0777 补 test_list_questions_exposes_answer_to_admin）/ 承诺书 test_commitment 4 / 隐私中心 test_privacy 24（三期 L：政策/个人信息/四类申请校验/me/管理列表 SLA/handle 落地/数据包/去标识化）用例）
 cd services/specialist-service && python -m pytest tests/ -v  # 331 passed（2026-09-02 风格归属澄清批 331 = 陪练记忆批 330 + 1；2026-08-20 三期 K Task 6 全量回归实测 267；三期 N 256 + 评分校验修复 1（5aa899c 排除 bool 防污染进步曲线）+ 三期 K 数据治理 10（mah_overview 2 / data_exports 申请·审批·下载 7 / ExportRequest 模型 1）；三期 M 终审 252 + 三期 N 陪练 LLM 深度评分 +4（迁移 021 transcript 模型 1 / 逐轮落库 transcript 1 / LLM 深度评分+降级基线 2）；三期 J 终审 239 + 三期 M 患教审核流 13（audit_status to_dict 1 / publish·unpublish 5 / review-queue·review 5 / zone 2）；219（二期 I：198 + 医生偏好 test_doctor_profiles 6 / 患教 test_patient_edu 5 / 广场 test_doctor_plaza 4 + chat 订阅硬校验 test_chat_subscription 3 + 运营统计 test_doctor_stats 3）+ 三期 J to_dict 1 / release·mine 5 / asset-list·detail·public·load 5 / off-shelf·陪练禁用 7 + 终审修复 2（内容可见收窄 / content 上限）；含一期 C 反馈明细/流式门禁全量帧/降级多轮上下文/医学问答/分享简报 + 二期 E 对话全文检索 test_conv_search 5 / 分身监控统计 test_monitor_specialists 9 / 冻结解冻/review-queue + 二期 G 学术卡片 test_academic_cards 6 / 卡片推送 test_card_pushes 7 + 二期 H Skill 模版 test_skill_packages 9 / AI 陪练 test_practices 9 / 分身管理 test_twin_manage 5；2026-08-21 三期 L 收尾复测 268 passed——三期 K 终审 6bd5d2f 补 xlsx 公式清洗 1 用例后的实数，三期 L 无 specialist 改动）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
@@ -572,10 +572,10 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - ~~**流式答案合规审核旁路**：`specialist-service` 的 `generate_stream` 边生成边推送，答案合规审核在全文推送后才执行——被拦时违规内容已展示（REST 路径语义正确）~~（e6c0d75 起逐帧 fast 门禁，违规帧不转发）
 - ~~**收藏多轮错配**：`conversations.py:77-82` 收藏锚定某轮 assistant 行，但 question/answer 取 session 第一条 → 多轮会话收藏展示错对问答~~（b63f736 以被收藏行为锚点取同轮问答）
 - **无整体超时熔断**：bailian_client 每帧 wait_for 30s × 60 帧上限，最坏单条 chat 可挂约 30 分钟；证据等级为被动正则，降级（qwen）模式恒 None
-- ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；~~**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）~~（2485943 HcpCache Redis 缓存 hcp:{id}+profile:{id}，TTL 300s，写路径失效）；`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代
+- ~~**hcp mass assignment**：`hcp_repo.py:99-103` update 用 hasattr 放行任意列（可改主键/时间戳）~~（61144da API 层白名单 400 + repo 层 _filter_writable 兜底）；~~**AI 画像无缓存**（每次 /profile 付费调 qwen-max 且不落库）~~（2485943 HcpCache Redis 缓存 hcp:{id}+profile:{id}，TTL 300s，写路径失效）；~~`update_hcp_profile_from_visit` 的 tags 字符串按字符迭代~~（hcp_repo `_to_tags` 归一 list/逗号分隔串后去重合并，已修）
 - ~~**knowledge 审核同步阻塞**：`review_document`/`upload_document` 在 async 端点同步执行百炼轮询（最长 1h），阻塞事件循环~~（7422a74 线程池 + 原子抢占）；PG 'simple' 分词不切中文（ts_rank 恒 0）
 - ~~**compliance service_name 失真**：`rules.py:68` 把内容类型（user_input/ai_output）写进 service_name 列（调用方不传 service_name）→ 监管报告"按服务"统计显示的是内容类型；`checked_rules` 是假数据（全量规则 id 覆盖，含未执行的语义规则）~~（4e770a6 specialist/visit 客户端请求体显式传 service_name、缺省 unknown；checked_rules 只列实际执行的规则——keyword/regex 全跑、semantic 仅 LLM 真会调用时列入，无违规也返回真实覆盖面）；~~warn/log 违规也计入拦截计数~~（85aebf3 compliance_blocks_total 只计 reject，新增 violations_total 全量 + semantic 缺 key 剔除可观测，/blocks/stats 加 action 参数）
-- **audit 导出 1 万条静默截断**（logs.py:155）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；~~`AUDIT_LOG_RETENTION_DAYS` 死配置~~（f50a8de lifespan 定时清理 + medagent_audit_cleanup 专职角色，迁移 005 需 superuser）
+- ~~**audit 导出 1 万条静默截断**（logs.py:155）~~（2026-08-21 审计批已修：EXPORT_ROW_LIMIT=10000 超限表内加「⚠ 数据已截断」警示行 + 审计带 total/truncated，不再静默）、~~`logger.log()` 无 `**kwargs`（调用方新增字段键会 TypeError 被吞）~~（2026-08-11 十项缺陷 #3 已加 **kwargs 吸收）；~~`AUDIT_LOG_RETENTION_DAYS` 死配置~~（f50a8de lifespan 定时清理 + medagent_audit_cleanup 专职角色，迁移 005 需 superuser）
 - 网关 JSON 分支内容长度经 `response.json()` 重序列化后透传上游 content-length（当前全栈 FastAPI 字节一致，属潜在失配）
 
 **2026-08-11 全量审计（8 域 8 代理并行，60 发现合并去重，用户确认仅归档暂缓修复；划线=已修）**：
@@ -588,16 +588,16 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - ~~**M1 compliance 语义层 fail-open 覆盖"内容拒审"**：`checker.py:336-352` fail-closed 元组只收 (JSONDecodeError, KeyError, TypeError, ValueError)，内容过滤/拒答以 HTTP 400（BadRequestError，属 Exception）落入宽 except fail-open → R003/R004/R006 整体跳过，与 S7 口径冲突~~（B5 批 2026-08-12 已把宽 except 收敛为 R999 fail-closed，2026-08-13 复核确认已修并补划线）
 - ~~**M2 compliance Unicode 变体绕过**：`checker.py:232-243` 匹配前无 NFKC/零宽字符剥离 → "１００％有效"、插 U+200B、"返 点"绕过 R001/R002，且 fast 流式门禁只跑文本层整体跳过~~（2026-08-13 已修：内容与规则 pattern 双端 NFKC 归一化 + 38 项零宽字符剥离（含 FE00-FE0F 变体选择符/bidi 隔离符/HANGUL FILLER 及其 NFKC 映射 U+1160），fast/full/test_rule 三路径同口径，语义层仍吃原文；纯零宽 pattern 丢弃防全量误报；终审修复 pattern 同口径与零宽表扩充）
 - ~~**M3 compliance 同步 LLM 阻塞事件循环**：`checker.py:287-295` 同步 create 跑 async 端点（默认超时 600s）→ LLM 变慢时 specialist/visit 调用方 10s 超时系统性 fail-open~~（2026-08-13 已修：/check 与 /rules/test 改 asyncio.to_thread + OpenAI 客户端 timeout 15s/max_retries=1，超时仍走 R999 fail-closed；test_check_async_blocking.py 5 用例）
-- **M4 compliance xlsx 导出公式注入**：`report.py:43-47` 拦截明细/规则快照原样写入 → `=HYPERLINK(...)`/`=cmd|` 开头内容按公式执行；audit 导出（logs.py:178-190）字符串列同理。修法：`= + - @ \t \r` 开头前置单引号或强制 data_type='s'
+- ~~**M4 compliance xlsx 导出公式注入**：`report.py:43-47` 拦截明细/规则快照原样写入 → `=HYPERLINK(...)`/`=cmd|` 开头内容按公式执行；audit 导出（logs.py:178-190）字符串列同理。修法：`= + - @ \t \r` 开头前置单引号或强制 data_type='s'~~（2026-08-21 审计批已修：shared/common/xlsx.py sanitize_cell 用于 report.py 全部 append 与 audit 导出字符串列）
 - ~~**M5 visit full_transcript 可覆盖真实转写**：`visit_manager.py:515-517` 客户端提交整段覆盖 conversation_transcript 且覆盖后不再过合规检查 → 被标记过 R002/R006 的对话可被洗白~~（2026-08-13 已修：full_transcript 必须以现有转写为前缀（追加语义，篡改拒绝 ParamError），新增部分过合规并累加 compliance_flags，与 F5 尾缀去重/状态守卫兼容）
 - ~~**M6 visit follow_up 结构化输出零合规检查**：`visit_manager.py:561-569` 只查 ai_summary，key_points/hcp_interests/hcp_objections/follow_up_suggestions/next_visit_plan 及自动建任务完全不过合规~~（2026-08-13 已修：结构化字段拼合过 check_compliance——reject 清空字段/不建任务/不推画像+审计留痕，warn 照常落库+flags 累加，客户端异常按 reject 处理；终审修复 summary 被拦分支同样不推画像）
 - ~~**M7 visit LLM prompt 注入**：`visit_manager.py:336-359/519-537/622-636`、`objection_detector.py:92-93` 用户可控转写/画像/历史无 `<user_content>` 定界直接内插（与 compliance S7 已修标准不一致）~~（2026-08-13 已修：prepare_visit/end_visit/follow_up/_llm_recommend/objection_detector 五处全部按 S7 同措辞包 <user_content> 定界 + system 声明）
 - **M8 specialist fast 门禁不覆盖语义层**：违规内容在 full 复核前到达客户端（fast 只跑 keyword/regex）
-- **M9 密码登录无账号级失败锁定**：`auth.py:263-272` 仅受网关 60/min/IP 限流，轮换 IP 可无限试弱密码。修法：Redis 账号级失败计数 + 临时锁定
-- **M10 网关限流不读 X-Forwarded-For**：`rate_limiter.py:154-158` 取 request.client.host → 反代部署下全站共享一桶，刷 login/send-code 可整体 DoS
+- ~~**M9 密码登录无账号级失败锁定**：`auth.py:263-272` 仅受网关 60/min/IP 限流，轮换 IP 可无限试弱密码。修法：Redis 账号级失败计数 + 临时锁定~~（2026-08-21 审计批已修：登录 guard 账号级失败计数 + 临时锁定（LOGIN_MAX_FAILURES/LOGIN_LOCKOUT_SECONDS，锁定检查在 bcrypt 之前））
+- ~~**M10 网关限流不读 X-Forwarded-For**：`rate_limiter.py:154-158` 取 request.client.host → 反代部署下全站共享一桶，刷 login/send-code 可整体 DoS~~（2026-08-21 审计批已修：gateway core/real_ip.py 信任代理网段解析 X-Forwarded-For，限流 IP 键走该解析）
 - ~~**M11 网关 `..` 路径归一化绕过公开前缀**：`main.py:257` + `auth_middleware.py:110-116`，`/api/v1/auth/login/../../docs` 命中 PUBLIC_PATHS 免 JWT 且 httpx 建连归一化 → 未认证可拉全部 7 后端 /docs、/openapi.json、/metrics~~（2026-08-13 已修：鉴权中间件在 PUBLIC/INTERNAL 匹配前拒绝 dot-segment 路径（urlsplit+逐段比对，覆盖 `/../`、`/./`、%2e 编码），400 code 1000；17 用例含零转发断言）
 - **M12 knowledge 解压炸弹**：50MB 只管压缩体积，`document_processor.py:8-33` 解压/渲染到内存无输出上限 → approve 线程池撑爆。修法：页数/文本长度硬上限 + 解析超时
-- **M13 hcp Excel 批量导入无大小限制**（zip 炸弹）
+- ~~**M13 hcp Excel 批量导入无大小限制**（zip 炸弹）~~（2026-08-21 审计批已修：MAX_IMPORT_FILE_SIZE=5MB，导入前 file.file.tell() 校验）
 - ~~**M14 visit ASR WS 直连 8002 无连接数/帧大小/时长限制**（绕过网关限流，每条连接拉一条 NLS 付费会话 + conversation_transcript 无限追加 + 无界并发合规调用）~~（2026-08-13 已修：全局并发 10/单用户 2（单进程近似）、帧 256KB、空闲 90s、时长 6h，超限 error 帧 + 4500；连接数检查在开 NLS 会话之前、状态守卫之后；close 纳入 send_lock 防与合规帧并发写）
 - ~~**M15 visit 合规内部调用与用户请求共用网关 IP 限流配额**：`rate_limiter.py:145-171` 内部路径无豁免 → 多 ASR 并发超 60/min 后合规 429~~（2026-08-13 已修：rate_limiter 豁免 INTERNAL_PATHS 三条内部路径（精确匹配或子路径口径，audit/logs 不误豁免）；内部路径仍强制 X-Internal-Key 双重校验，PUBLIC_PATHS 不限流豁免；test_rate_limiter_internal.py 8 用例）
 - **M16 specialist chat 无长度/并发限制**（网关 WS 绕过限流）
@@ -608,7 +608,7 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 **陪练对话提取风格生成 Skill 草稿 + 风格对照评分（2026-08-31 三期 P，65f7c9a..3ac9d18 七任务）**：
 - `POST /api/v1/skill-packages/extract-draft`（specialist skill_packages.py）：rep 从本人陪练 transcript 提取风格 Skill 草稿——门槛：本人 completed 会话 1~10 个、单会话 ≥3 轮、合计 ≥10 条代表发言；每日 3 次限额走 audit-service 内部计数（`GET /api/v1/audit/count`，require_internal_key + 网关 INTERNAL_PATHS 放行，上海日界）；qwen-turbo JSON 契约（name≤100/description≤200/content≤2000 只摘原文不编造）+ `<user_content>` 定界；LLM 调用/解析失败 4003 可重试；无状态草稿不落库，确认后走既有 release 发布（前端 SkillExtractScreen → SkillRelease 预填）
 - `practices/{id}/complete` scores 扩展（风格学习闭环）：加载模版 Skill 陪练收尾时注入 `_weights_prompt` 风格段，LLM 输出 `style_match`（0-1 匹配度；越界/类型错置 null，不因新字段整体降级）+ per_turn 对照反馈；scores 追加 `template_style`（权重 dict 回显，有加载才有）。注入条件与 turn 链拦截对齐：仅 compliance 下架不注入，author 下架照常注入（已加载用户不受影响）。**附录 B-1 局部修订**：风格参数（skill_weights）对已加载该 Skill 的练习链路可见（原口径「任何 API 不返回」对学习闭环局部放开）。QwenClient.chat 加可选 timeout 参数（默认 30.0 与 client 级一致，存量零影响），评分链传 90 + max_tokens 2500；LLM 失败降级轮数基线时 style_match 恒 null（基线不伪造风格分）
-- mobile：SkillExtractScreen（会话多选 1~10 + 生成遮罩约 1 分钟 + 草稿确认卡）→ replace SkillRelease 预填发布；`OPENING_OPTIONS` 归一为 `('直切主题','先寒暄再进入')`（决策 12，与后端 VALID_OPENING 白名单对齐；存量「先寒暄」归一化迁移挂 Known Gaps）；practice.ts `extractDraft`/`complete` 客户端 120s 超时（与网关 carve-out 对齐）；PracticeChatScreen 结果卡加「模版风格」行 + 风格匹配格（仅 template_style 存在时渲染）
+- mobile：SkillExtractScreen（会话多选 1~10 + 生成遮罩约 1 分钟 + 草稿确认卡）→ replace SkillRelease 预填发布；`OPENING_OPTIONS` 归一为 `('直切主题','先寒暄再进入')`（决策 12，与后端 VALID_OPENING 白名单对齐；存量「先寒暄」归一化迁移 2026-09-02 核销——查库 skill_packages 0 行、digital_specialists.style 仅存「直切主题」，无存量数据无需迁移）；practice.ts `extractDraft`/`complete` 客户端 120s 超时（与网关 carve-out 对齐）；PracticeChatScreen 结果卡加「模版风格」行 + 风格匹配格（仅 template_style 存在时渲染）
 - 测试基线（2026-08-31 三期 P 批回归实测）：specialist 320（+风格对照 6）/ gateway 88（+carve-out 用例 1）/ audit 32 / mobile jest 99（12 套件，+2 条 120s 超时契约）+ tsc 0 错
 
 **Skill 审核盲审修复批（2026-09-01，管理员看不到被审内容 → A/B 两方案 + 溯源链 + 异议话术页）**：
@@ -631,6 +631,13 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - 修复：`_doctor_reply` 风格行由「风格参数：…」改「对方的风格模版（供你参考判断其表达，不是你的风格）：…」——三期 P 语义下 skill_weights 是对方代表的风格画像而非医生的回复风格，旧口径医生会往模版上靠；未加载 Skill 时整行消失（不再谎称默认「标准学术」模版）；docstring/模块 docstring 同步
 - mobile：加载提示改「已加载 Skill 模版 #id：评分时会对照该模版的风格参数…给出风格匹配分；上方「医生性格」是你的对手配置，两者互不影响」（具体权重值代表端拿不到，附录 B-1 只在练习链路回显 template_style）
 - 测试基线（2026-09-02 批实测）：specialist 331（+test_doctor_prompt_marks_style_as_reps_template：归属声明 + 权重带出 + 无 skill 无风格行）/ mobile tsc 0 错
+
+**挂账收口第一批（2026-09-02，全量挂账盘点后用户拍板的 5 项小修）**：
+- skill_weights 枚举校验：create（POST /skill-packages）与 release 两条路径的 skill_weights 现校验 formal_level/reply_length/opening_mode 白名单（`_validate_weights_enums`，键存在才校验，非法值 400 code 1000「仅可取 …」，对齐 specialists._validate_style 口径）；extract-draft 的 LLM 归一回退不动（草稿可改、落库必须合法）；新增跨文件一致性测试 test_weights_enums_match_specialists_whitelist（skill_packages 与 specialists 白名单逐字对齐，防单边漂移）
+- GET /practices 列表瘦身：PracticeSession.to_dict 加 include_transcript 开关（默认 True，创建/收尾响应不变）；list_sessions 传 False——列表不再携带全量 transcript（历史列表只读 scenario/turn_count/scores，SkillExtractScreen 选会话也只用元数据）
+- /mine 本人回看 content：my_skills 每项补 content（本人=内容所有者，发布后无入口回看是挂账）；skill_weights/source_session_ids 仍不吐（附录 B-1）；mobile MySkillListScreen 加「内容回看」展开/收起块，头注释同步
+- CLAUDE.md 划线核销 6 处已修未划项（均到代码逐项复核，见上各划线处）+ 存量「先寒暄」迁移挂账核销（无存量数据）
+- 测试基线（2026-09-02 批实测）：specialist 338（+7：create/release 枚举拒绝、部分键不误伤、跨文件白名单一致、mine 回看 content 不带 weights、列表无 transcript、to_dict 开关单测）/ mobile tsc 0 错
 
 ## Backup & Restore（2026-08-12 新增）
 

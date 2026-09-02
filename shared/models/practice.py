@@ -16,8 +16,8 @@ class PracticeSession(Base, TimestampMixin):
     turn_count = Column(Integer, default=0)
     transcript = Column(JSONB)   # 三期 N：逐轮 Q&A [{turn, role(rep|ai), content}]
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, include_transcript: bool = True) -> dict:
+        d = {
             "id": self.id,
             "representative_id": self.representative_id,
             "skill_id": self.skill_id,
@@ -25,10 +25,14 @@ class PracticeSession(Base, TimestampMixin):
             "status": self.status,
             "scores": self.scores,
             "turn_count": self.turn_count,
-            "transcript": self.transcript,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+        # 2026-09-02 列表瘦身：GET /practices 分页不再携带全量 transcript
+        # （历史列表只读 scenario/turn_count/scores；创建/收尾响应默认不变）
+        if include_transcript:
+            d["transcript"] = self.transcript
+        return d
 
 
 class ObjectionScript(Base, TimestampMixin):

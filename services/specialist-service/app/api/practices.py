@@ -331,7 +331,8 @@ async def list_sessions(
     q = db.query(PracticeSession).filter(PracticeSession.representative_id == current_user["id"])
     total = q.count()
     rows = q.order_by(PracticeSession.id.desc()).offset(p.offset).limit(p.limit).all()
-    return success(paginate([s.to_dict() for s in rows], total, p.page, p.page_size))
+    # 2026-09-02 列表瘦身：分页不吐 transcript（详情态由创建/收尾响应携带）
+    return success(paginate([s.to_dict(include_transcript=False) for s in rows], total, p.page, p.page_size))
 
 
 @router.get("/progress")
