@@ -126,7 +126,7 @@ export default function PracticeListScreen() {
           </View>
 
           {skillId != null && (
-            <Text style={styles.loadedHint}>已加载官方 Skill 模版（#{skillId}），本次陪练将按其风格进行</Text>
+            <Text style={styles.loadedHint}>已加载 Skill 模版 #{skillId}：评分时会对照该模版的风格参数（正式程度/回复长度/开场白）给出风格匹配分；上方「医生性格」是你的对手配置，两者互不影响</Text>
           )}
 
           <TouchableOpacity
