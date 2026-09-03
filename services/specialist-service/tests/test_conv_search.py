@@ -133,3 +133,21 @@ def test_search_returns_full_context():
     item = body["data"]["items"][0]
     assert item["context"] and len(item["context"]) == 2  # 完整会话上下文
     assert {c["role"] for c in item["context"]} == {"user", "assistant"}
+
+
+def test_search_excludes_prep_sessions_by_default():
+    # prep 机器会话（拜访准备指令）默认不出现在检索结果；
+    # include_prep=true 时管理员可查看排查；NULL session（历史行）不受影响
+    _add_conv(id=1, content="正常提问", session_id="s-real")
+    _add_conv(id=2, content="prep 指令内容", session_id="visit_prep_abc123", role="user")
+    _add_conv(id=3, content="prep 回答内容", session_id="visit_prep_abc123", role="assistant")
+    _add_conv(id=4, content="历史 NULL 会话行", session_id=None)
+
+    resp = client.get("/api/v1/conversations/search", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["data"]["total"] == 2
+    assert {i["content"] for i in body["data"]["items"]} == {"正常提问", "历史 NULL 会话行"}
+
+    resp = client.get("/api/v1/conversations/search?include_prep=true", headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["data"]["total"] == 4

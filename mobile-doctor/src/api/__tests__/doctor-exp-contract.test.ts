@@ -85,3 +85,12 @@ describe('doctorExp API', () => {
     expect(init.method).toBe('GET');
   });
 });
+
+describe('doctorExpAPI 患教转发留痕（2026-09-03 业务审查批）', () => {
+  it('forwardEdu 发 POST /api/v1/patient-edu/1/forward', async () => {
+    await doctorExpAPI.forwardEdu(1);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/patient-edu/1/forward');
+    expect(init.method).toBe('POST');
+  });
+});

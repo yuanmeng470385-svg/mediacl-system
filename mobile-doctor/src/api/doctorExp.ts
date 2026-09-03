@@ -59,6 +59,10 @@ export const doctorExpAPI = {
   unpublishEdu: (recordId: number) =>
     apiClient.request<EduCard>('POST', `/api/v1/patient-edu/${recordId}/unpublish`, {}),
 
+  /** 站外转发留痕（Share 唤起系统分享后回写，forward_count+1；迁移 028） */
+  forwardEdu: (recordId: number) =>
+    apiClient.request<EduCard>('POST', `/api/v1/patient-edu/${recordId}/forward`, {}),
+
   /** 患教专区（仅 shared + approved，按 id 倒序分页） */
   zoneList: () =>
     apiClient.request<PaginatedResponse<EduCard>>('GET', '/api/v1/patient-edu/zone'),

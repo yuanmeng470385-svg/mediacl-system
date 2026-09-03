@@ -113,7 +113,10 @@ export default function UserList() {
           tooltip={editing
             ? (canEditRole ? '可变更角色' : '仅管理员可修改角色，且不能修改自己的角色')
             : (me?.role === 'admin' ? '可指定角色' : '仅管理员可指定角色，将按默认角色创建')}
-          options={Object.entries(ROLE_MAP).map(([k, v]) => ({ label: v.text, value: k }))} />
+          options={Object.entries(ROLE_MAP)
+            // finance 无任何端点/页面（零消费角色），建出来只能登进 403 页——先不提供
+            .filter(([k]) => k !== 'finance')
+            .map(([k, v]) => ({ label: v.text, value: k }))} />
         <ProFormText name="region" label="区域" />
       </ModalForm>
     </>

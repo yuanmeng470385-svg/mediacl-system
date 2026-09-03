@@ -476,6 +476,26 @@ def test_prepare_visit_returns_structured_recommendations():
         vm_module.chat_with_specialist = _fake_specialist_ok
 
 
+def test_prepare_visit_marks_prep_session():
+    """prep 调用带 visit_prep_ 前缀 session —— specialist 侧检索/统计按前缀排除机器会话"""
+    from app.core.visit_manager import VisitManager
+    captured = {}
+
+    async def fake_capture(specialist_id, question, user_id, session_id=None, auth_token=None):
+        captured["session_id"] = session_id
+        return await _fake_specialist_previsit(
+            specialist_id, question, user_id, session_id=session_id, auth_token=auth_token)
+
+    vm_module.chat_with_specialist = fake_capture
+    try:
+        db = FakeDb()
+        mgr = VisitManager(tingwu=FakeTingwu())
+        asyncio.run(mgr.prepare_visit(db, hcp_id=1, user_id=1, product_id=1))
+        assert (captured.get("session_id") or "").startswith("visit_prep_")
+    finally:
+        vm_module.chat_with_specialist = _fake_specialist_ok
+
+
 def test_prepare_visit_ai_garbage_returns_empty_structure():
     """AI 输出不可解析 → 返回空结构而非原始文本"""
     from app.core.visit_manager import VisitManager

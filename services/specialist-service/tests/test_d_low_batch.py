@@ -497,11 +497,43 @@ def test_load_fallback_history_takes_recent_3_rounds():
 
 
 def test_load_fallback_history_foreign_session_rejected():
-    """D5：归属校验复用 assert_session_owner —— 该 session 无该用户任何行 → 404"""
+    """D5：归属校验复用 assert_session_owner —— 该 session 存在但无该用户任何行 → 404。
+    2026-09-03 语义更新：assert_session_owner 放行"库里无任何行"的空会话（新建标签，
+    visit_prep 依赖），故替身需给出存在性探测行（他人行）才构成 foreign 场景。"""
     g = AnswerGenerator()
+
+    class _ForeignChain(_HistChain):
+        def __init__(self, rows, is_ownership):
+            super().__init__(rows)
+            self._is_ownership = is_ownership
+
+        def first(self):
+            if self._is_ownership:
+                return None  # 该 session 无本人任何行
+            return _conv_row(1, "user", "他人的问题")  # 存在性探测：session 存在（他人行）
+
+    class _ForeignDb(_HistDb):
+        def query(self, model):
+            holder = _ForeignChain(self._rows, False)
+            orig_filter = holder.filter
+            def _filter(*criteria):
+                cols = {c.left.key for c in criteria if getattr(c, "left", None) is not None}
+                if "user_id" in cols:
+                    holder._is_ownership = True
+                return orig_filter(*criteria)
+            holder.filter = _filter
+            return holder
+
     with pytest.raises(HTTPException) as exc:
-        g._load_fallback_history(_HistDb([]), "dlg-other", 1)
+        g._load_fallback_history(_ForeignDb([]), "dlg-other", 1)
     assert exc.value.status_code == 404
+
+
+def test_load_fallback_history_empty_session_allowed():
+    """空会话（库里无任何行）视为新建标签放行 —— visit_prep 机器会话依赖此语义"""
+    g = AnswerGenerator()
+    hist = g._load_fallback_history(_HistDb([]), "visit_prep_new", 1)
+    assert hist == []
 
 
 def test_generate_fallback_uses_session_history_from_db(monkeypatch):

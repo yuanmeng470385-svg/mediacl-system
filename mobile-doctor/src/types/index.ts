@@ -479,6 +479,9 @@ export interface EduCard {
   visibility: string;
   /** 审核状态：null=未分享 / pending=审核中 / approved=已上架 / rejected=未通过 */
   audit_status?: string | null;
+  /** 028 迁移：站外转发留痕（医生端 Share 回写） */
+  forward_count?: number;
+  last_forwarded_at?: string | null;
   created_at?: string | null;
 }
 

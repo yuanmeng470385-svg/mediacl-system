@@ -48,6 +48,8 @@ export type RootStackParamList = {
   Share: undefined;
   BriefingList: undefined;
   BriefingDetail: { briefingId: number };
+  // 站内通知中心（2026-09-03 业务审查批：通知三端零消费补齐）
+  Notifications: undefined;
   // 学术卡片（二期 G）
   AcademicCardCreate: undefined;
   AcademicCardList: undefined;

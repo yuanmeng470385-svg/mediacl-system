@@ -9,6 +9,7 @@ from shared.common.pagination import PaginationParams, paginate
 from app.services.audit_client import write_audit_log
 from shared.common.context import get_request_id
 from shared.common.db_session import get_db
+from shared.common.conventions import VISIT_PREP_SESSION_PREFIX, not_prep_session
 from app.models.specialist import Specialist
 from app.core.answer_generator import AnswerGenerator
 
@@ -161,13 +162,14 @@ async def monitor_specialists(
     stats = {sid: {} for sid in ids}
 
     if ids:
-        # today_services
+        # today_services（排除 visit_prep_ 机器会话，口径=真人服务数）
         rows = db.query(
             Conversation.specialist_id, func.count(Conversation.id),
         ).filter(
             Conversation.specialist_id.in_(ids),
             Conversation.role == "user",
             Conversation.created_at >= today_start,
+            not_prep_session(Conversation.session_id),
         ).group_by(Conversation.specialist_id).all()
         for sid, cnt in rows:
             stats[sid]["today_services"] = cnt or 0
@@ -203,13 +205,14 @@ async def monitor_specialists(
         for sid, cnt in rows:
             stats[sid]["added_count"] = cnt or 0
 
-        # compliance_health（compliance_result 是 JSONB，跨方言用 Python 端解析）
+        # compliance_health（compliance_result 是 JSONB，跨方言用 Python 端解析；排除 prep 机器会话）
         rows = db.query(
             Conversation.specialist_id, Conversation.compliance_result,
         ).filter(
             Conversation.specialist_id.in_(ids),
             Conversation.role == "assistant",
             Conversation.created_at >= thirty_days_ago,
+            not_prep_session(Conversation.session_id),
         ).all()
         health_agg = {sid: {"blocked": 0, "total": 0} for sid in ids}
         for sid, cr in rows:
@@ -280,6 +283,7 @@ async def review_queue(
         Conversation.role == "assistant",
         Conversation.created_at >= since,
         Conversation.compliance_result.isnot(None),
+        not_prep_session(Conversation.session_id),
     ).all()
 
     counts = {}
@@ -335,17 +339,21 @@ async def get_specialist(
 # ==================== 核心接口：与专员对话 ====================
 
 def _persist_conversation(db, user_id: int, specialist_id: int,
-                          question: str, result: dict):
+                          question: str, result: dict, persist_session_id=None):
     """落库问答两行，返回 assistant 行 id（反馈/收藏的主键）。
 
+    persist_session_id：显式覆盖落库 session_id —— visit-service 的 prep 调用
+    传入 visit_prep_ 前缀会话，百炼可能回自己的 dialog_id 覆盖掉前缀，须钉住
+    原始标记否则 specialist 侧的过滤失效。
     入库失败不影响 chat 主流程 —— 返回 None，前端据此禁用反馈/收藏。
     """
     from app.models.conversation import Conversation
+    session_id = persist_session_id or result.get("session_id")
     try:
         conv = Conversation(
             user_id=user_id,
             specialist_id=specialist_id,
-            session_id=result.get("session_id"),
+            session_id=session_id,
             role="user",
             content=question,
         )
@@ -353,7 +361,7 @@ def _persist_conversation(db, user_id: int, specialist_id: int,
         conv_ai = Conversation(
             user_id=user_id,
             specialist_id=specialist_id,
-            session_id=result.get("session_id"),
+            session_id=session_id,
             role="assistant",
             content=result.get("answer", ""),
             citations=result.get("citations"),
@@ -440,8 +448,10 @@ async def chat_with_specialist(
     )
 
     # 对话记录入库 —— conversation_id 是前端反馈/收藏的主键
+    # prep 调用（visit_prep_ 前缀）钉住原始 session 落库，防百炼 dialog_id 覆盖标记
+    persist_sid = session_id if (session_id or "").startswith(VISIT_PREP_SESSION_PREFIX) else None
     result["conversation_id"] = _persist_conversation(
-        db, current_user["id"], specialist_id, question, result
+        db, current_user["id"], specialist_id, question, result, persist_session_id=persist_sid
     )
 
     return success(result)
@@ -483,10 +493,12 @@ async def get_specialist_stats(
     specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在")
-    # 每轮对话落库 user+assistant 两行 —— 只按 role='user' 计数避免双倍
+    # 每轮对话落库 user+assistant 两行 —— 只按 role='user' 计数避免双倍；
+    # 排除 visit_prep_ 机器会话（拜访准备指令非真人提问）
     total = db.query(func.count(Conversation.id)).filter(
         Conversation.specialist_id == specialist_id,
         Conversation.role == "user",
+        not_prep_session(Conversation.session_id),
     ).scalar()
     positive = db.query(func.count(ConversationFeedback.id)).filter(
         ConversationFeedback.specialist_id == specialist_id,
@@ -797,9 +809,13 @@ async def style_test_generate(
     length = "简洁" if avg < 0.67 else "标准" if avg < 1.34 else "详尽"
     opening = "直切主题" if avg < 1.0 else "先寒暄再进入"
     persona = {"style": {"formal_level": formal, "reply_length": length, "opening_mode": opening}}
+    from app.config import settings as app_settings
     twin = Specialist(
         name=f"{current_user.get('username')}的分身", product_id=None,
         persona=persona, status="active", representative_id=current_user["id"],
+        # 演示安全批（2026-09-03）：挂共享官方百炼 App，建完即可对话；
+        # 未配置 DEFAULT_TWIN_BAILIAN_APP_ID 时为 None（旧行为，chat 报未配置）
+        bailian_app_id=app_settings.DEFAULT_TWIN_BAILIAN_APP_ID or None,
     )
     db.add(twin)
     db.commit()

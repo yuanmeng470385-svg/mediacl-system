@@ -344,3 +344,29 @@ async def unpublish_edu(
         request_id=get_request_id() or None,
     )
     return success(rec.to_dict())
+
+
+@router.post("/{record_id}/forward")
+async def forward_edu(
+    record_id: int,
+    current_user: dict = Depends(require_roles("doctor")),
+    db: Session = Depends(get_db),
+):
+    """站外转发留痕（2026-09-03 业务审查批，迁移 028）。
+
+    医生端 RN Share 唤起系统分享后回写：forward_count+1 / last_forwarded_at。
+    站外转发不经专区审核流（三期 M 拍板口径），仅计数留痕 + 审计。
+    """
+    from datetime import datetime
+    rec = _get_own_record(db, record_id, current_user["id"])
+    rec.forward_count = (rec.forward_count or 0) + 1
+    rec.last_forwarded_at = datetime.utcnow()
+    db.commit()
+    db.refresh(rec)
+    await write_audit_log(
+        action="edu_forward", user_id=current_user["id"],
+        resource_type="edu_content_record", resource_id=str(rec.id),
+        after_value={"forward_count": rec.forward_count},
+        request_id=get_request_id() or None,
+    )
+    return success(rec.to_dict())

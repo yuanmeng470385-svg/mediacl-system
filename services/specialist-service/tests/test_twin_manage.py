@@ -136,3 +136,20 @@ def test_style_test_creates_twin(fresh_state):
     assert body["data"]["representative_id"] == 1
     assert body["data"]["status"] == "active"
     assert "style" in (body["data"]["persona"] or {})
+
+
+def test_style_test_attaches_default_bailian_app(fresh_state, monkeypatch):
+    # 演示安全批：配置了 DEFAULT_TWIN_BAILIAN_APP_ID 时风格测试分身建完即可对话
+    #（挂共享官方 App 知识库），未配置时保持 None（旧行为）
+    from app.config import settings as app_settings
+    monkeypatch.setattr(app_settings, "DEFAULT_TWIN_BAILIAN_APP_ID", "app-default-shared")
+    resp = client.post("/api/v1/specialists/style-test", json={
+        "answers": [0, 1, 2, 1, 0],
+    }, headers=_token(1, "rep"))
+    assert resp.json()["data"]["bailian_app_id"] == "app-default-shared"
+
+    monkeypatch.setattr(app_settings, "DEFAULT_TWIN_BAILIAN_APP_ID", "")
+    resp = client.post("/api/v1/specialists/style-test", json={
+        "answers": [1, 1, 1, 1, 1],
+    }, headers=_token(1, "rep"))
+    assert resp.json()["data"]["bailian_app_id"] is None

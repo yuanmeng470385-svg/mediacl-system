@@ -57,7 +57,9 @@ export default function LoginScreen() {
           return prev - 1;
         });
       }, 1000);
-      Alert.alert('提示', '验证码已发送');
+      // 后端 send-code 对未注册手机号静默成功（防账号枚举，见 auth-service A7 时序补偿），
+      // 因此不能无条件宣称"验证码已发送"——未开通的号会一直等一条不会来的短信
+      Alert.alert('提示', '若该手机号已开通医生账号，验证码将发送至该手机');
     } catch (e: any) {
       Alert.alert('发送失败', e.message || '请稍后重试');
     } finally {

@@ -652,6 +652,8 @@ CREATE TABLE IF NOT EXISTS edu_content_records (
     is_ai_generated BOOLEAN NOT NULL DEFAULT TRUE,
     visibility VARCHAR(20) NOT NULL DEFAULT 'private',  -- private/shared
     audit_status VARCHAR(20),           -- 三期 M：NULL=未分享；pending/approved/rejected
+    forward_count INTEGER NOT NULL DEFAULT 0,     -- 028：站外转发计数（医生端 Share 回写）
+    last_forwarded_at TIMESTAMP,                  -- 028：最近一次转发时间
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );

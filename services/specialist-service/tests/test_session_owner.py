@@ -77,6 +77,10 @@ class QueryStub:
             return self._db.specialist
         if self._is_ownership:
             return SimpleNamespace(id=1) if self._db.owned else None
+        if self._model_name == "Conversation":
+            # 会话存在性探测（仅 session_id 过滤，无 user_id）——session 存在
+            #（2026-09-03 语义：空会话=新建放行，他人已有会话走 ownership 分支）
+            return SimpleNamespace(id=1)
         return None
 
     def all(self):
@@ -193,7 +197,7 @@ def test_chat_不带session_id_正常新建不校验(client_factory, monkeypatch
     )
     monkeypatch.setattr(
         "app.api.specialists._persist_conversation",
-        lambda db, user_id, specialist_id, question, result: 42,
+        lambda db, user_id, specialist_id, question, result, persist_session_id=None: 42,
     )
     resp = client_factory(db).post(
         "/api/v1/specialists/1/chat",
@@ -251,7 +255,7 @@ def test_ws_question带自己session_id_正常流式(client_factory, monkeypatch
     )
     monkeypatch.setattr(
         "app.api.specialists._persist_conversation",
-        lambda db, user_id, specialist_id, question, result: 42,
+        lambda db, user_id, specialist_id, question, result, persist_session_id=None: 42,
     )
     db = FakeDb(owned=True)
     client_factory(db)

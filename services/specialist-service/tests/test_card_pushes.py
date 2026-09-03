@@ -297,3 +297,102 @@ def test_card_feedback_useful_useless_useful_no_inflation():
         specialist_id=1, rating=1, conversation_id=None).all()
     assert len(rows) == 1
     db.close()
+
+
+# ==================== 通知已读（2026-09-03 业务审查批：is_read 此前无写入点） ====================
+
+def _add_notification(nid=1, uid=1, is_read=False, ntype="briefing_ready"):
+    db = TestSession()
+    db.add(Notification(id=nid, user_id=uid, type=ntype, title="你的夜间简报已生成",
+                        content="查看医生提问汇总", link="/briefings", is_read=is_read))
+    db.commit()
+    db.close()
+
+
+def test_notifications_unread_filter_and_count(fresh_state):
+    _add_notification(nid=1, uid=1, is_read=False)
+    _add_notification(nid=2, uid=1, is_read=True)
+    _add_notification(nid=3, uid=2, is_read=False)  # 他人通知不可见
+
+    resp = client.get("/api/v1/card-pushes/notifications", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 2
+
+    resp = client.get("/api/v1/card-pushes/notifications?unread_only=true", headers=_token(1, "rep"))
+    assert resp.json()["data"]["total"] == 1
+    assert resp.json()["data"]["items"][0]["id"] == 1
+
+    resp = client.get("/api/v1/card-pushes/notifications/unread-count", headers=_token(1, "rep"))
+    assert resp.json()["data"]["unread"] == 1
+
+
+def test_mark_read_single_and_ownership(fresh_state):
+    _add_notification(nid=1, uid=1)
+    # 他人通知 → 4001，不可标记
+    resp = client.post("/api/v1/card-pushes/notifications/read", json={"notification_id": 1},
+                       headers=_token(2, "rep"))
+    assert resp.json()["code"] == 4001
+    # 本人标记 → is_read=True
+    resp = client.post("/api/v1/card-pushes/notifications/read", json={"notification_id": 1},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    assert resp.json()["data"]["is_read"] is True
+    # 重复标记幂等
+    resp = client.post("/api/v1/card-pushes/notifications/read", json={"notification_id": 1},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+
+
+def test_mark_read_all_and_validation(fresh_state):
+    _add_notification(nid=1, uid=1)
+    _add_notification(nid=2, uid=1)
+    _add_notification(nid=3, uid=2)
+
+    resp = client.post("/api/v1/card-pushes/notifications/read", json={"all": True},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    assert resp.json()["data"]["marked"] == 2
+    # 只清本人的，他人未动
+    resp = client.get("/api/v1/card-pushes/notifications/unread-count", headers=_token(2, "rep"))
+    assert resp.json()["data"]["unread"] == 1
+
+    # 既无 id 又无 all → 参数错
+    resp = client.post("/api/v1/card-pushes/notifications/read", json={},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 1000
+
+
+# ==================== 推送目标清单（2026-09-03 业务审查批：替代手输数字 doctor_id） ====================
+
+def test_push_targets_lists_subscribed_doctors(fresh_state):
+    db = TestSession()
+    db.add(Specialist(id=1, name="分身A", product_id=1, status="active", representative_id=1))
+    db.add(Specialist(id=2, name="分身B", product_id=1, status="active", representative_id=1))
+    db.add(Specialist(id=3, name="他人分身", product_id=1, status="active", representative_id=9))
+    db.add(DoctorTwinSubscription(doctor_id=2, twin_id=1, status="subscribed",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))
+    db.add(DoctorTwinSubscription(doctor_id=2, twin_id=2, status="subscribed",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))
+    db.add(DoctorTwinSubscription(doctor_id=3, twin_id=1, status="blocked",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))
+    db.add(DoctorTwinSubscription(doctor_id=4, twin_id=3, status="subscribed",
+                                  consent_version="1.0", consent_at=datetime.utcnow()))  # 他人分身的订阅者
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/academic-cards/push-targets", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    items = body["data"]["items"]
+    # 只含本人分身的 subscribed 订阅者；blocked / 他人分身订阅者排除
+    assert body["data"]["total"] == 1
+    assert items[0]["doctor_id"] == 2
+    assert items[0]["doctor_name"] == "王医生"  # fixture 里的用户名
+    assert sorted(items[0]["twin_names"]) == ["分身A", "分身B"]
+    assert items[0]["subscribed_at"]
+
+
+def test_push_targets_requires_rep():
+    resp = client.get("/api/v1/academic-cards/push-targets", headers=_token(2, "doctor"))
+    assert resp.status_code == 403

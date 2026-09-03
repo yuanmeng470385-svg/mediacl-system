@@ -53,7 +53,11 @@ async def mah_overview(
     training_completed = sum(1 for q in approved_quals if q.compliance_training_completed)
     commitment_signed = sum(1 for q in approved_quals if q.commitment_signed)
 
-    conv_rows = db.query(Conversation.compliance_result).all()
+    # 排除 visit_prep_ 机器会话：prep 指令被拦会虚增 blocked、污染合规通过率
+    from shared.common.conventions import not_prep_session
+    conv_rows = db.query(Conversation.compliance_result).filter(
+        not_prep_session(Conversation.session_id)
+    ).all()
     total_conv = len(conv_rows)
     blocked = sum(1 for (cr,) in conv_rows if cr and cr.get("blocked"))
     compliance_pass_rate = round(1 - (blocked / total_conv), 4) if total_conv else 1.0

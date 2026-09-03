@@ -130,12 +130,57 @@ async def submit_feedback(
 async def list_notifications(
     page: int = 1,
     page_size: int = 20,
+    unread_only: bool = False,
     current_user: dict = Depends(require_roles("rep", "doctor")),
     db: Session = Depends(get_db),
 ):
     """站内通知（代表端简报就绪/反馈回流，医生端新卡片）"""
     p = PaginationParams(page=page, page_size=page_size)
     q = db.query(Notification).filter(Notification.user_id == current_user["id"])
+    if unread_only:
+        q = q.filter(Notification.is_read.is_(False))
     total = q.count()
     rows = q.order_by(Notification.id.desc()).offset(p.offset).limit(p.limit).all()
     return success(paginate([n.to_dict() for n in rows], total, p.page, p.page_size))
+
+
+@router.get("/notifications/unread-count")
+async def notification_unread_count(
+    current_user: dict = Depends(require_roles("rep", "doctor")),
+    db: Session = Depends(get_db),
+):
+    """未读通知数（移动端红点数据源）"""
+    from sqlalchemy import func
+    n = db.query(func.count(Notification.id)).filter(
+        Notification.user_id == current_user["id"],
+        Notification.is_read.is_(False),
+    ).scalar()
+    return success({"unread": n or 0})
+
+
+@router.post("/notifications/read")
+async def mark_notifications_read(
+    payload: dict,
+    current_user: dict = Depends(require_roles("rep", "doctor")),
+    db: Session = Depends(get_db),
+):
+    """标记已读：{notification_id} 单条（归属校验，他人通知 4001）或 {all: true} 全部。"""
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+    notification_id = payload.get("notification_id")
+    mark_all = bool(payload.get("all"))
+    if mark_all:
+        n = db.query(Notification).filter(
+            Notification.user_id == current_user["id"],
+            Notification.is_read.is_(False),
+        ).update({"is_read": True}, synchronize_session=False)
+        db.commit()
+        return success({"marked": n})
+    if not isinstance(notification_id, int):
+        raise ParamError("notification_id 必须是整数，或传 all=true 全部已读")
+    row = db.query(Notification).filter(Notification.id == notification_id).first()
+    if not row or row.user_id != current_user["id"]:
+        raise BusinessError("通知不存在", code=4001)
+    row.is_read = True
+    db.commit()
+    return success(row.to_dict())

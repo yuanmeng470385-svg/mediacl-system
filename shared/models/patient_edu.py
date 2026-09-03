@@ -1,5 +1,5 @@
 """患教模板与内容模型（需求 5.5/3.9(2)/附录A）"""
-from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from shared.models.base import Base, TimestampMixin
@@ -41,6 +41,9 @@ class EduContentRecord(Base, TimestampMixin):
     is_ai_generated = Column(Boolean, nullable=False, default=True)
     visibility = Column(String(20), default="private")
     audit_status = Column(String(20))   # 三期 M：NULL=未分享；pending/approved/rejected
+    # 028（2026-09-03）：站外转发留痕（医生端 RN Share 回写；站外转发不经审核流，只记录）
+    forward_count = Column(Integer, nullable=False, default=0)
+    last_forwarded_at = Column(DateTime)
 
     def to_dict(self) -> dict:
         return {
@@ -51,5 +54,7 @@ class EduContentRecord(Base, TimestampMixin):
             "is_ai_generated": self.is_ai_generated,
             "visibility": self.visibility,
             "audit_status": self.audit_status,
+            "forward_count": self.forward_count or 0,
+            "last_forwarded_at": self.last_forwarded_at.isoformat() if self.last_forwarded_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

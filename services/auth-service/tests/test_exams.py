@@ -276,6 +276,30 @@ def test_start_requires_rep():
     assert resp.status_code == 403
 
 
+def test_start_clamps_small_question_count():
+    # 演示安全批：客户端传小值题量（1 题答对即过考）被服务端抬到 ≥10；
+    # 池子不足 10 题时按池子大小抽满
+    for i in range(1, 13):
+        _add_q(id=i, question_type="single", content=f"q{i}", options=["A", "B"], answer=[1])
+    resp = client.post("/api/v1/exams/start", json={"question_count": 3}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert len(body["data"]["questions"]) == 10
+
+    # 池子只有 2 题时，clamp 后按池子大小抽（既有行为：min(count, len(pool))）
+    for j in range(1, 3):
+        _add_q(id=100 + j, question_type="judge", content=f"p{j}", options=["对", "错"], answer=[0])
+    # 重新建库只留 2 题
+    db = TestSession()
+    db.query(ExamQuestion).filter(ExamQuestion.id != 101, ExamQuestion.id != 102).delete(synchronize_session=False)
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/exams/start", json={"question_count": 1}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert len(body["data"]["questions"]) == 2
+
+
 def test_submit_scores_and_writes_record(fresh_state):
     _add_q(id=1, question_type="single", content="q1", options=["A", "B"], answer=[1], review_status="approved")
     _add_q(id=2, question_type="multiple", content="q2", options=["A", "B", "C"], answer=[0, 2], review_status="approved")

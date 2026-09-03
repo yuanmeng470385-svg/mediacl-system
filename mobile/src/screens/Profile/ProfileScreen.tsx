@@ -2,16 +2,18 @@
  * 我的 - 个人中心
  * 临床精准风
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../store/AuthContext';
 import { visitAPI } from '../../api/visit';
 import { taskAPI } from '../../api/tasks';
 import { specialistAPI } from '../../api/specialist';
+import { academicAPI } from '../../api/academic';
 import Icon from '../../components/Icon';
 import {
   Colors, FontSize, Spacing, BorderRadius, Shadow,
@@ -24,6 +26,7 @@ const menuItems = [
   { icon: 'account-outline', label: '个人资料', route: 'Settings' as const },
   { icon: 'clipboard-check-outline', label: '我的任务', route: 'TaskList' as const },
   { icon: 'star-outline', label: '我的收藏', route: 'Favorites' as const },
+  { icon: 'bell-badge-outline', label: '站内通知', route: 'Notifications' as const },
   { icon: 'share-variant-outline', label: '分身分享', route: 'Share' as const },
   { icon: 'weather-night', label: '夜间简报', route: 'BriefingList' as const },
   { icon: 'file-document-outline', label: '学术卡片', route: 'AcademicCardCreate' as const },
@@ -45,6 +48,7 @@ export default function ProfileScreen() {
   const [visitCount, setVisitCount] = useState<string>('--');
   const [taskCount, setTaskCount] = useState<string>('--');
   const [favoriteCount, setFavoriteCount] = useState<string>('--');
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +64,17 @@ export default function ProfileScreen() {
       .catch(() => { /* 保持 '--' */ });
     return () => { cancelled = true; };
   }, []);
+
+  // 未读通知红点：每次回到本 Tab 刷新（通知页已读后回来即消失）
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      academicAPI.unreadCount()
+        .then((res) => { if (!cancelled) setUnreadCount(res?.unread ?? 0); })
+        .catch(() => { /* 红点拿不到不阻塞页面 */ });
+      return () => { cancelled = true; };
+    }, [])
+  );
 
   const handleLogout = () => {
     Alert.alert('退出登录', '确定要退出当前账号吗？', [
@@ -124,6 +139,11 @@ export default function ProfileScreen() {
                 <Icon name={item.icon} size={20} color={Colors.primary} />
               </View>
               <Text style={styles.menuLabel}>{item.label}</Text>
+              {item.route === 'Notifications' && unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                </View>
+              )}
               <Icon name="chevron-right" size={20} color={Colors.textHint} />
             </TouchableOpacity>
           ))}
@@ -182,6 +202,11 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   menuLabel: { flex: 1, fontSize: FontSize.md, color: Colors.textPrimary },
+  badge: {
+    minWidth: 18, height: 18, borderRadius: 9, backgroundColor: Colors.danger,
+    justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5, marginRight: 4,
+  },
+  badgeText: { color: Colors.white, fontSize: 11, fontWeight: '600' },
   logoutBtn: {
     padding: Spacing.lg, alignItems: 'center', flexDirection: 'row',
     justifyContent: 'center', gap: Spacing.sm,

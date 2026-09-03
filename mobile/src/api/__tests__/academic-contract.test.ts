@@ -44,3 +44,47 @@ describe('academicAPI', () => {
     expect(JSON.parse(init.body!)).toEqual({ doctor_ids: [2] });
   });
 });
+
+describe('academicAPI 通知中心（2026-09-03 业务审查批）', () => {
+  it('notifications 默认 GET 分页，unreadOnly 带查询参数', async () => {
+    await academicAPI.notifications();
+    let { url, init } = lastCall();
+    expect(url).toContain('/api/v1/card-pushes/notifications?');
+    expect(url).toContain('page=1');
+    expect(url).toContain('page_size=20');
+    expect(url).not.toContain('unread_only');
+    expect(init.method).toBe('GET');
+
+    await academicAPI.notifications(2, 10, true);
+    ({ url, init } = lastCall());
+    expect(url).toContain('page=2');
+    expect(url).toContain('unread_only=true');
+  });
+
+  it('unreadCount 发 GET /notifications/unread-count', async () => {
+    await academicAPI.unreadCount();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/card-pushes/notifications/unread-count');
+    expect(init.method).toBe('GET');
+  });
+
+  it('markRead 单条带 notification_id、全部带 all', async () => {
+    await academicAPI.markRead(7);
+    let { init } = lastCall();
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body!)).toEqual({ notification_id: 7 });
+
+    await academicAPI.markRead(undefined, true);
+    ({ init } = lastCall());
+    expect(JSON.parse(init.body!)).toEqual({ all: true });
+  });
+});
+
+describe('academicAPI pushTargets（2026-09-03 业务审查批）', () => {
+  it('pushTargets 发 GET /api/v1/academic-cards/push-targets', async () => {
+    await academicAPI.pushTargets();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/academic-cards/push-targets');
+    expect(init.method).toBe('GET');
+  });
+});

@@ -25,13 +25,15 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const avatarColors = ['#0D3B66', '#1565C0', '#00ACC1', '#2E7D32', '#C62828'];
 
-/** 专员状态 → 展示文案/样式（后端枚举 draft/active/disabled） */
+/** 专员状态 → 展示文案/样式（后端枚举 draft/active/disabled/paused/frozen） */
 const TWIN_STATUS_CONFIG: Record<string, { label: string; bg: string; color: string }> = {
   active: { label: '正常', bg: '#dcfce7', color: Colors.success },
   draft: { label: '草稿', bg: '#fef3c7', color: Colors.warning },
   disabled: { label: '已停用', bg: '#f3f4f6', color: Colors.textHint },
+  paused: { label: '代表已暂停', bg: '#fef3c7', color: Colors.warning },
+  frozen: { label: '合规冻结中', bg: Colors.dangerLight, color: Colors.danger },
 };
-const TWIN_STATUS_FALLBACK = { label: '已停用', bg: '#f3f4f6', color: Colors.textHint };
+const TWIN_STATUS_FALLBACK = { label: '暂不可用', bg: '#f3f4f6', color: Colors.textHint };
 
 export default function MyTwinsScreen() {
   const navigation = useNavigation<Nav>();

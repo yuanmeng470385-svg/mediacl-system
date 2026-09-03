@@ -38,4 +38,8 @@ export const complianceAPI = {
 
   dataAssets: () =>
     client.get<ApiResponse<DataAssetCategory[]>>('/compliance/data-assets'),
+
+  /** 监管自查报告（3 Sheet xlsx：规则快照/拦截明细/汇总；start/end_time 可选 ISO 8601） */
+  exportReport: (body?: { start_time?: string; end_time?: string }) =>
+    client.post<Blob>('/compliance/report/export', body ?? {}, { responseType: 'blob' }),
 };

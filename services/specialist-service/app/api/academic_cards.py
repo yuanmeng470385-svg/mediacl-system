@@ -14,6 +14,7 @@ from shared.common.response import BusinessError, ParamError, PermissionError, s
 from shared.models.academic import AcademicCard, CardPushRecord, Notification
 from shared.models.doctor import DoctorTwinSubscription
 from shared.models.digital_specialist import Specialist
+from shared.models.user import User
 
 from app.api.medical import _retrieve
 from app.services.qwen_client import QwenClient
@@ -226,6 +227,49 @@ async def card_stats(
             "representative_id": rid, "pushes": p, "reads": r or 0,
         } for rid, p, r in rep_rows],
     })
+
+
+@router.get("/push-targets")
+async def list_push_targets(
+    current_user: dict = Depends(require_roles("rep")),
+    db: Session = Depends(get_db),
+):
+    """推送目标清单（2026-09-03 业务审查批）：订阅了本人分身且 status='subscribed' 的医生。
+
+    此前推送前端只能手输数字 doctor_id（二期 G 挂账项）；本端点给代表端多选 UI 供数。
+    口径与 /push 的订阅校验完全一致（twin.representative_id=本人 + subscribed）。
+    """
+    rows = db.query(
+        DoctorTwinSubscription.doctor_id,
+        DoctorTwinSubscription.consent_at,
+        Specialist.name,
+    ).join(
+        Specialist, Specialist.id == DoctorTwinSubscription.twin_id
+    ).filter(
+        Specialist.representative_id == current_user["id"],
+        DoctorTwinSubscription.status == "subscribed",
+    ).order_by(DoctorTwinSubscription.doctor_id.asc()).all()
+
+    by_doctor: dict = {}
+    for doctor_id, consent_at, twin_name in rows:
+        d = by_doctor.setdefault(doctor_id, {"doctor_id": doctor_id, "twin_names": []})
+        d["twin_names"].append(twin_name)
+        d["consent_at"] = consent_at
+
+    doctor_ids = list(by_doctor.keys())
+    names = dict(
+        db.query(User.id, User.full_name).filter(User.id.in_(doctor_ids)).all()
+    ) if doctor_ids else {}
+    items = []
+    for doctor_id in doctor_ids:
+        d = by_doctor[doctor_id]
+        items.append({
+            "doctor_id": doctor_id,
+            "doctor_name": names.get(doctor_id) or f"医生#{doctor_id}",
+            "twin_names": d["twin_names"],
+            "subscribed_at": d["consent_at"].isoformat() if d.get("consent_at") else None,
+        })
+    return success({"items": items, "total": len(items)})
 
 
 @router.post("/{card_id}/push")

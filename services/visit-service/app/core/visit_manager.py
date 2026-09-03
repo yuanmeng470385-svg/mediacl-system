@@ -17,6 +17,7 @@ import json
 import os
 import asyncio
 import logging
+import uuid
 from datetime import date, datetime
 from typing import Dict, List, Optional
 
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from shared.common.response import ParamError, BusinessError
+from shared.common.conventions import VISIT_PREP_SESSION_PREFIX
 
 from app.models.visit_record import VisitRecord
 from app.db.repositories.visit_repo import VisitRepo
@@ -375,14 +377,16 @@ class VisitManager:
     async def _call_specialist(
         self, specialist_id: Optional[int], prompt: str, user_id: int,
         auth_token: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Dict:
         """调 A 生成内容；未找到专员或 A 不可用时降级。
 
         auth_token：当前用户 JWT 原样透传（chat 接口网关要求 JWT，不带则 401 → 永久 degraded）
+        session_id：prep 调用传 visit_prep_ 前缀会话（specialist 侧按前缀过滤机器会话）
         """
         if not specialist_id:
             return {"answer": "", "blocked": False, "degraded": True, "error": "未找到该产品的数字专员（需先在 specialist-service 配置）"}
-        return await chat_with_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
+        return await chat_with_specialist(specialist_id, prompt, user_id, session_id=session_id, auth_token=auth_token)
 
     # ==================== 拜访前：准备包 ====================
 
@@ -429,7 +433,12 @@ class VisitManager:
 }}"""
 
         specialist_id = self._resolve_specialist(db, product_id)
-        result = await self._call_specialist(specialist_id, prompt, user_id, auth_token=auth_token)
+        # prep 会话带统一前缀：specialist 侧的对话检索/统计/监控按前缀排除
+        # 机器会话（prep prompt 是系统指令，混入看板会污染口径）
+        prep_session = f"{VISIT_PREP_SESSION_PREFIX}{uuid.uuid4().hex}"
+        result = await self._call_specialist(
+            specialist_id, prompt, user_id, auth_token=auth_token, session_id=prep_session,
+        )
 
         recommendations = _parse_recommendations(result.get("answer", ""))
         return {

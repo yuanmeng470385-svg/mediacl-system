@@ -39,6 +39,11 @@ _PASS_SCORE = int(os.getenv("EXAM_PASS_SCORE", "80"))
 # 而非 Redis 是因为测试基线（SQLite、无 Redis）也能全量回归。
 _EXAM_SESSION_TTL_SECONDS = 2 * 60 * 60  # 考试会话有效期 2 小时
 
+# 演示安全批（2026-09-03 业务审查）：题量服务端下限。此前客户端可传
+# question_count=1，答对 1 题即 100 分通过培训——题目集合绑定（H-1）只防
+# 换题不防题量。服务端统一抬到 ≥10（clamp 而非拒绝，不破坏既有客户端）。
+_MIN_QUESTION_COUNT = 10
+
 
 def _issue_exam_session(user_id: int, question_ids: list) -> str:
     """签发一次性考试会话 token：与登录 JWT 同密钥（HS256），但 scope=exam
@@ -299,12 +304,14 @@ async def start_exam(
     current_user: dict = Depends(require_roles("rep")),
     db: Session = Depends(get_db),
 ):
-    """开始考试：从 approved 题目随机抽题（默认 10 道，最多 30），不含答案。"""
+    """开始考试：从 approved 题目随机抽题（默认 10 道，最多 30，最少 10），不含答案。"""
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
     question_count = payload.get("question_count") or 10
     if not isinstance(question_count, int) or not (1 <= question_count <= 30):
         raise ParamError("question_count 必须是 1-30 的整数")
+    # 服务端强制下限：见 _MIN_QUESTION_COUNT 注释（防小值题量刷考试）
+    question_count = max(question_count, _MIN_QUESTION_COUNT)
     pool = db.query(ExamQuestion).filter(ExamQuestion.review_status == "approved").all()
     if not pool:
         raise BusinessError("暂无可考试的题目，请联系医学部/合规部上架题目", code=4001)

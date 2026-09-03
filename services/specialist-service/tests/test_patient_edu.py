@@ -277,3 +277,32 @@ def test_zone_requires_doctor(fresh_state):
     resp = client.get("/api/v1/patient-edu/zone", headers=_token(1, "rep"))
     assert resp.status_code == 403
     assert resp.json()["code"] == 3000
+
+
+# ==================== 站外转发留痕（2026-09-03 业务审查批，迁移 028） ====================
+
+def test_forward_increments_count_and_at(fresh_state):
+    _add_record(id=1)
+    resp = client.post("/api/v1/patient-edu/1/forward", json={}, headers=_token(2, "doctor"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["forward_count"] == 1
+    assert body["data"]["last_forwarded_at"]
+
+    # 再次转发累计
+    resp = client.post("/api/v1/patient-edu/1/forward", json={}, headers=_token(2, "doctor"))
+    assert resp.json()["data"]["forward_count"] == 2
+
+
+def test_forward_rejects_other_doctor_and_admin(fresh_state):
+    db = TestSession()
+    db.add(User(id=4, username="doctor2", full_name="李医生", phone="13800000004", role="doctor", status="active"))
+    db.commit()
+    db.close()
+    _add_record(id=1, doctor_id=2)
+    # 他人医生 → 统一 4000/404（不泄露存在性，同 publish 口径）
+    resp = client.post("/api/v1/patient-edu/1/forward", json={}, headers=_token(4, "doctor"))
+    assert resp.json()["code"] == 4000
+    # admin 也不行（医生端患教工具）
+    resp = client.post("/api/v1/patient-edu/1/forward", json={}, headers=_token(1, "admin"))
+    assert resp.status_code == 403

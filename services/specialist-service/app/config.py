@@ -40,5 +40,11 @@ class Settings:
     # 简报每日对齐的固定执行时刻（0-23，本地时区；默认凌晨 2 点）
     NIGHTLY_BRIEFING_HOUR = int(os.getenv("NIGHTLY_BRIEFING_HOUR", "2"))
 
+    # --- 风格测试分身默认百炼 App ---
+    # style-test 生成的代表分身不单独建百炼 App：挂此共享官方 App 的知识库，
+    # 建完即可对话（此前无 app_id 直接 500「尚未配置百炼 App ID」）。指向
+    # 官方公共分身（is_official=true）在用的那个 App；空 = 维持旧行为。
+    DEFAULT_TWIN_BAILIAN_APP_ID = os.getenv("DEFAULT_TWIN_BAILIAN_APP_ID", "")
+
 
 settings = Settings()

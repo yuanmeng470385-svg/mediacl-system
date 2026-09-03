@@ -1,31 +1,22 @@
 /**
  * 学术卡片创建（二期 G，需求 4.6(1)(3)）：
- *   标题/主题输入 → createCard 生成（结论/要点/引用）→ 数字 doctor_id 输入推送医生。
+ *   标题/主题输入 → createCard 生成（结论/要点/引用）→ 订阅医生多选推送。
+ * 2026-09-03 业务审查批：推送对象从"手输数字 doctor_id"改为订阅医生勾选列表。
  * 样式参照 ComplianceCenterScreen（临床精准风）。
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
-import { academicAPI } from '../../api/academic';
+import { academicAPI, PushTarget } from '../../api/academic';
 import type { AcademicCard } from '../../types';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-
-/** 把 "1, 2，3" 这类输入解析成数字数组（非法项跳过） */
-function parseDoctorIds(text: string): number[] {
-  return text
-    .split(/[,，\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n));
-}
 
 export default function CardCreateScreen() {
   const navigation = useNavigation<Nav>();
@@ -34,9 +25,31 @@ export default function CardCreateScreen() {
   const [card, setCard] = useState<AcademicCard | null>(null);
   const [generating, setGenerating] = useState(false);
 
-  const [doctorIdsText, setDoctorIdsText] = useState('');
+  const [targets, setTargets] = useState<PushTarget[]>([]);
+  const [targetsLoading, setTargetsLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<string>('');
+
+  // 生成卡片成功后拉取可推送的订阅医生（本人分身的订阅者）
+  useEffect(() => {
+    if (!card) return;
+    let cancelled = false;
+    setTargetsLoading(true);
+    academicAPI.pushTargets()
+      .then((res) => { if (!cancelled) setTargets(res?.items || []); })
+      .catch(() => { /* 拉取失败保留空列表，推送时报错提示 */ })
+      .finally(() => { if (!cancelled) setTargetsLoading(false); });
+    return () => { cancelled = true; };
+  }, [card?.id]);
+
+  const toggleDoctor = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const generate = async () => {
     if (!title.trim()) {
@@ -61,9 +74,9 @@ export default function CardCreateScreen() {
 
   const push = async () => {
     if (!card) return;
-    const ids = parseDoctorIds(doctorIdsText);
+    const ids = Array.from(selected);
     if (ids.length === 0) {
-      Alert.alert('提示', '请输入至少一位医生 ID（数字，逗号分隔）');
+      Alert.alert('提示', '请至少勾选一位订阅医生');
       return;
     }
     if (ids.length > 50) {
@@ -173,29 +186,66 @@ export default function CardCreateScreen() {
           </View>
         )}
 
-        {/* 推送医生卡 */}
+        {/* 推送医生卡（订阅医生多选，2026-09-03 业务审查批） */}
         {card && (
           <View style={[styles.card, Shadow.card]}>
-            <Text style={styles.cardTitle}>推送医生</Text>
-            <Text style={styles.label}>医生 ID（数字，逗号分隔）</Text>
-            <TextInput
-              style={styles.input}
-              value={doctorIdsText}
-              onChangeText={setDoctorIdsText}
-              placeholder="如 2, 5, 8"
-              placeholderTextColor={Colors.textHint}
-              keyboardType="numeric"
-            />
+            <View style={styles.pushHeader}>
+              <Text style={styles.cardTitle}>推送医生</Text>
+              {targets.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSelected(
+                    selected.size === targets.length ? new Set() : new Set(targets.map((t) => t.doctorId))
+                  )}
+                >
+                  <Text style={styles.selectAll}>
+                    {selected.size === targets.length ? '取消全选' : '全选'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {targetsLoading ? (
+              <Text style={styles.footnote}>订阅医生加载中…</Text>
+            ) : targets.length === 0 ? (
+              <Text style={styles.footnote}>
+                暂无订阅医生——医生添加你的分身后才能收到卡片（分享入口见「分身分享」）
+              </Text>
+            ) : (
+              targets.map((t) => {
+                const on = selected.has(t.doctorId);
+                return (
+                  <TouchableOpacity
+                    key={t.doctorId}
+                    style={[styles.doctorRow, on && styles.doctorRowActive]}
+                    onPress={() => toggleDoctor(t.doctorId)}
+                    activeOpacity={0.7}
+                  >
+                    <Icon
+                      name={on ? 'checkbox-marked-circle' : 'checkbox-blank-circle-outline'}
+                      size={22}
+                      color={on ? Colors.primary : Colors.textHint}
+                    />
+                    <View style={styles.doctorInfo}>
+                      <Text style={styles.doctorName}>{t.doctorName}</Text>
+                      <Text style={styles.doctorSub} numberOfLines={1}>
+                        订阅分身：{t.twinNames.join('、')}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
             <TouchableOpacity
-              style={[styles.submitBtn, pushing && { opacity: 0.6 }]}
-              disabled={pushing}
+              style={[styles.submitBtn, (pushing || selected.size === 0) && { opacity: 0.6 }]}
+              disabled={pushing || selected.size === 0}
               onPress={push}
               activeOpacity={0.7}
             >
-              <Text style={styles.submitText}>{pushing ? '推送中…' : '推送医生'}</Text>
+              <Text style={styles.submitText}>
+                {pushing ? '推送中…' : selected.size > 0 ? `推送医生（已选 ${selected.size}）` : '推送医生'}
+              </Text>
             </TouchableOpacity>
             {pushResult ? <Text style={styles.pushResult}>{pushResult}</Text> : null}
-            <Text style={styles.footnote}>仅推送给订阅了本人分身且状态正常的医生；未订阅者自动跳过</Text>
+            <Text style={styles.footnote}>仅可推送给订阅了本人分身的医生；已收到过本卡的自动跳过</Text>
           </View>
         )}
       </ScrollView>
@@ -245,4 +295,15 @@ const styles = StyleSheet.create({
   citeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 },
   citeText: { flex: 1, fontSize: FontSize.sm, color: Colors.textSecondary },
   pushResult: { marginTop: Spacing.sm, fontSize: FontSize.sm, color: Colors.success },
+  pushHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  selectAll: { fontSize: FontSize.sm, color: Colors.primary },
+  doctorRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.sm, borderRadius: BorderRadius.sm, marginBottom: 4,
+    backgroundColor: Colors.backgroundAlt,
+  },
+  doctorRowActive: { backgroundColor: Colors.primarySurface },
+  doctorInfo: { flex: 1, marginLeft: Spacing.sm },
+  doctorName: { fontSize: FontSize.md, color: Colors.textPrimary },
+  doctorSub: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: 2 },
 });

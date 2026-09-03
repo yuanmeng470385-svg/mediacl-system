@@ -1,7 +1,8 @@
 /**
  * 患教工具（二期 I 医生端）：
  *   - 患教模板选择（医生端仅 approved）→ 生成 → 展示卡片（正文/注意事项/就医指征）
- *   - 转发前确认（无后端转发端点，仅前端确认提示）
+ *   - 转发给患者：RN Share 唤起系统分享 + 后端留痕（028 迁移，2026-09-03 业务
+ *     审查批——此前是假 Alert，无真实分享无留痕）
  *
  * 样式令牌照 theme.ts，列表/卡片范式照 MyTwinsScreen + MedicalQAScreen。
  */
@@ -10,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -97,16 +99,28 @@ export default function PatientEduScreen() {
     }
   };
 
-  const handleForward = () => {
+  const handleForward = async () => {
     if (!card) return;
-    Alert.alert(
-      '转发确认',
-      '确定要将这份患教卡片转发给患者吗？内容仅供患者教育参考，不构成诊疗建议。',
-      [
-        { text: '取消', style: 'cancel' },
-        { text: '确认转发', onPress: () => Alert.alert('已转发', '患教卡片已转发') },
-      ]
-    );
+    // 真实转发：唤起系统分享面板（微信/短信等），用户真正发出后回写留痕
+    try {
+      const res = await Share.share({
+        title: card.content.title,
+        message: `【${card.content.title}】
+
+${card.content.body}
+
+注意事项：${card.content.notes}
+如出现：${card.content.seek_care}，请及时就医。
+
+（内容由 AI 辅助生成，仅供患者教育参考，不构成诊疗建议）`,
+      });
+      if (res.action === Share.dismissedAction) return; // 用户取消，不留痕
+      const updated = await doctorExpAPI.forwardEdu(card.id);
+      setCard(updated);
+      Alert.alert('已转发', `患教卡片已转发（累计 ${updated.forward_count ?? 1} 次）`);
+    } catch (e: any) {
+      Alert.alert('转发失败', e?.message || '请稍后重试');
+    }
   };
 
   const handlePublish = async () => {

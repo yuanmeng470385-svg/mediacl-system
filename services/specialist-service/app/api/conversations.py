@@ -10,6 +10,7 @@ from shared.common.auth import get_current_user, require_roles
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import ParamError, success
+from shared.common.conventions import not_prep_session
 
 from app.models.conversation import Conversation
 from app.models.feedback import ConversationFeedback
@@ -37,11 +38,19 @@ def _assert_conv_owner(conv: Conversation, current_user: dict):
 def assert_session_owner(db: Session, session_id: str, user_id: int):
     """校验会话归属（IDOR 防护）：conversations 表中该 session 至少有一条属于该用户。
 
-    不满足 → 404（统一 404 不泄露 session 是否存在）；session_id 为空直接通过（新建会话）。
+    他人会话 → 404（统一 404 不泄露 session 是否存在）；session_id 为空直接通过
+    （新建会话）；**库里尚无任何行的 session 也放行**（视为新会话标签——
+    visit-service prepare_visit 以 visit_prep_ 前缀新开机器会话依赖此语义；
+    uuid 不可猜，放行空会话不削弱"他人已有会话 404"的保护）。
     会话历史读取 / REST chat 续传 / WS question 帧续传共用此校验。
     """
     if not session_id:
         return
+    any_row = db.query(Conversation).filter(
+        Conversation.session_id == session_id,
+    ).first()
+    if any_row is None:
+        return  # 空会话 = 新建
     owned = db.query(Conversation).filter(
         Conversation.session_id == session_id,
         Conversation.user_id == user_id,
@@ -59,6 +68,7 @@ async def search_conversations(
     specialist_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    include_prep: bool = False,
     _admin: dict = Depends(require_roles("admin", "manager", "compliance")),
     db: Session = Depends(get_db),
 ):
@@ -66,6 +76,8 @@ async def search_conversations(
 
     按 代表(user_id) / 分身(specialist_id) / 时间范围 / 命中词 筛选；
     返回每条命中 + 该会话完整上下文（session_id 全部行，role/content）。
+    默认排除 visit_prep_ 机器会话（拜访准备的系统指令非真人提问，
+    混入检索结果会误导审核）；include_prep=true 可查看排查。
     """
     from datetime import datetime
     from shared.common.response import ParamError as PE
@@ -79,6 +91,8 @@ async def search_conversations(
             raise PE(f"{name} 格式应为 ISO 时间")
 
     q = db.query(Conversation)
+    if not include_prep:
+        q = q.filter(not_prep_session(Conversation.session_id))
     if keyword:
         q = q.filter(Conversation.content.ilike(f"%{keyword}%"))
     if user_id:
