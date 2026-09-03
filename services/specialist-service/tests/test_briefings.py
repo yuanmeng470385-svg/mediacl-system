@@ -366,3 +366,52 @@ async def test_run_briefing_scan_audits_each_generated(monkeypatch):
     assert [c["resource_id"] for c in audit_calls] == ["11", "12"]
     assert all(c["ai_involved"] is True for c in audit_calls)
     assert all(c["ai_model"] == "qwen-max" for c in audit_calls)
+
+
+def test_window_is_shanghai_day_boundary(fresh_state, monkeypatch):
+    """2026-09-03 演示批二批：聚合窗 = 上海时区的"昨天"（created_at 存 UTC）。
+
+    TARGET=2026-08-18 → 窗口 UTC [08-16 16:00, 08-17 16:00)（上海午夜换算）。
+    - twin1 对话 08-17 15:30 UTC = 上海 08-17 23:30（昨天）→ 应聚合；
+    - twin2 对话 08-17 16:30 UTC = 上海 08-18 00:30（今天）→ 应排除。
+    旧口径（naive 字面量 [08-17 00:00, 08-18 00:00)）两条都收——本测试判别新口径。
+    """
+    _seed_rep_doctor_and_twin()
+    _add(
+        Specialist(id=2, name="心内专员", product_id=None, status="active",
+                   compliance_level="internal"),
+        ShareLink(id=2, twin_id=2, url_token="t2", created_by=3, add_count=0),
+        # twin1：昨天（上海）对话
+        Conversation(id=10, user_id=1, specialist_id=1, session_id="s10",
+                     role="user", content="昨天的问题",
+                     created_at=datetime(2026, 8, 17, 15, 30, 0)),
+        Conversation(id=11, user_id=1, specialist_id=1, session_id="s10",
+                     role="assistant", content="昨天的答案",
+                     created_at=datetime(2026, 8, 17, 15, 31, 0)),
+        # twin2：今天（上海）凌晨对话，不该进昨天简报
+        Conversation(id=12, user_id=1, specialist_id=2, session_id="s12",
+                     role="user", content="今天凌晨的问题",
+                     created_at=datetime(2026, 8, 17, 16, 30, 0)),
+        Conversation(id=13, user_id=1, specialist_id=2, session_id="s12",
+                     role="assistant", content="今天凌晨的答案",
+                     created_at=datetime(2026, 8, 17, 16, 31, 0)),
+    )
+
+    prompts = []
+
+    def _stub(prompt):
+        prompts.append(prompt)
+        return {"summary": "简报", "doctors": []}
+
+    monkeypatch.setattr("app.core.briefing_generator._qwen_briefing_json", _stub)
+
+    db = TestSession()
+    result = generate_for_date(db, TARGET)
+    db.close()
+
+    assert result["generated"] == 1
+    assert result["skipped"] == 1  # twin2 窗外 → skipped
+    assert result["generated_links"][0]["specialist_id"] == 1
+    assert len(prompts) == 1
+    assert "昨天的问题" in prompts[0]
+    assert "今天凌晨的问题" not in prompts[0]

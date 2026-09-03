@@ -3,6 +3,7 @@ import sys
 import os
 import asyncio
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
 # 确保 shared 可导入
@@ -26,8 +27,10 @@ logger = logging.getLogger(__name__)
 async def _briefing_loop() -> None:
     """夜间简报定时任务（需求 C）：启动即跑一次（部署后立即可见），此后
     对齐 NIGHTLY_BRIEFING_HOUR 固定时刻执行（挂账收尾：此前 interval 24h
-    近似每日一跑，随启动时间漂移）。日期口径用本地时区（与 run_briefing_scan
-    的 date.today() 一致）。同步 DB 生成丢线程池（to_thread），不阻塞事件
+    近似每日一跑，随启动时间漂移）。日期/调度口径统一 Asia/Shanghai（与
+    run_briefing_scan 的 _sh_today() 一致，2026-09-03 演示批二批：容器 TZ=UTC
+    时本地时钟会把"凌晨 2 点"跑成上海上午 10 点、简报日期提前一天）。
+    同步 DB 生成丢线程池（to_thread），不阻塞事件
     循环；异常记 error 不崩（多 worker 各跑一份，生成逻辑单行捕获唯一键
     冲突转更新，等效 upsert 幂等）。
     """
@@ -38,7 +41,7 @@ async def _briefing_loop() -> None:
             await run_briefing_scan()
         except Exception as exc:
             logger.error("夜间简报生成失败: %s", exc)
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
         next_run = now.replace(hour=settings.NIGHTLY_BRIEFING_HOUR, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += timedelta(days=1)

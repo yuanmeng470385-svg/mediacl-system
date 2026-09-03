@@ -108,6 +108,9 @@ python scripts/probe_bailian_ws.py [app_id]
 python scripts/seed_demo_docs.py
 # 培训考试种子（内置 2 材料 + 2 approved 题；依赖真实 PostgreSQL，需先跑迁移 013）
 python scripts/seed_training_materials.py
+# 演示环境一键种子（2026-09-03 演示批二批）：demo_rep/demo_doctor（密码 Demo@2026）+
+# 备案(至 2027-12-31)/双分身(挂百炼 App)/订阅/医生对话/卡片推送/通知/简报/患教/拜访全链路，幂等可重跑
+python scripts/seed_demo_data.py
 
 # 全部 8 个服务同时启动
 docker-compose up -d
@@ -652,6 +655,13 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - **患教转发做真（specialist + mobile-doctor）**：新端点 `POST /patient-edu/{record_id}/forward`（doctor：forward_count+1 / last_forwarded_at / 审计 edu_forward，站外转发仍不经审核流——三期 M 拍板口径）；迁移 **028_edu_forward_tracking.sql**（已实跑本地 PG）+ init_db.sql 同步 + EduContentRecord 列/to_dict。mobile-doctor 假 Alert 改 RN `Share.share` 真分享（title/body/注意事项/就医提示 + AI 生成免责声明），dismissed 不回写，分享完成才 forward + 提示累计次数
 - 测试基线（2026-09-03 批全量回归实测）：specialist 348（+10：style-test 默认 App 1 / prep 过滤 3 / push-targets+通知已读 5 / 患教 forward 2，另 assert_session_owner/d_low_batch 放宽改写）/ auth 169 passed + 7 skipped（+1 clamp）/ visit 118（+1 prep session 标记）/ gateway 88 / compliance 120 / knowledge 72 / hcp 67 / audit 32 / shared 21 —— 后端 9 套全绿；mobile jest 104（+4 通知契约）/ mobile-doctor jest 32（+8 含 forward 契约与主题组件）/ 双端 tsc 0 错 / web vitest 19 + tsc 0 错 + build PASS
 - **演示环境第二批挂账（审查分档遗留，≈1 天）**：演示种子数据整合（成套账号/订阅/卡片链路数据）、真机配置 IP 核对、备案资质 filing_expire_date 须设未来日期（24h 扫描会把过期 approved 代表自动冻结，演示号会被误伤）、简报 briefing TZ 口径核对
+
+**演示环境第二批（2026-09-03，四项全交付）**：
+- **briefing 时区口径修复（specialist）**：`generate_for_date` 此前聚合窗用 naive 字面量直比 UTC 存储的 `conversations.created_at`——实际窗口是上海口径「前天 08:00 → 今天 08:00」（32h 宽窗 + 8h 偏移：重复聚合前天对话、混入今天凌晨 8 小时）；且 `date.today()` 在容器 TZ=UTC 时上海凌晨 0-8 点会按"昨天"出简报。修法（与三期 P extract-draft 限额 `_today_start_utc_iso` 同口径）：新 `SHANGHAI_TZ`/`_sh_today()`，窗口锚定上海午夜 `astimezone(utc)` 换算 naive UTC；`run_briefing_scan` 用 `_sh_today()`；`main._briefing_loop` 的 next_run 时钟对齐 Asia/Shanghai（否则 NIGHTLY_BRIEFING_HOUR=2 会跑成上海上午 10 点）。判别测试 `test_window_is_shanghai_day_boundary`（昨天 23:30 上海进窗 / 今天 00:30 上海排除）
+- **演示种子 `scripts/seed_demo_data.py`**（幂等，全部固定内容不调 AI）：demo_rep（13900001001）/demo_doctor（13900001002），密码 `Demo@2026`；备案 approved 至 **2027-12-31（必须未来——24h 扫描冻结过期的 approved rep）**+ 考试 92/培训/承诺三件套（MAH 面板高完成率）；官方分身+「李明的数字分身」（bailian_app_id 优先 DEFAULT_TWIN_BAILIAN_APP_ID env，回落库内既有）；医生认证 approved+偏好画像；订阅+知情同意×2（push-targets 有数据）；医生↔分身对话 8 条（上海昨天 14:00=UTC 06:00 锚定，全合规不进复核名单）；卡片+推送（已读+反馈）+通知 4 条（rep 未读 2 → 通知中心红点）；夜间简报（briefing_date=上海今天固定 content）；患教模板 2 approved+专区 1 条（forward_count=2）；HCP+completed 拜访 1。**conversations/visit_records 用 Core text() 直插**（两表 ORM 映射分属 specialist/visit 服务，`app` 包同名 import 冲突）。坑：users/qualifications/certifications NOT NULL 列必须 `_get_or_create` defaults 里带全——先建空行再回填会在 flush 时炸
+- **真机 config IP 核对**：mobile/mobile-doctor `src/config.ts` 均为 192.168.1.229，与本机 WLAN 一致（192.168.109/126.1、172.20.240.1 是虚拟网卡勿用）；**演示日换网络后先 `ipconfig` 核对该值**，模拟器与真机可共用同一 LAN IP
+- 测试基线：specialist 349（+1 时区判别）；种子重跑幂等 + 库内全链路核验通过（对话 8/卡片 1/推送 1/通知 4 未读 2/简报 1/订阅 2/患教 2+1/拜访 1/HCP 1）
+- 存量库核对：rep_test 备案 2027-08-17 approved（未来）无冻结风险
 
 ## Backup & Restore（2026-08-12 新增）
 

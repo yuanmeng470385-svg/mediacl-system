@@ -9,8 +9,9 @@
 import asyncio
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,6 +28,20 @@ from app.services.audit_client import write_audit_log
 from app.services.qwen_client import QwenClient
 
 logger = logging.getLogger(__name__)
+
+# 2026-09-03 演示批二批（时区口径核对）：日界统一 Asia/Shanghai（与三期 P
+# extract-draft 限额的 _today_start_utc_iso 同口径）。此前两处错位——
+# ① date.today()/datetime.now() 是服务器本地时区：容器 TZ 默认 UTC 时上海
+#   凌晨 0-8 点会按"昨天"生成简报（日期提前一天切换）；
+# ② 聚合窗 naive 字面量直接与 UTC 存储的 conversations.created_at 比较：
+#   窗口实际是上海口径"前天 08:00 → 今天 08:00"，重复聚合前天对话、混入
+#   今天凌晨 8 小时（32h 宽窗 + 8h 偏移）。
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _sh_today() -> date:
+    """上海日界的"今天"（不受容器/宿主时区影响）"""
+    return datetime.now(SHANGHAI_TZ).date()
 
 
 def _parse_json_content(content: str) -> Optional[dict]:
@@ -118,8 +133,11 @@ def generate_for_date(db: Session, target_date: date) -> dict:
     返回 {generated, skipped, reps, generated_links}，其中 generated_links 为
     本轮生成/更新的 NightlyBriefing 行清单（供调用方逐篇审计）。
     """
-    since = datetime.combine(target_date, datetime.min.time()) - timedelta(days=1)
-    until = datetime.combine(target_date, datetime.min.time())
+    # created_at 全库统一 naive UTC：窗口语义是"上海时区的昨天"（target_date-1 的
+    # 上海 00:00 → target_date 的上海 00:00），锚定上海午夜换算成 UTC naive 再比较
+    sh_midnight = datetime.combine(target_date, datetime.min.time(), tzinfo=SHANGHAI_TZ)
+    until = sh_midnight.astimezone(timezone.utc).replace(tzinfo=None)
+    since = until - timedelta(days=1)
 
     rep_ids = [r[0] for r in db.query(ShareLink.created_by).distinct().all()]
     generated = skipped = 0
@@ -210,7 +228,7 @@ async def run_briefing_scan() -> dict:
     """lifespan 调用：开新会话生成今天简报，逐篇写审计（action=briefing_generated）"""
     db = SessionLocal()
     try:
-        result = await asyncio.to_thread(generate_for_date, db, date.today())
+        result = await asyncio.to_thread(generate_for_date, db, _sh_today())
         if result["generated"]:
             logger.info("夜间简报生成：%s 篇（跳过 %s，涉及 %s 个代表）",
                         result["generated"], result["skipped"], result["reps"])
