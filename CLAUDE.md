@@ -112,6 +112,13 @@ python scripts/seed_training_materials.py
 # 备案(至 2027-12-31)/双分身(挂百炼 App)/订阅/医生对话/卡片推送/通知/简报/患教/拜访全链路，幂等可重跑
 python scripts/seed_demo_data.py
 
+# 一键拉起/体检本机演示环境（幂等，缺什么补什么；2026-09-07 固化——项目长期本机运行+演示）
+python scripts/dev_up.py            # Docker→postgres/redis→8 服务 uvicorn→健康检查
+python scripts/dev_up.py --check    # 只体检不启动（演示前核对：8 服务/演示账号/未读通知/备案到期日/
+                                    #   模拟器/Metro/config.ts DEV_HOST vs 本机 IP/AUTH_DEV_MODE）
+python scripts/dev_up.py --seed --app  # 追加 seed_demo_data（幂等）+ 模拟器 Pixel_7 + Metro 8081/8082 + 双端 App
+python scripts/dev_up.py --down     # 停 8 个 uvicorn（不动 docker/模拟器/Metro）
+
 # 全部 8 个服务同时启动
 docker-compose up -d
 
