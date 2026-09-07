@@ -18,3 +18,7 @@ AI_SUMMARY_BLOCKED = "该拜访总结因合规问题被拦截，请联系医学�
 VISIT_STATUS_IN_PROGRESS = "in_progress"
 VISIT_STATUS_COMPLETED = "completed"
 VISIT_STATUS_CANCELLED = "cancelled"
+
+# 拜访时长上限（分钟，2026-09-07 A-6）：时长=开始到结束的墙钟口径，忘点结束
+# 第二天补 end 会记 20h+——按单次拜访常识上限封顶，触顶时 summary 追加异常注记
+VISIT_MAX_DURATION_MINUTES = 240

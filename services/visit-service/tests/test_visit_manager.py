@@ -6,7 +6,7 @@ import os
 import sys
 import asyncio
 import json
-from datetime import date
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
@@ -379,6 +379,35 @@ def test_end_visit_blocked_summary():
         # 恢复为 setup_module 的假实现（不是 ORIG_COMP 真实实现 —— 恢复成真实实现
         # 会让后续测试走到真实合规检查，compliance fail-closed 后 ConnectError）
         vm_module.check_compliance = _fake_compliance_ok
+
+
+def test_end_visit_duration_clamped():
+    """A-6（2026-09-07）：忘点结束次日补 end → 时长按上限 240 分钟封顶 + summary 追加注记"""
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    # 6h 前开始（真实场景 = 忘点结束的僵尸拜访，第二天补点 end）
+    FakeDb._records[visit_id].visit_time = datetime.now() - timedelta(hours=6)
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
+    result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result["duration_minutes"] == 240
+    assert "240 分钟" in result["ai_summary"]
+
+
+def test_end_visit_duration_normal_no_note():
+    """A-6：正常时长（90 分钟）→ 不封顶、summary 无注记"""
+    from app.core.visit_manager import VisitManager
+    db = FakeDb()
+    mgr = VisitManager(tingwu=FakeTingwu(), qwen=_FakeQwenOk())
+    start = asyncio.run(mgr.start_visit(db, hcp_id=1, user_id=1, product_id=1))
+    visit_id = start["id"]
+    FakeDb._records[visit_id].visit_time = datetime.now() - timedelta(hours=1, minutes=30)
+    asyncio.run(mgr.process_transcript(db, visit_id, user_id=1, text_content="聊了疗效"))
+    result = asyncio.run(mgr.end_visit(db, visit_id, user_id=1))
+    assert result["duration_minutes"] == 90
+    assert "240" not in result["ai_summary"]
 
 
 def test_follow_up():

@@ -41,6 +41,7 @@ from app.constants import (
     VISIT_STATUS_CANCELLED,
     VISIT_STATUS_COMPLETED,
     VISIT_STATUS_IN_PROGRESS,
+    VISIT_MAX_DURATION_MINUTES,
 )
 
 logger = logging.getLogger(__name__)
@@ -1009,10 +1010,18 @@ class VisitManager:
                 "end_visit 生成期间转写被并发追加，摘要基于生成前全文: visit_id=%s", visit_id
             )
 
-        # 时长 = 开始到结束的分钟数
+        # 时长 = 开始到结束的分钟数（A-6：墙钟口径，忘点结束补 end 不再记 20h+，
+        # 按上限封顶 + summary 追加注记——不动 AI 生成链，比 prompt 注入更忠实）
         duration = None
         if record.visit_time:
             duration = max(1, int((datetime.now() - record.visit_time).total_seconds() // 60))
+            if duration > VISIT_MAX_DURATION_MINUTES:
+                duration = VISIT_MAX_DURATION_MINUTES
+                if ai_summary not in (AI_SUMMARY_PLACEHOLDER, AI_SUMMARY_BLOCKED):
+                    ai_summary = (
+                        f"{ai_summary}\n（注：本次拜访未及时结束，时长按上限 "
+                        f"{VISIT_MAX_DURATION_MINUTES} 分钟记录）"
+                    )
 
         record.ai_summary = ai_summary
         record.key_points = key_points

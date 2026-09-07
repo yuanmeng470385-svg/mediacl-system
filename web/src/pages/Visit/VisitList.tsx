@@ -153,9 +153,16 @@ export default function VisitList() {
         cancelled: { text: '已取消' },
       },
       render: (_, r) => (
-        <Tag color={STATUS_MAP[r.status]?.color || 'default'}>
-          {STATUS_MAP[r.status]?.text || r.status}
-        </Tag>
+        <>
+          <Tag color={STATUS_MAP[r.status]?.color || 'default'}>
+            {STATUS_MAP[r.status]?.text || r.status}
+          </Tag>
+          {/* 进行中超 24h 未结束 = 忘点结束的僵尸记录（时长口径见后端 A-6 clamp） */}
+          {r.status === 'in_progress' && r.visit_time &&
+            dayjs.utc(r.visit_time).local().isBefore(dayjs().subtract(24, 'hour')) && (
+              <Tag color="default" style={{ marginLeft: 4 }}>未正常结束</Tag>
+            )}
+        </>
       ),
     },
     {
