@@ -65,11 +65,15 @@ async def twin_ranking(
         added = db.query(sqlfunc.count(DoctorTwinSubscription.id)).filter(
             DoctorTwinSubscription.twin_id == spec.id,
         ).scalar() or 0
+        # 好评率只算对话反馈（2026-09-07 A-3：卡片 useful 回流 conversation_id=None、
+        # rating 恒 1，全量计入会单向抬高——与 specialists./monitor 同口径）
         fb_total = db.query(sqlfunc.count(ConversationFeedback.id)).filter(
             ConversationFeedback.specialist_id == spec.id,
+            ConversationFeedback.conversation_id.isnot(None),
         ).scalar() or 0
         fb_pos = db.query(sqlfunc.count(ConversationFeedback.id)).filter(
             ConversationFeedback.specialist_id == spec.id,
+            ConversationFeedback.conversation_id.isnot(None),
             ConversationFeedback.rating == 1,
         ).scalar() or 0
         approval = round(fb_pos / fb_total, 4) if fb_total else None

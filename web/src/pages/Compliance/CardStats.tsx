@@ -14,10 +14,26 @@ export default function CardStats() {
     <div>
       <Row gutter={16}>
         <Col span={6}><Card><Statistic title="总推送" value={stats?.total_pushes ?? 0} /></Card></Col>
-        <Col span={6}><Card><Statistic title="已读" value={stats?.total_reads ?? 0} /></Card></Col>
-        <Col span={6}><Card><Statistic title="点击率" value={(stats?.read_rate ?? 0) * 100} precision={2} suffix="%" /></Card></Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="已读" value={stats?.total_reads ?? 0} />
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>口径：被打开（客户端自报即计）</div>
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="点击率" value={(stats?.read_rate ?? 0) * 100} precision={2} suffix="%" />
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>已读 / 总推送</div>
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="有效阅读率" value={(stats?.effective_read_rate ?? 0) * 100} precision={2} suffix="%" />
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>口径：已读且停留 ≥3 秒 / 总推送</div>
+          </Card>
+        </Col>
       </Row>
-      <Card title="代表触达排名（近 30 天）" style={{ marginTop: 16 }}>
+      <Card title="代表触达排名（近 30 天，按已读数排序）" style={{ marginTop: 16 }}>
         <Table
           rowKey="representative_id"
           dataSource={stats?.rep_ranking ?? []}
@@ -27,6 +43,11 @@ export default function CardStats() {
             { title: '代表ID', dataIndex: 'representative_id' },
             { title: '推送数', dataIndex: 'pushes' },
             { title: '已读数', dataIndex: 'reads' },
+            {
+              title: '已读率',
+              dataIndex: 'read_rate',
+              render: (v: number) => ((v ?? 0) * 100).toFixed(1) + '%',
+            },
           ]}
         />
       </Card>

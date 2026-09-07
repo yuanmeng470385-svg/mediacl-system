@@ -21,6 +21,9 @@ router = APIRouter(prefix="/api/v1/card-pushes", tags=["card-pushes"])
 
 VALID_STATUS = ("unread", "read", "favorited", "forwarded")
 
+# track 停留秒数服务端封顶（2026-09-07 A-5）：客户端自报无上限，可传 999999 刷有效时长
+TRACK_SECONDS_CAP = 3600
+
 
 @router.get("")
 async def doctor_inbox(
@@ -64,7 +67,8 @@ async def track_read(
         rec.read_at = __import__("datetime").datetime.utcnow()
     seconds = payload.get("seconds")
     if isinstance(seconds, int) and seconds > 0:
-        rec.tracked_seconds = seconds
+        # 客户端自报，服务端封顶防刷有效阅读时长（A-5）
+        rec.tracked_seconds = min(seconds, TRACK_SECONDS_CAP)
     db.commit()
     db.refresh(rec)
     return success(rec.to_dict())

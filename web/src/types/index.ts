@@ -381,7 +381,11 @@ export interface CardStats {
   total_reads: number;
   /** 后端返回 0-1 小数（round(total_reads / total_pushes, 4)），展示时需 ×100 转百分数 */
   read_rate: number;
-  rep_ranking: { representative_id: number; pushes: number; reads: number }[];
+  /** 有效阅读（已读且停留 ≥3s，2026-09-07 A-5）；后端 0-1 小数 */
+  effective_reads: number;
+  effective_read_rate: number;
+  /** 排序=已读数优先（A-5：推送量仅次位） */
+  rep_ranking: { representative_id: number; pushes: number; reads: number; read_rate: number }[];
 }
 
 // ========== AI 陪练 Skill 模版（二期 H）==========

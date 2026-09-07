@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/academic-cards", tags=["academic-cards"])
 
+# 有效阅读判定阈值（2026-09-07 A-5）：read_status ∈ (read, favorited, forwarded) 且
+# 停留 ≥3s 才算有效阅读——read_status 客户端自报，秒退也算，单独看会高估触达质量
+EFFECTIVE_READ_MIN_SECONDS = 3
+
 
 def _parse_card_json(text: str) -> dict:
     """从 qwen 输出提取卡片 JSON（容忍 ```json 包裹与前后噪声）"""
@@ -196,7 +200,16 @@ async def card_stats(
     _admin: dict = Depends(require_roles("admin", "manager", "compliance", "medical")),
     db: Session = Depends(get_db),
 ):
-    """学术内容触达统计（需求 3.7(1)）：点击人次/点击率/代表排名"""
+    """学术内容触达统计（需求 3.7(1)）：点击人次/点击率/代表排名。
+
+    2026-09-07 A-5 口径双轨：
+    - read_rate（被打开）：read_status != 'unread'——客户端自报即计，秒退也算，历史口径保留；
+    - effective_read_rate（有效阅读）：read_status ∈ (read, favorited, forwarded)
+      且 tracked_seconds >= EFFECTIVE_READ_MIN_SECONDS——track 客户端自报，够演示
+      口径用，非严格埋点。
+    - rep_ranking 排序键从推送量改为「被读数优先、推送量次位」——轰炸越多排越前
+      是反向激励；产出被读优先。
+    """
     from datetime import datetime, timedelta
     from sqlalchemy import case, func as sqlfunc
 
@@ -205,6 +218,11 @@ async def card_stats(
     total_pushes = q.count()
     total_reads = q.filter(CardPushRecord.read_status != "unread").count()
     read_rate = round(total_reads / total_pushes, 4) if total_pushes else 0.0
+    effective_reads = q.filter(
+        CardPushRecord.read_status.in_(("read", "favorited", "forwarded")),
+        CardPushRecord.tracked_seconds >= EFFECTIVE_READ_MIN_SECONDS,
+    ).count()
+    effective_read_rate = round(effective_reads / total_pushes, 4) if total_pushes else 0.0
 
     rep_rows = (
         db.query(
@@ -214,7 +232,10 @@ async def card_stats(
         )
         .filter(CardPushRecord.created_at >= since)
         .group_by(CardPushRecord.representative_id)
-        .order_by(sqlfunc.count(CardPushRecord.id).desc())
+        .order_by(
+            sqlfunc.sum(case((CardPushRecord.read_status != "unread", 1), else_=0)).desc(),
+            sqlfunc.count(CardPushRecord.id).desc(),
+        )
         .limit(10)
         .all()
     )
@@ -223,8 +244,11 @@ async def card_stats(
         "total_pushes": total_pushes,
         "total_reads": total_reads,
         "read_rate": read_rate,
+        "effective_reads": effective_reads,
+        "effective_read_rate": effective_read_rate,
         "rep_ranking": [{
             "representative_id": rid, "pushes": p, "reads": r or 0,
+            "read_rate": round((r or 0) / p, 4) if p else 0.0,
         } for rid, p, r in rep_rows],
     })
 

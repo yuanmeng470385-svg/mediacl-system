@@ -228,7 +228,9 @@ async def monitor_specialists(
                     "red" if ratio > 0.15 else ("yellow" if ratio >= 0.05 else "green")
                 )
 
-        # approval_rate
+        # approval_rate（2026-09-07 A-3：只算对话反馈——卡片 useful 回流行
+        # rating 恒 1 且 conversation_id=None（card_pushes.py 写入），全量计入会单向
+        # 抬高好评率；卡片触达有自己的 read/favorited 指标，卡片 useful 留表做留痕）
         positive_expr = func.sum(case((ConversationFeedback.rating == 1, 1), else_=0))
         rows = db.query(
             ConversationFeedback.specialist_id,
@@ -236,6 +238,7 @@ async def monitor_specialists(
             positive_expr,
         ).filter(
             ConversationFeedback.specialist_id.in_(ids),
+            ConversationFeedback.conversation_id.isnot(None),
         ).group_by(ConversationFeedback.specialist_id).all()
         for sid, cnt, positive in rows:
             stats[sid]["approval_rate"] = round((positive or 0) / cnt, 4) if cnt else None

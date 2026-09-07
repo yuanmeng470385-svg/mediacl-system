@@ -200,18 +200,25 @@ def test_mah_overview_requires_admin():
 
 def test_mah_overview_aggregates(fresh_state):
     db = TestSession()
-    # 2 个 rep：一个有效备案+培训完成，一个未备案
+    # 2 个 rep：一个有效备案+培训完成，一个未备案；1 个医生（medical_qa 对话不属被管理对象）
     db.add(User(id=4, username="rep02", full_name="李代表", phone="13800000004", role="rep", status="active"))
+    db.add(User(id=6, username="doc01", full_name="王医生", phone="13800000006", role="doctor", status="active"))
     db.add(RepresentativeQualification(id=1, representative_id=1, education_cert="u1", filing_number="MAH-1",
                                        audit_status="approved", filing_expire_date=None,
                                        compliance_training_completed=True, commitment_signed=True))
     db.add(RepresentativeQualification(id=2, representative_id=4, education_cert="u4", audit_status="pending"))
-    # 对话：1 条 blocked，3 条正常 → 通过率 0.75
+    # 对话（A-4 口径：分母=rep 的 assistant 行）：rep1 一轮合规、rep4 一轮被拦 → 通过率 0.5。
+    # 医生行（哪怕 blocked）不进分母——MAH 是代表管理视角，医生对话此前摊薄分母。
     db.add_all([
         Conversation(id=1, user_id=1, specialist_id=1, session_id="s1", role="user", content="a", compliance_result=None),
         Conversation(id=2, user_id=1, specialist_id=1, session_id="s1", role="assistant", content="b", compliance_result={"blocked": False}),
-        Conversation(id=3, user_id=1, specialist_id=1, session_id="s2", role="user", content="c", compliance_result={"blocked": False}),
+        Conversation(id=3, user_id=4, specialist_id=1, session_id="s2", role="user", content="c", compliance_result=None),
         Conversation(id=4, user_id=4, specialist_id=1, session_id="s2", role="assistant", content="d", compliance_result={"blocked": True}),
+        # rep 的 user 行也不进分母（compliance_result 落 assistant 行，与 review-queue 行级口径一致）
+        Conversation(id=5, user_id=1, specialist_id=1, session_id="s3", role="user", content="e", compliance_result=None),
+        # 医生对话：blocked 也不影响 rep 通过率
+        Conversation(id=6, user_id=6, specialist_id=1, session_id="s9", role="user", content="医生问", compliance_result=None),
+        Conversation(id=7, user_id=6, specialist_id=1, session_id="s9", role="assistant", content="医生答", compliance_result={"blocked": True}),
     ])
     db.commit()
     db.close()
@@ -225,7 +232,8 @@ def test_mah_overview_aggregates(fresh_state):
     assert data["filing"]["not_filed"] == 0
     assert data["training_completed_rate"] == 0.5
     assert data["commitment_signed_rate"] == 0.5
-    assert data["compliance_pass_rate"] == 0.75
+    # rep assistant 行 2 条、blocked 1 → 1 - 0.5 = 0.5（旧全库口径该值含医生行=0.5 的 3/6 摊薄）
+    assert data["compliance_pass_rate"] == 0.5
 
 
 # ==================== M-2（2026-08-24 审查修复）：审批角色收敛 + 自审自批拦截 ====================

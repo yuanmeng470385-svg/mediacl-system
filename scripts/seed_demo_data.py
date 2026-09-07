@@ -252,6 +252,61 @@ def seed(db, password: str) -> dict:
             })
         stats["conversations"] = len(qa_pairs) * 2
 
+    # ---------- rep↔分身对话（2026-09-07 A-4：MAH 合规通过率分母已收敛为 rep 的分身
+    # 对话，医生对话不再计入——必须补 rep 侧数据，否则 MAH 面板分母归零显示 100%）。
+    # 8 轮 = 6 合规 + 1 blocked（R001）+ 1 warn（R005 不拦截）→ 通过率 7/8=87.5%，
+    # 拦截明细走 audit/演示口径。blocked 的 compliance_result 落 assistant 行（与
+    # review-queue/mah 的行级判定口径一致），内容为掩码文案。
+    if db.execute(SQL_COUNT_DEMO_SESSION, {"sid": "demo_rep_chat_1"}).scalar() == 0:
+        R001_BLOCKED = json.dumps({"blocked": True, "violations": [
+            {"rule_code": "R001", "rule_name": "禁止承诺疗效", "action": "reject"}]})
+        R005_WARN = json.dumps({"blocked": False, "violations": [
+            {"rule_code": "R005", "rule_name": "禁止贬低竞品", "action": "warn"}]})
+        rep_rounds = [
+            # (问题, 回答, assistant 行 compliance_result)
+            ("帮我整理一下本品在一线治疗的循证证据要点。",
+             "本品一线治疗的证据主要来自 III 期随机对照研究，主要终点显著改善，"
+             "具体数据以发表文献和说明书为准。以上信息仅供学术参考。", OK_COMPLIANCE),
+            ("跟医生沟通时不良反应这部分应该怎么讲比较规范？",
+             "建议按说明书口径客观呈现不良反应发生率与管理措施，不隐瞒不淡化，"
+             "出现严重不良事件应及时上报。", OK_COMPLIANCE),
+            ("这个药用了以后能保证治愈吗？我想这么跟主任说。",
+             "该问题建议直接咨询医学顾问。", R001_BLOCKED),
+            ("下周拜访心内科，帮我准备一个开场话题。",
+             "可以围绕近期发布的科室会主题和文献速览展开，先了解医生当前关注的方向，"
+             "再介绍相关学术资料。", OK_COMPLIANCE),
+            ("隔壁那家竞品效果不太行，我们是不是可以强调这点？",
+             "不建议对竞品做比较性评价。学术沟通应聚焦本品适应症内的循证证据，"
+             "跨研究直接比较容易产生误导。", R005_WARN),
+            ("患者用药教育这块有什么患者版材料可以用吗？",
+             "患教材料需经医学部与合规审核后使用，我可以帮你梳理常见问题的"
+             "沟通要点供参考。", OK_COMPLIANCE),
+            ("把这份综述的三个关键结论做成卡片要点。",
+             "已按综述结论整理为三点：疗效主要终点、安全性谱、用药注意事项，"
+             "每点均附文献出处。", OK_COMPLIANCE),
+            ("这次科室会材料还需要补充哪些合规注意项？",
+             "材料中避免绝对化疗效表述与超适应症内容，引用数据须可溯源，"
+             "结尾附免责声明并送医学部审核。", OK_COMPLIANCE),
+        ]
+        for i, (q, a, a_cr) in enumerate(rep_rounds):
+            db.execute(SQL_INSERT_CONVERSATION, {
+                "user_id": rep.id, "specialist_id": twin.id,
+                "session_id": "demo_rep_chat_1", "role": "user", "content": q,
+                "citations": None, "compliance_result": OK_COMPLIANCE,
+                "tokens_used": 100 + i * 12, "latency_ms": 1600 + i * 180,
+                "created_at": y + timedelta(hours=2, minutes=i * 6),
+            })
+            db.execute(SQL_INSERT_CONVERSATION, {
+                "user_id": rep.id, "specialist_id": twin.id,
+                "session_id": "demo_rep_chat_1", "role": "assistant", "content": a,
+                "citations": json.dumps([{"doc_name": "演示文献·免疫治疗综述",
+                                          "url": None, "doc_id": None}]),
+                "compliance_result": a_cr,
+                "tokens_used": 220 + i * 25, "latency_ms": 1900 + i * 160,
+                "created_at": y + timedelta(hours=2, minutes=i * 6, seconds=40),
+            })
+        stats["rep_conversations"] = len(rep_rounds) * 2
+
     # ---------- 学术卡片 + 推送 + 通知（触达统计/收件箱/通知中心全链路有数据） ----------
     card, _ = _get_or_create(
         db, AcademicCard, representative_id=rep.id, title="免疫治疗研究进展速览（演示）",

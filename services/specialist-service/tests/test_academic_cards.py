@@ -163,6 +163,54 @@ def test_stats_aggregates(fresh_state):
     assert data["read_rate"] == 0.5
     assert data["rep_ranking"][0]["representative_id"] == 1
     assert data["rep_ranking"][0]["reads"] == 1
+    # A-5：tracked_seconds=10 ≥3 → 该条计入有效阅读
+    assert data["effective_reads"] == 1
+    assert data["effective_read_rate"] == 0.5
+
+
+def test_stats_effective_read_and_ranking_order(fresh_state):
+    """A-5（2026-09-07）：①有效阅读=已读且停留 ≥3s（秒退不计）；②代表排行按被读数
+    优先（A 推多读少 < B 推少读多 → B 在前；旧口径按推送量 A 在前是反向激励）。"""
+    db = TestSession()
+    db.add(AcademicCard(id=1, representative_id=1, title="卡1", content={"conclusion": "x"}, is_ai_generated=True))
+    db.add(AcademicCard(id=2, representative_id=4, title="卡2", content={"conclusion": "x"}, is_ai_generated=True))
+    # rep1：3 推 1 读（秒退 tracked_seconds=1）
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2, read_status="read", tracked_seconds=1))
+    db.add(CardPushRecord(id=2, representative_id=1, card_id=1, doctor_id=3, read_status="unread"))
+    db.add(CardPushRecord(id=3, representative_id=1, card_id=1, doctor_id=5, read_status="unread"))
+    # rep4：2 推 2 读（均有效）
+    db.add(CardPushRecord(id=4, representative_id=4, card_id=2, doctor_id=2, read_status="read", tracked_seconds=30))
+    db.add(CardPushRecord(id=5, representative_id=4, card_id=2, doctor_id=3, read_status="forwarded", tracked_seconds=60))
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/academic-cards/stats", headers=_token(3, "admin"))
+    data = resp.json()["data"]
+    # 有效阅读：rep4 两条；rep1 秒退那条（read 但 1s）不算
+    assert data["effective_reads"] == 2
+    assert data["effective_read_rate"] == 0.4  # 2/5
+    # 排序：rep4（读 2）在 rep1（读 1）前——被读数优先，推送量仅次位
+    assert [r["representative_id"] for r in data["rep_ranking"]] == [4, 1]
+    assert data["rep_ranking"][0]["read_rate"] == 1.0
+
+
+def test_track_seconds_capped(fresh_state):
+    """A-5：track 停留秒数服务端封顶（客户端自报，可传 999999 刷有效阅读时长）。"""
+    from datetime import datetime
+    db = TestSession()
+    db.add(AcademicCard(id=1, representative_id=1, title="卡1", content={"conclusion": "x"}, is_ai_generated=True))
+    db.add(CardPushRecord(id=1, representative_id=1, card_id=1, doctor_id=2, read_status="unread"))
+    db.commit()
+    db.close()
+
+    resp = client.post("/api/v1/card-pushes/1/track", json={"read_status": "read", "seconds": 999999},
+                       headers=_token(2, "doctor"))
+    assert resp.json()["code"] == 0
+    db = TestSession()
+    rec = db.query(CardPushRecord).get(1)
+    db.close()
+    assert rec.tracked_seconds == 3600
+    assert rec.read_at is not None
 
 
 # ==================== M-1（2026-08-24 审查修复）：引用链与检索原文入模 ====================

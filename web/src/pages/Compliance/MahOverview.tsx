@@ -87,8 +87,9 @@ export default function MahOverview() {
         <Col span={6}>
           <Card>
             <Statistic title="合规通过率" value={percent(data?.compliance_pass_rate)} />
-            {/* 口径见 mah-overview 后端：1 − 分身对话 blocked 比例；无对话时记 1.0（无数据≠真实 100%） */}
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>口径：分身对话未被拦截占比，无对话时段记为 100%</div>
+            {/* 口径见 mah-overview 后端：1 − rep 分身对话 blocked 比例（2026-09-07 A-4
+                从全库对话收敛——医生对话不是被管理对象，不再摊薄分母）；无对话时记 1.0（无数据≠真实 100%） */}
+            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>口径：代表分身对话未被拦截占比，无对话时段记为 100%</div>
           </Card>
         </Col>
         <Col span={6}>

@@ -180,6 +180,27 @@ def test_monitor_returns_stats(fresh_state):
     assert "approval_rate" in item
 
 
+def test_monitor_approval_rate_excludes_card_useful(fresh_state):
+    """A-3（2026-09-07）：好评率只算对话反馈——卡片 useful 回流行（conversation_id=None、
+    rating 恒 1，card_pushes.py 写入）此前全量计入，单向抬高好评率。"""
+    _add_specialist(id=1)
+    db = TestSession()
+    db.add_all([
+        # 对话反馈：1 好评 + 1 差评 → 真实好评率 0.5
+        ConversationFeedback(id=1, conversation_id=1, user_id=1, specialist_id=1, rating=1),
+        ConversationFeedback(id=2, conversation_id=2, user_id=1, specialist_id=1, rating=-1),
+        # 卡片 useful 回流 ×2（rating 恒 1）：不计入——旧口径好评率被抬到 0.75
+        ConversationFeedback(id=3, conversation_id=None, user_id=1, specialist_id=1, rating=1),
+        ConversationFeedback(id=4, conversation_id=None, user_id=1, specialist_id=1, rating=1),
+    ])
+    db.commit()
+    db.close()
+
+    resp = client.get("/api/v1/specialists/monitor", headers=_token(2, "admin"))
+    item = resp.json()["data"]["items"][0]
+    assert item["approval_rate"] == 0.5
+
+
 def test_monitor_filters_official(fresh_state):
     _add_specialist(id=1, name="官方专员", is_official=True)
     _add_specialist(id=2, name="普通专员", is_official=False)
