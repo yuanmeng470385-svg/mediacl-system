@@ -3,6 +3,8 @@
 口径：
 - "我的分身" = share_links.created_by 为 rep 的分身集合（specialist 无 rep 归属列）
 - doctor 对话 = conversations join users.role=='doctor'（role 是消息角色，用户角色在 users）
+- 学术卡片追问 = card_push_records.feedback（非 useful/useless）join 卡片/医生
+  （2026-09-07 A-2 并入：二期 G 落地后简报数据源一直未扩，追问只发站内通知）
 - 幂等：nightly_briefings 唯一键 (rep, specialist, date)，插入冲突时捕获 IntegrityError
   单行回滚转更新（并发安全，等效 upsert）
 """
@@ -17,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.common.db_session import SessionLocal
-from shared.models.academic import Notification
+from shared.models.academic import AcademicCard, CardPushRecord, Notification
 from shared.models.doctor import ShareLink
 from shared.models.digital_specialist import Specialist
 from shared.models.nightly_briefing import NightlyBriefing
@@ -79,25 +81,54 @@ def _qwen_briefing_json(prompt: str) -> Optional[dict]:
     doctors = structured.get("doctors")
     if not isinstance(doctors, list):
         doctors = []
-    return {"summary": summary[:500], "doctors": doctors[:50]}
+    # 2026-09-07 A-2：卡片追问并入简报 JSON（可选键，qwen 未吐或形状不对时 [] 不阻塞）
+    card_qs = structured.get("card_questions")
+    if not isinstance(card_qs, list):
+        card_qs = []
+    cleaned_qs = []
+    for q in card_qs[:50]:
+        if not isinstance(q, dict):
+            continue
+        cleaned_qs.append({
+            "doctor_name": str(q.get("doctor_name") or "医生")[:50],
+            "card_title": str(q.get("card_title") or "")[:100],
+            "question": str(q.get("question") or "")[:300],
+            "suggested_reply": str(q.get("suggested_reply") or "")[:300],
+        })
+    return {"summary": summary[:500], "doctors": doctors[:50], "card_questions": cleaned_qs}
 
 
-def _build_prompt(specialist_name: str, doctor_rounds: List[Dict]) -> str:
-    """按医生分组的问题+答案摘要 → prompt（每医生问题截断防超 token）"""
+def _build_prompt(specialist_name: str, doctor_rounds: List[Dict], card_questions: List[Dict]) -> str:
+    """按医生分组的问题+答案摘要 + 学术卡片追问 → prompt（每医生问题截断防超 token）"""
     lines = []
     for d in doctor_rounds:
         name = d.get("doctor_name", "医生")
         qa = d.get("qa", [])[:10]
         qa_lines = "; ".join(f"问:{q[:120]} 答:{a[:120]}" for q, a in qa)
         lines.append(f"医生[{name}]：{qa_lines}")
-    body = "\n".join(lines)[:6000]
+    q_lines = []
+    for q in card_questions:
+        q_lines.append(
+            f"医生[{q.get('doctor_name', '医生')}]对卡片《{q.get('card_title', '')[:60]}》"
+            f"追问：{q.get('question', '')[:200]}"
+        )
+    parts = []
+    if lines:
+        parts.append("=== 分身对话摘要 ===\n" + "\n".join(lines))
+    if q_lines:
+        parts.append("=== 学术卡片追问 ===\n" + "\n".join(q_lines))
+    body = f"分身名称：{specialist_name}\n\n" + "\n\n".join(parts)
     return (
-        "你是医药代表的学术助手。以下是昨天某位医生与你的数字分身对话的问题与回答摘要。"
+        "你是医药代表的学术助手。以下是昨天某位医生与你的数字分身对话的问题与回答摘要，"
+        "以及医生对代表推送的学术卡片提出的追问。"
         "请生成夜间简报 JSON：{\"summary\": str, \"doctors\": [{\"doctor_name\": str, "
-        "\"questions\": [str], \"concern\": str, \"follow_up\": str}]}。"
-        "concern 为该医生最关心的问题或顾虑，follow_up 为建议跟进事项；"
-        "没有把握就写\"待进一步沟通\"。\n"
-        f"<user_content>\n{body}\n</user_content>"
+        "\"questions\": [str], \"concern\": str, \"follow_up\": str}], "
+        "\"card_questions\": [{\"doctor_name\": str, \"card_title\": str, \"question\": str, "
+        "\"suggested_reply\": str}]}。"
+        "concern 为该医生最关心的问题或顾虑，follow_up 为建议跟进事项，"
+        "suggested_reply 为针对卡片追问给代表的回复建议；"
+        "没有对应内容给空数组，没有把握就写\"待进一步沟通\"。\n"
+        f"<user_content>\n{body[:6000]}\n</user_content>"
     )
 
 
@@ -126,10 +157,46 @@ def _doctor_rounds(db: Session, specialist_id: int, since: datetime, until: date
     return [{"doctor_name": v["doctor_name"], "qa": v.get("qa", [])} for v in by_doctor.values()]
 
 
+def _card_questions(db: Session, specialist_id: int, since: datetime, until: datetime) -> List[Dict]:
+    """取某分身时间段内医生对学术卡片的追问（二期 G 卡片反馈与简报两源此前从不交汇，
+    2026-09-07 A-2 并入夜间简报数据源）。
+
+    数据源用 card_push_records 而非 notifications：通知 content 只有追问原文
+    （card_pushes.submit_feedback 写入），这里能 join 出卡片标题与医生名——
+    简报要给代表「谁·对哪张卡·问了什么」。feedback 非 useful/useless 即追问文本。
+    时间口径 updated_at：追问提交时该行更新（track 只改 read_status/秒数，
+    窗口判定以最近一次触碰该行的时间近似，追问行的语义不受影响）。
+    """
+    rows = (
+        db.query(CardPushRecord, AcademicCard, User)
+        .join(AcademicCard, AcademicCard.id == CardPushRecord.card_id)
+        .join(User, User.id == CardPushRecord.doctor_id)
+        .filter(
+            CardPushRecord.specialist_id == specialist_id,
+            CardPushRecord.updated_at >= since,
+            CardPushRecord.updated_at < until,
+            CardPushRecord.feedback.isnot(None),
+            CardPushRecord.feedback != "",
+            CardPushRecord.feedback.notin_(("useful", "useless")),
+        )
+        .order_by(CardPushRecord.id)
+        .all()
+    )
+    return [
+        {
+            "doctor_name": u.full_name or "医生",
+            "card_title": (c.title or "")[:60] if c else "",
+            "question": (r.feedback or "")[:300],
+        }
+        for r, c, u in rows
+    ]
+
+
 def generate_for_date(db: Session, target_date: date) -> dict:
     """为 target_date 生成"前一天"简报（target_date=今天时聚合昨天；测试可传固定日期）。
 
-    对每个创建过分享链接的 rep，逐分身 upsert 简报。无 doctor 对话的分身跳过。
+    对每个创建过分享链接的 rep，逐分身 upsert 简报。无 doctor 对话且无卡片追问的
+    分身跳过（2026-09-07 A-2 起两源任一存在即生成——追问也该出现在简报里）。
     返回 {generated, skipped, reps, generated_links}，其中 generated_links 为
     本轮生成/更新的 NightlyBriefing 行清单（供调用方逐篇审计）。
     """
@@ -149,11 +216,12 @@ def generate_for_date(db: Session, target_date: date) -> dict:
         ]
         for spec_id in twin_ids:
             rounds = _doctor_rounds(db, spec_id, since, until)
-            if not rounds:
+            questions = _card_questions(db, spec_id, since, until)
+            if not rounds and not questions:
                 skipped += 1
                 continue
             spec = db.query(Specialist).filter(Specialist.id == spec_id).first()
-            prompt = _build_prompt(spec.name if spec else str(spec_id), rounds)
+            prompt = _build_prompt(spec.name if spec else str(spec_id), rounds, questions)
             try:
                 structured = _qwen_briefing_json(prompt)
             except Exception as exc:

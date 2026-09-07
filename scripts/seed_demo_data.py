@@ -266,13 +266,18 @@ def seed(db, password: str) -> dict:
             "citations": [{"doc_name": "演示文献·免疫治疗综述", "url": None, "doc_id": None}],
         }, "is_ai_generated": True, "compliance_status": "passed", "status": "active"},
     )
-    _get_or_create(
+    push, _ = _get_or_create(
         db, CardPushRecord, card_id=card.id, doctor_id=doctor.id,
         defaults={"representative_id": rep.id, "specialist_id": twin.id,
                   "read_status": "read", "read_at": datetime.utcnow() - timedelta(days=1),
-                  "tracked_seconds": 95, "feedback": "内容很有参考价值",
+                  "tracked_seconds": 95,
+                  # 追问文本（非 useful/useless，2026-09-07 A-2 起会并入夜间简报数据源），
+                  # 与下方 card_question 通知文案一致
+                  "feedback": "老年患者安全性数据能否提供原文出处？",
                   "matched_interest": True},
     )
+    # 幂等刷：旧库该行是"内容很有参考价值"（A-2 口径下会被当成追问，文案不自洽）
+    push.feedback = "老年患者安全性数据能否提供原文出处？"
     # rep 通知中心：1 条已读（简报就绪）+ 2 条未读（医生反馈/追问）
     _get_or_create(
         db, Notification, user_id=rep.id, type="briefing_ready", title="你的夜间简报已生成",
@@ -296,22 +301,33 @@ def seed(db, password: str) -> dict:
     )
 
     # ---------- 夜间简报（固定内容；briefing_date=上海今天，简报列表即点即看） ----------
-    _get_or_create(
+    briefing_content = {
+        "summary": "周琴医生昨日围绕免疫联合治疗提问 4 次，关注三阴性乳腺癌新辅助数据、"
+                   "老年患者安全性与真实世界证据，建议跟进科室会安排。",
+        "doctors": [{
+            "doctor_name": "演示医生·周琴",
+            "questions": ["免疫联合治疗在三阴性乳腺癌的最新数据",
+                          "老年患者使用该方案的安全性",
+                          "与同类竞品相比优势"],
+            "concern": "老年患者安全性与数据出处",
+            "follow_up": "提供文献原文；确认下周科室会时间",
+        }],
+        # 医生对学术卡片的追问（2026-09-07 A-2 并入简报；与卡片反馈/通知文案同源）
+        "card_questions": [{
+            "doctor_name": "演示医生·周琴",
+            "card_title": "免疫治疗研究进展速览（演示）",
+            "question": "老年患者安全性数据能否提供原文出处？",
+            "suggested_reply": "下次随访带上综述原文与老年亚组森林图，当面核对数据口径",
+        }],
+    }
+    briefing, _ = _get_or_create(
         db, NightlyBriefing, representative_id=rep.id, specialist_id=twin.id,
         briefing_date=datetime.now(SH).date(),
-        defaults={"content": {
-            "summary": "周琴医生昨日围绕免疫联合治疗提问 4 次，关注三阴性乳腺癌新辅助数据、"
-                       "老年患者安全性与真实世界证据，建议跟进科室会安排。",
-            "doctors": [{
-                "doctor_name": "演示医生·周琴",
-                "questions": ["免疫联合治疗在三阴性乳腺癌的最新数据",
-                              "老年患者使用该方案的安全性",
-                              "与同类竞品相比优势"],
-                "concern": "老年患者安全性与数据出处",
-                "follow_up": "提供文献原文；确认下周科室会时间",
-            }],
-        }, "status": "ready"},
+        defaults={"content": briefing_content, "status": "ready"},
     )
+    # 幂等刷固定演示文案：已存在的简报行（同 briefing_date 重跑）不走 defaults，
+    # 无条件覆写保证演示内容与最新脚本一致
+    briefing.content = briefing_content
 
     # ---------- 患教：2 个 approved 模板 + 1 条已分享患教卡片（专区可见 + 转发留痕） ----------
     tpl_titles = {

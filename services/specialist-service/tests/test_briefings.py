@@ -27,7 +27,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from shared.models.base import Base
-from shared.models.academic import Notification
+from shared.models.academic import AcademicCard, CardPushRecord, Notification
 from shared.models.digital_specialist import Specialist
 from shared.models.doctor import ShareLink
 from shared.models.nightly_briefing import NightlyBriefing
@@ -35,8 +35,10 @@ from shared.models.product import Product
 from shared.models.user import User
 
 from app.core.briefing_generator import (
+    _card_questions,
     _doctor_rounds,
     _parse_json_content,
+    _qwen_briefing_json,
     generate_for_date,
     run_briefing_scan,
 )
@@ -70,6 +72,8 @@ TABLES = [
     NightlyBriefing.__table__,
     Conversation.__table__,
     Notification.__table__,
+    AcademicCard.__table__,
+    CardPushRecord.__table__,
 ]
 
 TARGET = date(2026, 8, 18)
@@ -415,3 +419,148 @@ def test_window_is_shanghai_day_boundary(fresh_state, monkeypatch):
     assert len(prompts) == 1
     assert "昨天的问题" in prompts[0]
     assert "今天凌晨的问题" not in prompts[0]
+
+
+# ===== 2026-09-07 A-2：卡片追问并入夜间简报 =====
+
+def _seed_card_push(push_id=1, feedback=None, updated_at=None, specialist_id=1):
+    """一条卡片推送记录（feedback=追问文本 / 'useful' / 'useless'）。
+
+    card_push_records 有 UNIQUE(card_id, doctor_id)，多条推送各配一张卡（push_id 兼作 card_id）。
+    """
+    _add(
+        AcademicCard(id=push_id, representative_id=3, title="XX 抑制剂临床进展",
+                     content={"conclusion": "", "key_points": [], "summary": "",
+                              "citations": []},
+                     compliance_status="passed", status="active"),
+        CardPushRecord(
+            id=push_id, representative_id=3, card_id=push_id, doctor_id=1,
+            specialist_id=specialist_id, feedback=feedback,
+            updated_at=updated_at or datetime(2026, 8, 17, 12, 0, 0),
+        ),
+    )
+
+
+def test_card_questions_in_prompt_and_content(fresh_state, monkeypatch):
+    """追问进 prompt（谁·对哪张卡·问了什么），useful 反馈不进；qwen 返回的
+    card_questions 清洗后落简报 content。"""
+    _seed_rep_doctor_and_twin()
+    _add(*_doctor_qna())
+    _seed_card_push(push_id=1, feedback="三期数据里 PFS 亚组结果怎么解读？")
+    _seed_card_push(push_id=2, feedback="useful")  # 有用反馈不是追问
+
+    prompts = []
+
+    def _stub(prompt):
+        prompts.append(prompt)
+        return {"summary": "简报", "doctors": [], "card_questions": [
+            {"doctor_name": "张医生", "card_title": "XX 抑制剂临床进展",
+             "question": "三期数据里 PFS 亚组结果怎么解读？", "suggested_reply": "带亚组森林图回访"},
+        ]}
+
+    monkeypatch.setattr("app.core.briefing_generator._qwen_briefing_json", _stub)
+
+    db = TestSession()
+    result = generate_for_date(db, TARGET)
+    db.close()
+
+    assert result["generated"] == 1
+    assert len(prompts) == 1
+    # prompt：追问独立小节，含卡片标题/医生名/追问原文；useful 不进
+    assert "学术卡片追问" in prompts[0]
+    assert "张医生" in prompts[0]
+    assert "XX 抑制剂临床进展" in prompts[0]
+    assert "PFS 亚组结果" in prompts[0]
+    assert "useful" not in prompts[0]
+
+    db = TestSession()
+    row = db.query(NightlyBriefing).one()
+    db.close()
+    assert row.content["card_questions"] == [
+        {"doctor_name": "张医生", "card_title": "XX 抑制剂临床进展",
+         "question": "三期数据里 PFS 亚组结果怎么解读？", "suggested_reply": "带亚组森林图回访"},
+    ]
+
+
+def test_card_question_alone_triggers_generation(fresh_state, monkeypatch):
+    """无 doctor 对话、只有卡片追问 → 也生成（旧口径 not rounds 直接 skipped）。"""
+    _seed_rep_doctor_and_twin()
+    _seed_card_push(feedback="这个结论在老年患者里成立吗？")
+
+    def _stub(prompt):
+        return {"summary": "有追问无对话", "doctors": [], "card_questions": []}
+
+    monkeypatch.setattr("app.core.briefing_generator._qwen_briefing_json", _stub)
+
+    db = TestSession()
+    result = generate_for_date(db, TARGET)
+    db.close()
+
+    assert result["generated"] == 1
+    assert result["skipped"] == 0
+
+    db = TestSession()
+    rows = db.query(NightlyBriefing).all()
+    db.close()
+    assert len(rows) == 1
+
+
+def test_card_questions_window_and_feedback_filter(fresh_state):
+    """_card_questions：窗口外/其他分身不进；useful/useless/空文本不算追问。"""
+    _seed_rep_doctor_and_twin()
+    _seed_card_push(push_id=1, feedback="窗口内追问",
+                    updated_at=datetime(2026, 8, 17, 12, 0, 0))
+    _seed_card_push(push_id=2, feedback="窗口外追问",
+                    updated_at=datetime(2026, 8, 18, 0, 30, 0))
+    _seed_card_push(push_id=3, feedback="useless",
+                    updated_at=datetime(2026, 8, 17, 12, 0, 0))
+    _seed_card_push(push_id=4, feedback="",
+                    updated_at=datetime(2026, 8, 17, 12, 0, 0))
+    _seed_card_push(push_id=5, feedback="别的分身的追问", specialist_id=2,
+                    updated_at=datetime(2026, 8, 17, 12, 0, 0))
+
+    db = TestSession()
+    qs = _card_questions(
+        db, 1,
+        datetime(2026, 8, 17, 0, 0, 0),
+        datetime(2026, 8, 18, 0, 0, 0),
+    )
+    db.close()
+
+    assert len(qs) == 1
+    assert qs[0]["question"] == "窗口内追问"
+    assert qs[0]["card_title"] == "XX 抑制剂临床进展"
+    assert qs[0]["doctor_name"] == "张医生"
+
+
+def test_qwen_briefing_json_cleans_card_questions(monkeypatch):
+    """_qwen_briefing_json：card_questions 形状清洗——非 dict 条目跳过、字段 str 化
+    截断、缺失/非 list 时 [] 不阻塞（可缺省键）。"""
+    import json as _json
+
+    class FakeClient:
+        def chat(self, messages, **kw):
+            return {"content": _json.dumps({
+                "summary": "s",
+                "doctors": [],
+                "card_questions": [
+                    {"doctor_name": "张医生", "card_title": "卡", "question": "q" * 400,
+                     "suggested_reply": "r"},
+                    "不是dict",
+                    {"question": "缺医生名与卡题"},
+                ],
+            }, ensure_ascii=False)}
+
+    monkeypatch.setattr("app.core.briefing_generator.QwenClient", FakeClient)
+    result = _qwen_briefing_json("prompt")
+    assert len(result["card_questions"]) == 2
+    assert result["card_questions"][0]["question"] == "q" * 300  # 截断 300
+    assert result["card_questions"][1]["doctor_name"] == "医生"  # 缺省补底
+
+    class FakeClientNoKey:
+        def chat(self, messages, **kw):
+            return {"content": _json.dumps({"summary": "s", "doctors": []})}
+
+    monkeypatch.setattr("app.core.briefing_generator.QwenClient", FakeClientNoKey)
+    result2 = _qwen_briefing_json("prompt")
+    assert result2["card_questions"] == []  # 旧契约输出（无键）→ 空数组不阻塞

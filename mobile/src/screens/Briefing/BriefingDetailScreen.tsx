@@ -1,5 +1,6 @@
 /**
- * 夜间简报详情页 —— 渲染 content.summary + content.doctors（医生问答明细）。
+ * 夜间简报详情页 —— 渲染 content.summary + content.doctors（医生问答明细）
+ * + content.card_questions（学术卡片追问，2026-09-07 A-2；旧简报无此键渲染为空段）。
  * 临床精准风
  */
 import React, { useEffect, useState } from 'react';
@@ -49,6 +50,7 @@ export default function BriefingDetailScreen() {
   }
 
   const doctors = briefing.content?.doctors ?? [];
+  const cardQuestions = briefing.content?.card_questions ?? [];
 
   return (
     <View style={styles.container}>
@@ -73,6 +75,35 @@ export default function BriefingDetailScreen() {
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.summary}>{briefing.content?.summary || '暂无摘要'}</Text>
         </View>
+
+        <Text style={styles.sectionTitle}>学术卡片追问（{cardQuestions.length}）</Text>
+        {cardQuestions.length === 0 ? (
+          <View style={[styles.card, Shadow.card]}>
+            <Text style={styles.emptyText}>暂无卡片追问</Text>
+          </View>
+        ) : (
+          cardQuestions.map((q, i) => (
+            <View key={`${q.doctor_name}-${i}`} style={[styles.card, Shadow.card]}>
+              <View style={styles.doctorHead}>
+                <Icon name="help-circle-outline" size={14} color={Colors.warning} />
+                <Text style={styles.doctorName}>{q.doctor_name || '医生'}</Text>
+                {!!q.card_title && <Text style={styles.cardTitle}>《{q.card_title}》</Text>}
+              </View>
+              {q.question ? (
+                <View style={styles.block}>
+                  <Text style={styles.blockLabel}>追问</Text>
+                  <Text style={styles.bodyText}>{q.question}</Text>
+                </View>
+              ) : null}
+              {q.suggested_reply ? (
+                <View style={styles.block}>
+                  <Text style={styles.blockLabel}>回复建议</Text>
+                  <Text style={styles.bodyText}>{q.suggested_reply}</Text>
+                </View>
+              ) : null}
+            </View>
+          ))
+        )}
 
         <Text style={styles.sectionTitle}>医生问答（{doctors.length}）</Text>
         {doctors.length === 0 ? (
@@ -145,8 +176,9 @@ const styles = StyleSheet.create({
   card: { backgroundColor: Colors.white, borderRadius: BorderRadius.xl, padding: Spacing.lg, marginBottom: Spacing.md },
   summary: { fontSize: FontSize.md, color: Colors.textPrimary, lineHeight: 24 },
   emptyText: { fontSize: FontSize.sm, color: Colors.textHint },
-  doctorHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing.md },
+  doctorHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing.md, flexWrap: 'wrap' },
   doctorName: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: '600' },
+  cardTitle: { fontSize: FontSize.sm, color: Colors.textSecondary },
   block: { marginTop: Spacing.sm },
   blockLabel: { fontSize: FontSize.xs, color: Colors.textHint, marginBottom: 4 },
   question: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20, marginBottom: 2 },

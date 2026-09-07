@@ -395,6 +395,13 @@ export interface NightlyBriefing {
       concern?: string;
       follow_up?: string;
     }[];
+    /** 医生对学术卡片的追问（2026-09-07 A-2 并入简报；旧简报无此键渲染为空） */
+    card_questions?: {
+      doctor_name: string;
+      card_title: string;
+      question: string;
+      suggested_reply: string;
+    }[];
   };
   status: string;
 }
