@@ -17,6 +17,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon, { ActionIcons, FeatureIcons } from '../../components/Icon';
 import { useAuth } from '../../store/AuthContext';
 import { doctorAPI } from '../../api/doctor';
+import { inboxAPI } from '../../api/inbox';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
@@ -42,6 +43,7 @@ export default function ProfileScreen() {
   const navigation = useNavigation<Nav>();
   const { user, logout } = useAuth();
   const [certStatus, setCertStatus] = useState<string>('');
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // 每次回到本 Tab 刷新资质状态（提交/审核后回来看最新进度）
   useFocusEffect(
@@ -58,6 +60,18 @@ export default function ProfileScreen() {
       return () => {
         cancelled = true;
       };
+    }, [])
+  );
+
+  // 未读通知红点：每次回到本 Tab 刷新（通知页已读后回来即消失；拿不到不阻塞页面）
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      inboxAPI
+        .unreadCount()
+        .then((res) => { if (!cancelled) setUnreadCount(res?.unread ?? 0); })
+        .catch(() => { /* 静默 */ });
+      return () => { cancelled = true; };
     }, [])
   );
 
@@ -103,6 +117,27 @@ export default function ProfileScreen() {
             </View>
           ))}
         </View>
+
+        {/* 站内通知入口（未读红点：新卡片提醒点开即读） */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Notifications')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name="bell-badge-outline" size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>站内通知</Text>
+            <Text style={styles.desc}>新学术卡片与相关动态的提醒</Text>
+          </View>
+          {unreadCount > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+            </View>
+          )}
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
 
         {/* 学术卡片入口 */}
         <TouchableOpacity
@@ -302,5 +337,16 @@ const styles = StyleSheet.create({
     padding: Spacing.lg,
     marginTop: Spacing.sm,
   },
+  badge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    marginRight: 6,
+  },
+  badgeText: { color: Colors.white, fontSize: 11, fontWeight: '600' },
   logoutText: { color: Colors.danger, fontSize: FontSize.md, fontWeight: '600' },
 });

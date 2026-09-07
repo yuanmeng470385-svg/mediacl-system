@@ -26,6 +26,8 @@ export type RootStackParamList = {
   CertUpload: undefined;
   // 学术卡片收件箱
   Inbox: undefined;
+  // 站内通知（2026-09-07 A-1：card_new 新卡片提醒，点开即读）
+  Notifications: undefined;
   // 学术卡片详情（按推送记录 id 上报阅读/反馈）
   CardDetail: { pushId: number };
   // 偏好 + 个性化学术简报

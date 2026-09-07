@@ -3,6 +3,9 @@
  *   - listInbox: GET /api/v1/card-pushes（收件箱分页，带 card 对象）
  *   - trackRead: POST /api/v1/card-pushes/{id}/track {read_status, seconds}
  *   - submitFeedback: POST /api/v1/card-pushes/{id}/feedback {feedback}
+ *   - notifications/unreadCount/markRead: 站内通知消费（2026-09-07 A-1）——
+ *     除 URL/body 外还锁映射后响应形状（is_read→isRead 等，防 snake_case 错位复发，
+ *     同款教训见代表端 2026-09-07 修复）
  */
 import { inboxAPI } from '../inbox';
 
@@ -45,5 +48,55 @@ describe('inboxAPI', () => {
     const { url, init } = lastCall();
     expect(url).toContain('/api/v1/card-pushes/1/feedback');
     expect(JSON.parse(init.body)).toEqual({ feedback: 'useful' });
+  });
+});
+
+describe('inboxAPI 通知消费（2026-09-07 A-1）', () => {
+  it('notifications 发 GET /notifications 且映射 snake_case → isRead/createdAt', async () => {
+    fetchMock.mockResolvedValue(okResponse({
+      total: 2,
+      items: [
+        { id: 1, type: 'card_new', title: '新卡片', content: 'c', link: '/card-pushes', is_read: false, created_at: '2026-09-07T02:00:00' },
+        { id: 2, type: 'card_new', title: '已读', content: null, link: null, is_read: true, created_at: null },
+      ],
+    }));
+    const res = await inboxAPI.notifications(1, 20);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/card-pushes/notifications?page=1&page_size=20');
+    expect(init.method).toBe('GET');
+    expect(res.total).toBe(2);
+    expect(res.items[0]).toEqual({
+      id: 1, type: 'card_new', title: '新卡片', content: 'c', link: '/card-pushes',
+      isRead: false, createdAt: '2026-09-07T02:00:00',
+    });
+    // 映射后形状不再暴露 snake_case 原始键（红点/时间列依赖 isRead/createdAt）
+    expect(res.items[0]).not.toHaveProperty('is_read');
+    expect(res.items[0]).not.toHaveProperty('created_at');
+    expect(res.items[1].isRead).toBe(true);
+    expect(res.items[1].createdAt).toBeNull();
+  });
+
+  it('notifications unreadOnly 透传 unread_only=true', async () => {
+    fetchMock.mockResolvedValue(okResponse({ total: 0, items: [] }));
+    await inboxAPI.notifications(2, 10, true);
+    expect(lastCall().url).toContain('unread_only=true');
+  });
+
+  it('unreadCount 发 GET /notifications/unread-count', async () => {
+    fetchMock.mockResolvedValue(okResponse({ unread: 3 }));
+    const res = await inboxAPI.unreadCount();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/card-pushes/notifications/unread-count');
+    expect(init.method).toBe('GET');
+    expect(res.unread).toBe(3);
+  });
+
+  it('markRead 单条发 notification_id、全部发 {all:true}', async () => {
+    await inboxAPI.markRead(5);
+    expect(lastCall().url).toContain('/api/v1/card-pushes/notifications/read');
+    expect(JSON.parse(lastCall().init.body)).toEqual({ notification_id: 5 });
+
+    await inboxAPI.markRead(undefined, true);
+    expect(JSON.parse(lastCall().init.body)).toEqual({ all: true });
   });
 });

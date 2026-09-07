@@ -22,6 +22,7 @@ import TwinChatScreen from '../screens/TwinChat/TwinChatScreen';
 import CertUploadScreen from '../screens/CertUpload/CertUploadScreen';
 import InboxScreen from '../screens/Inbox/InboxScreen';
 import CardDetailScreen from '../screens/Inbox/CardDetailScreen';
+import NotificationsScreen from '../screens/Notifications/NotificationsScreen';
 import PreferenceScreen from '../screens/Preferences/PreferenceScreen';
 import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
@@ -183,6 +184,11 @@ export default function AppNavigator() {
             <Stack.Screen
               name="CardDetail"
               component={CardDetailScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            <Stack.Screen
+              name="Notifications"
+              component={NotificationsScreen}
               options={{ animation: 'slide_from_right' }}
             />
             <Stack.Screen
