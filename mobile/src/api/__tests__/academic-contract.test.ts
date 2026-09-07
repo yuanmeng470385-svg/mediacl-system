@@ -78,6 +78,26 @@ describe('academicAPI 通知中心（2026-09-03 业务审查批）', () => {
     ({ init } = lastCall());
     expect(JSON.parse(init.body!)).toEqual({ all: true });
   });
+
+  it('notifications 响应映射 snake_case → isRead/createdAt（2026-09-04 预演暴露错位）', async () => {
+    fetchMock.mockResolvedValueOnce(okResponse({
+      items: [{
+        id: 3, user_id: 9, type: 'briefing_ready', title: '你的夜间简报已生成',
+        content: '查看医生提问汇总', link: '/briefings', is_read: false,
+        created_at: '2026-09-04T06:00:00',
+      }],
+      total: 1, page: 1, page_size: 20,
+    }));
+    const res = await academicAPI.notifications();
+    expect(res.items).toEqual([{
+      id: 3, type: 'briefing_ready', title: '你的夜间简报已生成',
+      content: '查看医生提问汇总', link: '/briefings',
+      isRead: false, createdAt: '2026-09-04T06:00:00',
+    }]);
+    // 屏幕组件只应看到 camelCase 形状
+    expect((res.items[0] as any).is_read).toBeUndefined();
+    expect((res.items[0] as any).created_at).toBeUndefined();
+  });
 });
 
 describe('academicAPI pushTargets（2026-09-03 业务审查批）', () => {

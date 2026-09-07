@@ -36,6 +36,19 @@ export interface AppNotification {
   createdAt: string | null;
 }
 
+/** 后端 Notification.to_dict（snake_case）→ AppNotification（契约映射在 api 层做，不污染屏幕组件） */
+function mapNotification(raw: any): AppNotification {
+  return {
+    id: raw?.id,
+    type: raw?.type,
+    title: raw?.title ?? '',
+    content: raw?.content ?? null,
+    link: raw?.link ?? null,
+    isRead: !!raw?.is_read,
+    createdAt: raw?.created_at ?? null,
+  };
+}
+
 export const academicAPI = {
   /** 生成学术卡片（AI 生成 + 三层合规预检 fail-closed） */
   createCard: (payload: AcademicCardCreatePayload) =>
@@ -61,12 +74,17 @@ export const academicAPI = {
       '/api/v1/academic-cards/push-targets'
     ),
 
-  /** 站内通知（代表端简报就绪/医生反馈回流）分页 */
+  /** 站内通知（代表端简报就绪/医生反馈回流）分页（后端 is_read/created_at 在此映射） */
   notifications: (page = 1, pageSize = 20, unreadOnly = false) =>
-    apiClient.request<{ items: AppNotification[]; total: number }>(
-      'GET',
-      `/api/v1/card-pushes/notifications?page=${page}&page_size=${pageSize}${unreadOnly ? '&unread_only=true' : ''}`
-    ),
+    apiClient
+      .request<{ items: any[]; total: number }>(
+        'GET',
+        `/api/v1/card-pushes/notifications?page=${page}&page_size=${pageSize}${unreadOnly ? '&unread_only=true' : ''}`
+      )
+      .then((res) => ({
+        total: res?.total ?? 0,
+        items: (Array.isArray(res?.items) ? res.items : []).map(mapNotification),
+      })),
 
   /** 未读通知数（红点） */
   unreadCount: () =>
@@ -75,9 +93,9 @@ export const academicAPI = {
       '/api/v1/card-pushes/notifications/unread-count'
     ),
 
-  /** 标记已读：单条或全部 */
+  /** 标记已读：单条或全部（单条返回后端 to_dict snake_case 行、全部返回 {marked}，调用方不消费具体形状） */
   markRead: (notificationId?: number, all = false) =>
-    apiClient.request<{ marked?: number } | AppNotification>(
+    apiClient.request<Record<string, unknown>>(
       'POST',
       '/api/v1/card-pushes/notifications/read',
       all ? { all: true } : { notification_id: notificationId }
