@@ -704,6 +704,11 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - 测试基线（2026-09-09 全量实测）：web vitest 22（tourSteps 重写：tryPath ∈ menuConfig ∧ canAccess/首尾无 tryPath/每角色 ≥3 try 步）+ build PASS；mobile jest 108→**109**（guideSteps 4）/tsc 0；mobile-doctor jest 39→**40**（doctorGuideSteps 4）/tsc 0。后端零改动
 - 实机走查全过：web Playwright 23 断言（含 Suspense remount trying 恢复/断点 JSON/重放/跳过）；代表端模拟器 9 项（含 Stack 页全局条常驻+force-stop 断点续传）；医生端模拟器（首弹→去试试→三步召回全过，Inbox Stack 页验证回 MainTabs 再弹卡修复→完成→冷启不重弹）
 
+**web 引导 v3（2026-09-09 同日晚，全页面覆盖：用户要求每个页面都引导+介绍功能）**：
+- tourSteps.ts 改为**按角色自动派生**：menuConfig+canAccess 生成该角色可见菜单页的逐步序列（PAGE_GUIDES 26 页文案库 + TRY_PAGES 核心体验页 + OPENINGS 叙事），新增菜单页自动获得一步（文案缺省兜底）；admin 28 步（6 try）/manager 27/compliance 24/medical 15。done key 升 `onboarding.web.<role>.v3`
+- **覆盖防漂移断言**：中段步骤 page 序列=菜单叶序完全一致（缺页/多页/乱序/兜底文案全炸）；记坑：getStepsForRole 未知角色必须回落 admin（动态派生后 unknown-role 会生成 0 页空步骤）；vitest filter 不收窄类型要显式谓词
+- GuideTour/状态机/断点续传零改动。验收：vitest 23 + tsc 0 + build PASS + Playwright 26 断言（28 步全链含 6 try 导航、标题序=菜单叶序、断点 card/trying 恢复）
+
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：

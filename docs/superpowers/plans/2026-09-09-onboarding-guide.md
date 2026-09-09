@@ -159,3 +159,21 @@ jest 109（+guideSteps 4）/ tsc 0 + 模拟器 9 项全过（含 Stack 页全局
 mobile-doctor jest 40（+doctorGuideSteps 4）/ tsc 0 + 模拟器全过（首弹→去试试→MedicalQA/
 MyTwins/Inbox 三步召回——Inbox 为 Stack push 页，验证回 MainTabs 再弹卡的修复→完成引导→
 冷启不重弹）。后端零改动。
+
+## 10. v3 升级记录（2026-09-09 同日，web 端全页面覆盖）
+
+用户要求「管理员端应该把每一个页面都引导一下，介绍其功能」。web 步骤从「每角色 6 步核心动线」
+升级为「该角色可见菜单页**逐一覆盖**」：开场（告知总页数+可跳过）→ 按 menuConfig 叶序每页一步
+（title=页面名，description=功能介绍；核心页仍带「去试试」）→ 收尾。
+
+- **步骤自动派生**：`tourSteps.ts` 由 `menuConfig + canAccess` 按角色实时生成（PAGE_GUIDES
+  文案库 26 页 + TRY_PAGES 每角色核心体验页 + OPENINGS 叙事）。**新增菜单页自动获得一步**，
+  文案缺省走兜底文案（不白屏）；测试断言中段步骤 page 序列与菜单叶序**完全一致**——缺页/
+  多页/乱序/兜底文案都炸出来。admin 28 步（6 try）/manager 27 步（5 try）/compliance 24 步
+  （4 try）/medical 15 步（3 try）。
+- done key 升 `onboarding.web.<role>.v3`（v2 观众重弹）；GuideTour/状态机/断点续传零改动。
+- 记坑：getStepsForRole 未知角色须回落 admin——动态派生后 'unknown-role' 会生成 0 页空步骤
+  （toEqual 断言炸出）；vitest `.filter((s) => s.tryPath)` 不做类型收窄，要显式谓词
+  `(s): s is GuideStep & { tryPath: string }`。
+- 验收：vitest 23（+覆盖断言）+ tsc 0 + build PASS + Playwright 26 断言全过（28 步全链快进、
+  6 个 try 步真实导航+召回、标题序=菜单叶序、card/trying 断点恢复、重放/跳过）。
