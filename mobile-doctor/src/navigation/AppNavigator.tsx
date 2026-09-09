@@ -28,6 +28,8 @@ import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
 import PatientEduZoneScreen from '../screens/PatientEdu/PatientEduZoneScreen';
 import FavoritesScreen from '../screens/Profile/FavoritesScreen';
+import OnboardingScreen from '../screens/Onboarding/OnboardingScreen';
+import OnboardingGate from '../screens/Onboarding/OnboardingGate';
 import PrivacyCenterScreen from '../screens/Privacy/PrivacyCenterScreen';
 import PrivacyRequestsScreen from '../screens/Privacy/PrivacyRequestsScreen';
 
@@ -56,6 +58,15 @@ function extractTwinToken(url: string | null): string | null {
 }
 
 /** 底部 3 Tab：问答 / 分身 / 我的 */
+// 新人引导闸门（模块级定义保引用稳定）：包住 MainTabs，首登自动进 Onboarding（深链 pendingToken 优先，不打断激活）
+function GatedMainTabs() {
+  return (
+    <OnboardingGate>
+      <MainTabs />
+    </OnboardingGate>
+  );
+}
+
 function MainTabs() {
   return (
     <Tab.Navigator
@@ -160,7 +171,13 @@ export default function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn ? (
           <>
-            <Stack.Screen name="MainTabs" component={MainTabs} />
+            <Stack.Screen name="MainTabs" component={GatedMainTabs} />
+            {/* 新人引导（重看入口：我的 → 功能引导） */}
+            <Stack.Screen
+              name="Onboarding"
+              component={OnboardingScreen}
+              options={{ gestureEnabled: false }}
+            />
             <Stack.Screen
               name="TwinActivate"
               component={TwinActivateScreen}

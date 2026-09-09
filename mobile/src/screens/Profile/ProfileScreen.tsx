@@ -18,6 +18,7 @@ import Icon from '../../components/Icon';
 import {
   Colors, FontSize, Spacing, BorderRadius, Shadow,
 } from '../../constants/theme';
+import FirstUseTip from '../../components/FirstUseTip';
 import type { RootStackParamList } from '../../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -85,6 +86,12 @@ export default function ProfileScreen() {
 
   return (
     <View style={styles.container}>
+      {/* A 档新人引导：备案/培训深藏入口首访提示（AsyncStorage 一次性） */}
+      <FirstUseTip
+        storageKey="onboarding.tip.rep.profile.v1"
+        title="备案与合规培训在这里"
+        content="备案资质上传、合规培训与考试、承诺书签署的入口：点上方用户卡 → 设置 → 备案与资质（页面最底部）。"
+      />
       <View style={styles.header}>
         <Text style={styles.headerTitle}>我的</Text>
       </View>

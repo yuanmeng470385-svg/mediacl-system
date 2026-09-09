@@ -16,7 +16,7 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const APP_VERSION: string = require('../../../package.json').version;
 
-type RowAction = 'profile' | 'notifications' | 'compliance' | 'coming' | 'about';
+type RowAction = 'profile' | 'notifications' | 'compliance' | 'onboarding' | 'coming' | 'about';
 
 const sections: { title: string; items: { icon: string; label: string; desc: string; action: RowAction }[] }[] = [
   { title: '个人资料', items: [
@@ -30,6 +30,7 @@ const sections: { title: string; items: { icon: string; label: string; desc: str
   ]},
   { title: '通用', items: [
     { icon: 'bell-outline', label: '通知', desc: '拜访提醒、合规告警等推送设置', action: 'notifications' },
+    { icon: 'compass', label: '功能引导', desc: '重看新人引导轮播（核心功能动线）', action: 'onboarding' },
     { icon: 'translate', label: '语言', desc: '简体中文', action: 'coming' },
     { icon: 'palette', label: '主题', desc: '临床精准 / 浅色', action: 'coming' },
     { icon: 'information', label: '关于 MedAgent', desc: 'v' + APP_VERSION, action: 'about' },
@@ -48,6 +49,9 @@ export default function SettingsScreen() {
         break;
       case 'notifications':
         navigation.navigate('NotificationSettings');
+        break;
+      case 'onboarding':
+        navigation.navigate('Onboarding');
         break;
       case 'about':
         Alert.alert('关于 MedAgent', `MedAgent 医药代表数字员工系统\n版本 v${APP_VERSION}`);

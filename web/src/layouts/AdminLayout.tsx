@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
-import { Button, Dropdown, Avatar, theme } from 'antd';
-import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Avatar, FloatButton, theme } from 'antd';
+import { LogoutOutlined, UserOutlined, QuestionCircleOutlined } from '@ant-design/icons';
 import { menuConfig } from '../constants/menu';
 import { canAccess, filterMenu, isKnownRoute } from '../constants/routeAccess';
 import Forbidden from '../components/Forbidden';
+import AppTour from '../components/onboarding/AppTour';
 import { useAuth } from '../hooks/useAuth';
 
 export default function AdminLayout() {
@@ -13,6 +14,8 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  // 新人引导：首登自动开演；"?"按钮重看（replayToken 变化触发）
+  const [replayToken, setReplayToken] = useState(0);
 
   return (
     <ProLayout
@@ -24,7 +27,12 @@ export default function AdminLayout() {
       collapsed={collapsed}
       onCollapse={setCollapsed}
       menuItemRender={(item) => (
-        <a onClick={() => item.path && navigate(item.path)}>{item.name}</a>
+        <a
+          data-tour-menu={item.path}
+          onClick={() => item.path && navigate(item.path)}
+        >
+          {item.name}
+        </a>
       )}
       siderWidth={220}
       headerContentRender={() => (
@@ -58,6 +66,14 @@ export default function AdminLayout() {
       ) : (
         <Outlet />
       )}
+      <AppTour role={user?.role} replayToken={replayToken} />
+      {/* 功能引导重看入口（纯侧边布局无顶栏，headerContentRender 不渲染——固定右下角"?"悬浮球） */}
+      <FloatButton
+        data-tour="help-btn"
+        tooltip="功能引导"
+        icon={<QuestionCircleOutlined />}
+        onClick={() => setReplayToken(Date.now())}
+      />
     </ProLayout>
   );
 }

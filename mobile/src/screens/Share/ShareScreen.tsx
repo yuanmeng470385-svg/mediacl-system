@@ -15,6 +15,7 @@ import { shareAPI } from '../../api/share';
 import { specialistAPI } from '../../api/specialist';
 import type { ShareLinkItem, DigitalSpecialist } from '../../types';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import FirstUseTip from '../../components/FirstUseTip';
 
 export default function ShareScreen() {
   const navigation = useNavigation();
@@ -171,6 +172,12 @@ export default function ShareScreen() {
 
   return (
     <View style={styles.container}>
+      {/* A 档新人引导：分身分享用途首访提示 */}
+      <FirstUseTip
+        storageKey="onboarding.tip.rep.share.v1"
+        title="把你的数字员工分享给医生"
+        content="生成分享链接发给医生 → 医生打开后订阅你的分身 → 之后医生的咨询对话与反馈会回流给你（夜间简报可见）。"
+      />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
           <Icon name="chevron-left" size={22} color={Colors.textWhite} />

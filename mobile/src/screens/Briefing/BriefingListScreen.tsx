@@ -14,6 +14,7 @@ import EmptyState from '../../components/EmptyState';
 import { briefingAPI } from '../../api/briefing';
 import type { NightlyBriefing } from '../../types';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import FirstUseTip from '../../components/FirstUseTip';
 import type { RootStackParamList } from '../../navigation/types';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -83,6 +84,12 @@ export default function BriefingListScreen() {
 
   return (
     <View style={styles.container}>
+      {/* A 档新人引导：夜间简报机制首访提示 */}
+      <FirstUseTip
+        storageKey="onboarding.tip.rep.briefing.v1"
+        title="夜间简报：每天早晨自动生成"
+        content="昨天医生与你的数字员工的全部互动（问答、追问、卡片反馈）会在每天早晨汇总成一份简报——不用逐条翻聊天记录。"
+      />
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
           <Icon name="chevron-left" size={22} color={Colors.textWhite} />

@@ -18,6 +18,8 @@ export type RootStackParamList = {
   Login: undefined;
   // 主 Tab
   MainTabs: undefined;
+  // 新人引导（首登 Gate 自动 push / 我的→功能引导 重看）
+  Onboarding: undefined;
   // 分身激活（深链接场景由 Task 9 注入分享链接 token；列表入口不带 token 手动输入）
   TwinActivate: { token?: string } | undefined;
   // 分身对话

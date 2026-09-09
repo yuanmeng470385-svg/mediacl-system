@@ -139,6 +139,22 @@ export default function ProfileScreen() {
           <Icon name="chevron-right" size={20} color={Colors.textHint} />
         </TouchableOpacity>
 
+        {/* 功能引导入口（重看新人引导轮播） */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Onboarding')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name="compass-outline" size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>功能引导</Text>
+            <Text style={styles.desc}>重看新人引导（认证、问答、订阅与偏好）</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
         {/* 学术卡片入口 */}
         <TouchableOpacity
           style={[styles.card, Shadow.card, styles.entryRow]}

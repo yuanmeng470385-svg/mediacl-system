@@ -33,6 +33,8 @@ import ExamScreen from '../screens/Compliance/ExamScreen';
 import CommitmentScreen from '../screens/Compliance/CommitmentScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
+import OnboardingScreen from '../screens/Onboarding/OnboardingScreen';
+import OnboardingGate from '../screens/Onboarding/OnboardingGate';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
 import TaskListScreen from '../screens/TaskList/TaskListScreen';
 import FavoritesScreen from '../screens/Favorites/FavoritesScreen';
@@ -54,6 +56,15 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 /** 底部 4 Tab */
+// 新人引导闸门（模块级定义保引用稳定）：包住 MainTabs，首登自动进 Onboarding
+function GatedMainTabs() {
+  return (
+    <OnboardingGate>
+      <MainTabs />
+    </OnboardingGate>
+  );
+}
+
 function MainTabs() {
   return (
     <Tab.Navigator
@@ -146,8 +157,14 @@ export default function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn ? (
           <>
-            {/* 主 Tab */}
-            <Stack.Screen name="MainTabs" component={MainTabs} />
+            {/* 主 Tab（新人引导闸门：首登自动进 Onboarding 轮播） */}
+            <Stack.Screen name="MainTabs" component={GatedMainTabs} />
+            {/* 新人引导（重看入口：设置 → 通用 → 功能引导） */}
+            <Stack.Screen
+              name="Onboarding"
+              component={OnboardingScreen}
+              options={{ gestureEnabled: false }}
+            />
             {/* 数字专员对话 */}
             <Stack.Screen
               name="Chat"

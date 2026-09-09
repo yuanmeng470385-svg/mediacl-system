@@ -686,6 +686,15 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - 测试基线（2026-09-07 全量回归实测）：specialist 356（+7：briefings 4 / cards 2 / monitor 1；mah 用例改写为新口径判别）/ visit 120（+2 clamp）/ mobile-doctor jest 36（+4 inbox 契约）/ mobile jest 105 / 双端 tsc 0 错 / web vitest 19 + build PASS。服务重启后接口走查六项全过（医生通知 snake_case 契约+markRead 后 unread=0 / 简报 card_questions=1 / approval_rate=0.5 / MAH compliance_pass_rate=0.6731 / effective_reads+按读排序 / visit 列表），医生端模拟器登录走查：通知入口置顶渲染+通知页标题/时间列正常
 - 演示提示：MAH 通过率 ≈67%（含历史 rep 测试对话 blocked 行，真实感非 100%）；demo_doctor 通知种子 1 条 card_new 未读
 
+**三端新人引导批（2026-09-09，A 档全量：价值叙事开场+操作说明收尾，web 四角色全做；计划书 `docs/superpowers/plans/2026-09-09-onboarding-guide.md`）**：
+- **web（antd 5 自带 Tour，零新依赖）**：`web/src/components/onboarding/`——tourSteps.ts（四角色各 5 步：叙事×1 居中 → 菜单动线×3 → 末步指向"?"重看）+ AppTour.tsx（localStorage `onboarding.web.<role>.v1`，跳过=完成；replayToken 变化重放）；AdminLayout 菜单 `<a>` 注入 data-tour-menu。**tourSteps.test.ts 防漂移断言**：每角色 menuPath 必须 ∈ menuConfig 且 canAccess(role)——角色权限/菜单变更时测试炸出（M17 单一事实源同哲学）
+- **⚠ web 布局发现：`headerContentRender` 是死代码**——本 ProLayout 纯侧边布局不渲染顶栏（DOM 无 header 元素，原有退出登录 Dropdown 也从未显示过）。"?" 入口改 **FloatButton 固定右下角悬浮球**（data-tour="help-btn" + tooltip「功能引导」）；菜单步 target 在分组未展开时（menuItemRender 未调用）antd Tour 判空自动降级居中显示，文案自足不误导
+- **mobile（代表端）**：`screens/Onboarding/`（OnboardingScreen 轮播=ScrollView pagingEnabled 零依赖 + repSlides 4 屏文案 + OnboardingGate 包 MainTabs 首登自动 push）+ `components/FirstUseTip.tsx`（一次性气泡，AsyncStorage key）挂三处深藏入口：Profile（备案/培训路径）/Share（分身分享回流）/BriefingList（夜间简报机制）；Settings 通用组「功能引导」重看行（navigate Onboarding，不清 key——finish 幂等覆写）；types.ts 注册 Onboarding 路由
+- **mobile-doctor（医生端）**：同构（doctorSlides 4 屏）+ **Gate 加 pendingToken 条件**——深链激活优先（F2 语义：token 待消费时绝不弹引导），激活后下次冷启动补弹；Profile entryRow「功能引导」入口；types.ts 注意 RootStackParamList 与 MainTabParamList 都有 Profile（第一次插错列表 tsc 炸出）
+- **踩坑（RN 走查）**：uiautomator dump_ui.py 的 [click] 标签与实际点击有竞态（点击常不生效，需 dump 拿坐标后手动 `adb shell input tap`）；轮播连点「下一步」翻页会被滚动吞（onMomentumScrollEnd 未落定），UI 自动化用 swipe 翻页
+- 测试基线（2026-09-09 全量实测）：web vitest 19→**22**（+tourSteps 3）+ tsc 0 + build PASS；mobile jest 105→**108**（+slides 3）/tsc 0；mobile-doctor jest 36→**39**（+slides 3）/tsc 0。后端零改动
+- 实机走查全过：双端模拟器（首启弹轮播→翻页→开始使用回落主界面→冷启不重弹→重看入口生效→跳过路径）+ web Playwright 注入 admin token（AUTH_DEV_MODE send-code 回传 data.code 拿验证码登录）7 项断言全 PASS（Tour 自动弹/首步叙事/末步"?" /完成关闭/localStorage/刷新不重弹/FloatButton 重看）
+
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：
