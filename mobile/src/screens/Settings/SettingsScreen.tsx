@@ -5,9 +5,12 @@ import React, { useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Modal,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
+import { restartGuide } from '../../events/guideEvents';
+import { REP_GUIDE_DONE_KEY, REP_GUIDE_PROGRESS_KEY } from '../Onboarding/repGuideSteps';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import { useAuth } from '../../store/AuthContext';
 import type { RootStackParamList } from '../../navigation/types';
@@ -30,7 +33,7 @@ const sections: { title: string; items: { icon: string; label: string; desc: str
   ]},
   { title: '通用', items: [
     { icon: 'bell-outline', label: '通知', desc: '拜访提醒、合规告警等推送设置', action: 'notifications' },
-    { icon: 'compass', label: '功能引导', desc: '重看新人引导轮播（核心功能动线）', action: 'onboarding' },
+    { icon: 'compass', label: '功能引导', desc: '重看陪玩式功能引导（带你逛核心动线）', action: 'onboarding' },
     { icon: 'translate', label: '语言', desc: '简体中文', action: 'coming' },
     { icon: 'palette', label: '主题', desc: '临床精准 / 浅色', action: 'coming' },
     { icon: 'information', label: '关于 MedAgent', desc: 'v' + APP_VERSION, action: 'about' },
@@ -51,7 +54,11 @@ export default function SettingsScreen() {
         navigation.navigate('NotificationSettings');
         break;
       case 'onboarding':
-        navigation.navigate('Onboarding');
+        // 陪玩式引导重看：清完成/进度标记 → 事件通知 GuideController 从第 1 步重演 → 回主界面
+        AsyncStorage.multiRemove([REP_GUIDE_DONE_KEY, REP_GUIDE_PROGRESS_KEY]).finally(() => {
+          restartGuide();
+          navigation.navigate('MainTabs');
+        });
         break;
       case 'about':
         Alert.alert('关于 MedAgent', `MedAgent 医药代表数字员工系统\n版本 v${APP_VERSION}`);

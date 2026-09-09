@@ -695,6 +695,15 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - 测试基线（2026-09-09 全量实测）：web vitest 19→**22**（+tourSteps 3）+ tsc 0 + build PASS；mobile jest 105→**108**（+slides 3）/tsc 0；mobile-doctor jest 36→**39**（+slides 3）/tsc 0。后端零改动
 - 实机走查全过：双端模拟器（首启弹轮播→翻页→开始使用回落主界面→冷启不重弹→重看入口生效→跳过路径）+ web Playwright 注入 admin token（AUTH_DEV_MODE send-code 回传 data.code 拿验证码登录）7 项断言全 PASS（Tour 自动弹/首步叙事/末步"?" /完成关闭/localStorage/刷新不重弹/FloatButton 重看）
 
+**三端引导 v2 升级批（2026-09-09 同日下午，陪玩式交互引导：用户要求带体验核心功能——点「去试试」自动导航到目标页/Tab，逛完点「我知道了」回来继续；v1 Tour/轮播全量下线，AppTour/OnboardingScreen/OnboardingGate/slides 已删）**：
+- **三端同构状态机 `phase: 'card' | 'trying'`**：card=讲解卡（Modal，closable/maskClosable 全关，跳过=完成）；trying=「去试试 →」navigate 收卡后目标页**完全可操作**，召回锚点常驻（web FloatButton 徽标「继续」/ RN 全局 GuideBar 蓝条）→ 召回卡（「在「X」逛得如何？」+tryHint）→ 我知道了，继续 / 先收起。进度断点续传，done key 全升 `*.v2`（v1 观众重看）
+- **web**：`onboarding/GuideTour.tsx` 挂 AdminLayout；tourSteps 步骤改 `{title,description,tryPath?,tryName?,tryHint?}`，四角色各 6 步（叙事→3 try 步→共享 CLOSING）。**progress 存 JSON `{c,t}`，t 字段是必须的**：App.tsx `<Suspense>` 包全部 Routes，lazy 首次导航整树 remount，重挂载要恢复 trying 态而非重弹卡
+- **RN 双端**：`screens/Onboarding/GuideController.tsx`（包 MainTabs）+ `components/GuideBar.tsx`（**挂 App 根、NavigationContainer 外**）+ `events/guideEvents.ts`（pub/sub：restartGuide/recallGuide/setGuideBar，onGuideBar 订阅即回当前值）；代表端 6 步（工作台/对话/医生/合规中心）医生端 6 步（认证/问答/分身/收件箱）；tryRoute 编译期锁 `keyof RootStackParamList | keyof MainTabParamList`；Settings/Profile 重看入口=multiRemove(done,progress)+restartGuide
+- **⚠ native-stack detach 两个坑（Stack push 目标页时 MainTabs 视图被 detach）**：① 屏内渲染的召回条会隐形 → 全局条+事件驱动；② 召回卡 Modal 也在 detach 屏内渲染不出 → onGuideRecall 先 `navigate('MainTabs')` 再 setCardVisible
+- 踩坑：antd Modal 关闭后隐藏 DOM 仍在（destroyOnClose=false 默认）→ 闭合断言用 `.ant-modal-wrap:visible`；vite dev 只监听 [::1]:3000（IPv6），bash /dev/tcp IPv4 探活假阴性
+- 测试基线（2026-09-09 全量实测）：web vitest 22（tourSteps 重写：tryPath ∈ menuConfig ∧ canAccess/首尾无 tryPath/每角色 ≥3 try 步）+ build PASS；mobile jest 108→**109**（guideSteps 4）/tsc 0；mobile-doctor jest 39→**40**（doctorGuideSteps 4）/tsc 0。后端零改动
+- 实机走查全过：web Playwright 23 断言（含 Suspense remount trying 恢复/断点 JSON/重放/跳过）；代表端模拟器 9 项（含 Stack 页全局条常驻+force-stop 断点续传）；医生端模拟器（首弹→去试试→三步召回全过，Inbox Stack 页验证回 MainTabs 再弹卡修复→完成→冷启不重弹）
+
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：

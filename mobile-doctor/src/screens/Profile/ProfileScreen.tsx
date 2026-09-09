@@ -12,10 +12,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon, { ActionIcons, FeatureIcons } from '../../components/Icon';
 import { useAuth } from '../../store/AuthContext';
+import { restartGuide } from '../../events/guideEvents';
+import { DOCTOR_GUIDE_DONE_KEY, DOCTOR_GUIDE_PROGRESS_KEY } from '../Onboarding/doctorGuideSteps';
 import { doctorAPI } from '../../api/doctor';
 import { inboxAPI } from '../../api/inbox';
 import type { RootStackParamList } from '../../navigation/types';
@@ -139,10 +142,15 @@ export default function ProfileScreen() {
           <Icon name="chevron-right" size={20} color={Colors.textHint} />
         </TouchableOpacity>
 
-        {/* 功能引导入口（重看新人引导轮播） */}
+        {/* 功能引导入口（陪玩式引导重看：清 key + 事件重启，回主界面开演） */}
         <TouchableOpacity
           style={[styles.card, Shadow.card, styles.entryRow]}
-          onPress={() => navigation.navigate('Onboarding')}
+          onPress={() => {
+            AsyncStorage.multiRemove([DOCTOR_GUIDE_DONE_KEY, DOCTOR_GUIDE_PROGRESS_KEY]).finally(() => {
+              restartGuide();
+              navigation.navigate('MainTabs');
+            });
+          }}
           activeOpacity={0.7}
         >
           <View style={styles.iconBox}>
@@ -150,7 +158,7 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.rowText}>
             <Text style={styles.label}>功能引导</Text>
-            <Text style={styles.desc}>重看新人引导（认证、问答、订阅与偏好）</Text>
+            <Text style={styles.desc}>重看功能引导（带你逛认证、问答、订阅与收件箱）</Text>
           </View>
           <Icon name="chevron-right" size={20} color={Colors.textHint} />
         </TouchableOpacity>

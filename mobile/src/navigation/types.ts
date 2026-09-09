@@ -42,7 +42,6 @@ export type RootStackParamList = {
   // 设置
   Settings: undefined;
   NotificationSettings: undefined;
-  Onboarding: undefined;
   HelpCenter: undefined;
   ComplianceCenter: undefined;
   // 分身分享 & 夜间简报

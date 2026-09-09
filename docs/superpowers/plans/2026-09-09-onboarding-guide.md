@@ -1,6 +1,6 @@
 # 三端新人引导（Onboarding Guide）计划书
 
-日期：2026-09-09　状态：**已实施完成**（当日交付，实施记录见文末）
+日期：2026-09-09　状态：**已实施完成**（当日交付 v1 + 同日 v2 交互式升级，实施记录见文末）
 
 ## 0. 背景与目标
 
@@ -121,3 +121,41 @@
 记坑：mobile-doctor types.ts 的 RootStack/MainTab 两个 ParamList 都有 Profile 键，新增路由要
 确认插对列表（本次插错一次 tsc 炸出）；uiautomator dump_ui.py 的 [click] 与真实点击有竞态，
 坐标要手动 input tap；RN 轮播自动化翻页用 swipe（连点按钮会被 onMomentumScrollEnd 吞）。
+
+## 9. v2 升级记录（2026-09-09 同日，陪玩式交互引导）
+
+用户反馈 v1「不够细致」：要求带用户逐个体验核心功能——点卡上「去试试」自动导航到目标页/目标
+Tab，逛完点「我知道了」回来继续下一步。v1（antd Tour / RN 轮播屏）当日下午全量下线，三端重写为
+同构状态机 `phase: 'card' | 'trying'`：
+
+- **card**：讲解卡（web antd Modal / RN Modal，closable/maskClosable 全关），「跳过引导」=完成；
+- **trying**：「去试试 →」navigate(tryPath/tryRoute) 收卡 → 目标页**完全可操作**自由体验 →
+  召回锚点常驻（web FloatButton 徽标「继续」；RN 全局 GuideBar 蓝条「🧭 引导进行中」）→
+  点开召回卡（「在「X」逛得如何？」+ tryHint）→「我知道了，继续」下一步 /「先收起，继续逛」；
+- **进度断点续传**：web `onboarding.web.<role>.progress` JSON `{c,t}`（t 为 phase）；RN
+  `onboarding.rep.progress` / `onboarding.doctor.progress` 纯数字。done key 全升 v2
+  （`onboarding.web.<role>.v2` / `onboarding.rep.v2` / `onboarding.doctor.v2`），v1 观众重看新引导。
+
+步骤形状（首尾纯叙事、中间 ≥3 个 try 步）：web 四角色各 6 步；代表端 6 步（工作台/对话/医生/
+合规中心）；医生端 6 步（医师认证/问答/分身/收件箱）。Settings/Profile「功能引导」重看入口改
+multiRemove(done,progress) + guideEvents.restartGuide() 事件重演（删了 v1 的 Onboarding 路由）。
+
+关键坑（全部当日实测炸出）：
+
+1. **web Suspense remount**：App.tsx `<Suspense>` 包住全部 Routes，lazy 页首次导航整树重挂载，
+   GuideTour remount 会重弹卡——progress 里的 t 字段就是为重挂载时恢复 trying 态（不弹卡只亮徽标）。
+2. **antd Modal 关闭后隐藏 DOM 仍在**（默认 destroyOnClose=false）——走查断言闭合一律用
+   `.ant-modal-wrap:visible`，不能数 `.ant-modal-content`。
+3. **RN native-stack detach ×2**：MainTabs 被 Stack push 后屏视图 detach——① 召回条渲染在
+   MainTabs 屏内会隐形 → GuideBar 挂 App 根（NavigationContainer 外）+ guideEvents 事件驱动
+   （onGuideBar 订阅即回当前值）；② 召回卡 Modal 同在 detach 屏内渲染不出 → onGuideRecall
+   先 `navigation.navigate('MainTabs')` 再 setCardVisible(true)。
+4. **防漂移**：web tryPath vitest 断言 ∈ menuConfig 路径 ∧ canAccess(role)；RN tryRoute 类型
+   锁 `keyof RootStackParamList | keyof MainTabParamList`，路由改名 tsc 编译期炸出。
+
+验收（2026-09-09 全量实测）：web vitest 22（tourSteps 重写 3 断言）+ tsc 0 + build PASS +
+Playwright 23 断言全过（含 Suspense remount trying 恢复、断点 JSON、FloatButton 重放）；mobile
+jest 109（+guideSteps 4）/ tsc 0 + 模拟器 9 项全过（含 Stack 页全局条常驻、force-stop 断点续传）；
+mobile-doctor jest 40（+doctorGuideSteps 4）/ tsc 0 + 模拟器全过（首弹→去试试→MedicalQA/
+MyTwins/Inbox 三步召回——Inbox 为 Stack push 页，验证回 MainTabs 再弹卡的修复→完成引导→
+冷启不重弹）。后端零改动。

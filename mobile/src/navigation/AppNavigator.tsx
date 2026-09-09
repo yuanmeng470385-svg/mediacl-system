@@ -33,8 +33,8 @@ import ExamScreen from '../screens/Compliance/ExamScreen';
 import CommitmentScreen from '../screens/Compliance/CommitmentScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
-import OnboardingScreen from '../screens/Onboarding/OnboardingScreen';
-import OnboardingGate from '../screens/Onboarding/OnboardingGate';
+import GuideController from '../screens/Onboarding/GuideController';
+import { REP_GUIDE_STEPS, REP_GUIDE_DONE_KEY, REP_GUIDE_PROGRESS_KEY } from '../screens/Onboarding/repGuideSteps';
 import VisitDetailScreen from '../screens/VisitDetail/VisitDetailScreen';
 import TaskListScreen from '../screens/TaskList/TaskListScreen';
 import FavoritesScreen from '../screens/Favorites/FavoritesScreen';
@@ -56,12 +56,16 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 /** 底部 4 Tab */
-// 新人引导闸门（模块级定义保引用稳定）：包住 MainTabs，首登自动进 Onboarding
+// 陪玩式新人引导（模块级定义保引用稳定）：GuideController 包住 MainTabs，首登自动开演
 function GatedMainTabs() {
   return (
-    <OnboardingGate>
+    <GuideController
+      steps={REP_GUIDE_STEPS}
+      doneKey={REP_GUIDE_DONE_KEY}
+      progressKey={REP_GUIDE_PROGRESS_KEY}
+    >
       <MainTabs />
-    </OnboardingGate>
+    </GuideController>
   );
 }
 
@@ -157,14 +161,8 @@ export default function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isLoggedIn ? (
           <>
-            {/* 主 Tab（新人引导闸门：首登自动进 Onboarding 轮播） */}
+            {/* 主 Tab（陪玩式新人引导：首登自动开演，重看走 设置→功能引导 事件） */}
             <Stack.Screen name="MainTabs" component={GatedMainTabs} />
-            {/* 新人引导（重看入口：设置 → 通用 → 功能引导） */}
-            <Stack.Screen
-              name="Onboarding"
-              component={OnboardingScreen}
-              options={{ gestureEnabled: false }}
-            />
             {/* 数字专员对话 */}
             <Stack.Screen
               name="Chat"
