@@ -708,6 +708,7 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - tourSteps.ts 改为**按角色自动派生**：menuConfig+canAccess 生成该角色可见菜单页的逐步序列（PAGE_GUIDES 26 页文案库 + TRY_PAGES 核心体验页 + OPENINGS 叙事），新增菜单页自动获得一步（文案缺省兜底）；admin 28 步（6 try）/manager 27/compliance 24/medical 15。done key 升 `onboarding.web.<role>.v3`
 - **覆盖防漂移断言**：中段步骤 page 序列=菜单叶序完全一致（缺页/多页/乱序/兜底文案全炸）；记坑：getStepsForRole 未知角色必须回落 admin（动态派生后 unknown-role 会生成 0 页空步骤）；vitest filter 不收窄类型要显式谓词
 - GuideTour/状态机/断点续传零改动。验收：vitest 23 + tsc 0 + build PASS + Playwright 26 断言（28 步全链含 6 try 导航、标题序=菜单叶序、断点 card/trying 恢复）
+- **v2.1 增量（同日）**：三端「继续」拆「上一个/下一个」（讲解卡+召回卡均可回退重看，首步禁用，进度落盘；RN btnGroup/btnDisabled 样式）；**顺手修 web 真实缺陷**——高频刷新后 `/auth/me` 撞网关 60/min 用户级限流 429 → user null 被 RequireAuth 踢 /login（08-24「429 不清 token」意图被路由层打败）：AuthContext /me 退避重试 3 次（1.5/3/4.5s + StrictMode 双跑守卫）仍败置 bootFailed，RequireAuth 出重试 Result 页（重试/重新登录）。验收 vitest 23/三端 tsc/build + web Playwright 30 断言两遍 + 双端模拟器各 7 项（上一个回退/召回卡三按钮）
 
 ## Backup & Restore（2026-08-12 新增）
 

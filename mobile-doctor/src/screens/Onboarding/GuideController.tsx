@@ -1,7 +1,7 @@
 /**
  * 陪玩式新人引导控制器（2026-09-09 v2，替代 v1 OnboardingGate+轮播屏，自 mobile 移植）：
  * card（讲解卡 Modal）→「去试试」navigate(tryRoute) 收卡、目标页完全可操作 →
- * 顶部蓝色引导条常驻召回 → 点开「我知道了，继续」→ 下一步。
+ * 顶部蓝色引导条常驻召回 → 点开召回卡 →「下一个」前进 /「上一个」回退重看（首步禁用）。
  * 进度 AsyncStorage 断点续传；跳过=完成；Profile「功能引导」清 key 后经
  * guideEvents.restartGuide() 事件重演。
  * 深链优先（F2 语义）：mount 时 pendingToken 存在（激活链接待消费）则本次不弹，
@@ -87,7 +87,7 @@ export default function GuideController({
     setCardVisible(false);
   }, [doneKey, progressKey]);
 
-  /** 「我知道了」→ 下一步；末步收尾 */
+  /** 「下一个」→ 前进；末步收尾 */
   const advance = useCallback(() => {
     const next = current + 1;
     if (next >= steps.length) {
@@ -99,6 +99,16 @@ export default function GuideController({
     setPhase('card');
     setCardVisible(true);
   }, [current, steps.length, finish, progressKey]);
+
+  /** 「上一个」→ 回退重看（首步禁用；召回卡里点也回上一步的讲解卡） */
+  const back = useCallback(() => {
+    if (current === 0) return;
+    const prev = current - 1;
+    AsyncStorage.setItem(progressKey, String(prev)).catch(() => {});
+    setCurrent(prev);
+    setPhase('card');
+    setCardVisible(true);
+  }, [current, progressKey]);
 
   /** 「去试试」→ 导航到目标页，收卡进体验态 */
   const goTry = useCallback(() => {
@@ -131,12 +141,21 @@ export default function GuideController({
                 <Text style={styles.title}>在「{step?.tryName ?? '目标页'}」逛得如何？</Text>
                 <Text style={styles.hint}>{step?.tryHint}</Text>
                 <View style={styles.btnRow}>
-                  <TouchableOpacity style={styles.btnGhost} onPress={() => setCardVisible(false)}>
-                    <Text style={styles.btnGhostText}>先收起，继续逛</Text>
+                  <TouchableOpacity
+                    style={[styles.btnGhost, current === 0 && styles.btnDisabled]}
+                    disabled={current === 0}
+                    onPress={back}
+                  >
+                    <Text style={styles.btnGhostText}>上一个</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.btnPrimary} onPress={advance}>
-                    <Text style={styles.btnPrimaryText}>我知道了，继续</Text>
-                  </TouchableOpacity>
+                  <View style={styles.btnGroup}>
+                    <TouchableOpacity style={styles.btnGhost} onPress={() => setCardVisible(false)}>
+                      <Text style={styles.btnGhostText}>先收起，继续逛</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.btnPrimary} onPress={advance}>
+                      <Text style={styles.btnPrimaryText}>下一个</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </>
             ) : (
@@ -160,17 +179,26 @@ export default function GuideController({
                   <TouchableOpacity hitSlop={{ top: 8, bottom: 8 }} onPress={finish}>
                     <Text style={styles.skip}>跳过引导</Text>
                   </TouchableOpacity>
-                  {step?.tryRoute ? (
-                    <TouchableOpacity style={styles.btnPrimary} onPress={goTry}>
-                      <Text style={styles.btnPrimaryText}>去试试 →</Text>
+                  <View style={styles.btnGroup}>
+                    <TouchableOpacity
+                      style={[styles.btnGhost, current === 0 && styles.btnDisabled]}
+                      disabled={current === 0}
+                      onPress={back}
+                    >
+                      <Text style={styles.btnGhostText}>上一个</Text>
                     </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity style={styles.btnPrimary} onPress={advance}>
-                      <Text style={styles.btnPrimaryText}>
-                        {isLast ? '完成引导' : current === 0 ? '开始逛逛' : '我知道了'}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
+                    {step?.tryRoute ? (
+                      <TouchableOpacity style={styles.btnPrimary} onPress={goTry}>
+                        <Text style={styles.btnPrimaryText}>去试试 →</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity style={styles.btnPrimary} onPress={advance}>
+                        <Text style={styles.btnPrimaryText}>
+                          {isLast ? '完成引导' : current === 0 ? '开始逛逛' : '下一个'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
               </>
             )}
@@ -202,6 +230,8 @@ const styles = StyleSheet.create({
   pageDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D1D5DB' },
   pageDotActive: { width: 20, backgroundColor: Colors.primary },
   btnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  btnGroup: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  btnDisabled: { opacity: 0.4 },
   skip: { fontSize: FontSize.md, color: Colors.textHint },
   btnPrimary: {
     backgroundColor: Colors.primary, borderRadius: BorderRadius.lg,

@@ -33,7 +33,7 @@ function writeProgress(key: string, c: number, t: Phase) {
 /**
  * 陪玩式新人引导（2026-09-09 v2，替代 v1 antd Tour——Tour 气泡无法跨页导航/收卡召回）。
  * 状态机：card（讲解卡）→「去试试」→ navigate(tryPath) 收卡、目标页自由体验 →
- * 点悬浮球「继续」→ 召回卡 →「我知道了」→ 下一步。
+ * 点悬浮球「继续」→ 召回卡 →「下一个」→ 下一步；「上一个」可回退重看（首步禁用）。
  * 进度写 localStorage 断点续传；跳过=完成不再骚扰；"?"悬浮球平时=重看入口。
  * 必须挂在 AdminLayout 内（Modal 跨路由存活）。
  */
@@ -72,7 +72,7 @@ export default function GuideTour({ role }: { role?: string }) {
     setOpen(false);
   }, [doneKey, progressKey]);
 
-  /** 「我知道了」→ 下一步；末步收尾（进度持久化） */
+  /** 「下一个」→ 前进；末步收尾（进度持久化） */
   const advance = useCallback(() => {
     const next = current + 1;
     if (next >= steps.length) {
@@ -84,6 +84,16 @@ export default function GuideTour({ role }: { role?: string }) {
     setPhase('card');
     setOpen(true);
   }, [current, steps.length, finish, progressKey]);
+
+  /** 「上一个」→ 回退重看（首步禁用；体验态召回卡里点也回上一步的讲解卡） */
+  const back = useCallback(() => {
+    if (current === 0) return;
+    const prev = current - 1;
+    writeProgress(progressKey, prev, 'card');
+    setCurrent(prev);
+    setPhase('card');
+    setOpen(true);
+  }, [current, progressKey]);
 
   /** 「去试试」→ 导航到目标页，收卡进体验态 */
   const goTry = useCallback(() => {
@@ -140,11 +150,14 @@ export default function GuideTour({ role }: { role?: string }) {
             <>
               {stepLabel}
               <div>
+                <Button style={{ marginRight: 8 }} disabled={current === 0} onClick={back}>
+                  上一个
+                </Button>
                 <Button style={{ marginRight: 8 }} onClick={() => setOpen(false)}>
                   先收起，继续逛
                 </Button>
                 <Button type="primary" onClick={advance}>
-                  我知道了，继续
+                  下一个
                 </Button>
               </div>
             </>
@@ -155,13 +168,16 @@ export default function GuideTour({ role }: { role?: string }) {
                 <Button type="text" onClick={finish}>
                   跳过引导
                 </Button>
+                <Button style={{ marginRight: 8 }} disabled={current === 0} onClick={back}>
+                  上一个
+                </Button>
                 {step?.tryPath ? (
                   <Button type="primary" icon={<ArrowRightOutlined />} onClick={goTry}>
                     去试试
                   </Button>
                 ) : (
                   <Button type="primary" onClick={advance}>
-                    {isLast ? '完成引导' : current === 0 ? '开始逛逛' : '我知道了'}
+                    {isLast ? '完成引导' : current === 0 ? '开始逛逛' : '下一个'}
                   </Button>
                 )}
               </div>

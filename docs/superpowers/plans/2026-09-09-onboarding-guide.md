@@ -177,3 +177,20 @@ MyTwins/Inbox 三步召回——Inbox 为 Stack push 页，验证回 MainTabs �
   `(s): s is GuideStep & { tryPath: string }`。
 - 验收：vitest 23（+覆盖断言）+ tsc 0 + build PASS + Playwright 26 断言全过（28 步全链快进、
   6 个 try 步真实导航+召回、标题序=菜单叶序、card/trying 断点恢复、重放/跳过）。
+
+## 11. v2.1 增量（2026-09-09 同日晚：「继续」拆「上一个/下一个」）
+
+用户要求把继续按钮拆为下一个+上一个——引导可回退重看。三端同步：讲解卡与召回卡均加
+「上一个」（ghost/次按钮，首步禁用），主按钮「我知道了(，继续)」统一改「下一个」
+（开始逛逛/去试试/完成引导情境文案保留）；「上一个」= 回到 current-1 的讲解卡（召回卡里点
+同样回上一步），进度同步落盘。RN 按钮组 btnGroup（gap）+ btnDisabled（opacity 0.4）。
+
+**顺手修真实缺陷（走查炸出）**：web 高频操作后整页刷新 → `/auth/me` 撞网关 60/min 用户级
+限流 429 → AuthContext catch 保留 token 但 user 恒 null → RequireAuth 照样踢 /login——
+2026-08-24「429 不清 token」的意图被路由层打败。修复：AuthContext /me 退避重试 3 次
+（1.5/3/4.5s，StrictMode 双跑有模块级守卫），仍败置 bootFailed；RequireAuth bootFailed 出
+Result 重试页（重试/重新登录）不再误踢。walk 侧同步拦掉非 /me API 消除自身限流压力。
+
+验收：vitest 23 + 三端 tsc + build；web Playwright 30 断言两遍稳定全过（+首步上一个禁用、
+步 2 回步 1、召回卡上一个回上一步讲解卡）；双端模拟器各 7 项（重看入口→上一个回退→召回卡
+三按钮→跳过收净）。
