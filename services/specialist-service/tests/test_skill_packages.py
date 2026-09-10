@@ -1,6 +1,7 @@
 """Skill 模版测试（Task 2）：创建/审核/广场浏览/隐私边界"""
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -24,6 +25,7 @@ from shared.models.base import Base
 from shared.models.practice import PracticeSession
 from shared.models.skill import SkillAudit, SkillPackage, SkillOffShelf
 from shared.models.user import User
+from shared.models.visit import VisitRecord
 
 import app.api.skill_packages as sp_api
 from app.main import app
@@ -62,7 +64,7 @@ def _token(user_id: int, role: str) -> dict:
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
     tables = [User.__table__, SkillPackage.__table__, SkillAudit.__table__, SkillOffShelf.__table__,
-              PracticeSession.__table__]
+              PracticeSession.__table__, VisitRecord.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -93,6 +95,19 @@ def _add_skill(**kw):
     db.commit()
     db.close()
     return defaults["id"]
+
+
+def _add_visit(vid: int, rep_lines: int, owner: int = 1, status: str = "in_progress"):
+    """建一条拜访记录（2026-09-10 溯源扩拜访）：[代表]/[医生] 行交错写入转写。"""
+    lines = []
+    for i in range(1, rep_lines + 1):
+        lines.append(f"[代表] 拜访中代表第{i}条发言")
+        lines.append(f"[医生] 医生第{i}条回应")
+    db = TestSession()
+    db.add(VisitRecord(id=vid, user_id=owner, visit_time=datetime(2026, 9, 5, 10),
+                       status=status, conversation_transcript="\n".join(lines) + "\n"))
+    db.commit()
+    db.close()
 
 
 def test_create_skill_requires_medical():
@@ -491,6 +506,60 @@ def test_release_rejects_unfinished_session(fresh_state):
         "source_session_ids": [7],
     }, headers=_token(1, "rep"))
     assert resp.status_code == 400
+
+
+# ==================== 溯源扩拜访（2026-09-10） ====================
+
+def test_release_stores_source_visit_ids(fresh_state):
+    """溯源扩拜访：release 携带 source_visit_ids 校验（本人+非取消+>=3 行）后去重落库并进审计。"""
+    _add_visit(3, rep_lines=4)
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+        "source_visit_ids": [3, 3],
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    db = TestSession()
+    sk = db.query(SkillPackage).filter(SkillPackage.creator_id == 1).first()
+    db.close()
+    assert sk.source_visit_ids == [3]  # 去重落库
+    _, kwargs = fresh_state.call_args
+    assert kwargs["after_value"]["source_visit_ids"] == [3]
+    # detail 受控查看同吐 source_visit_ids（与 source_session_ids 同口径）
+    resp = client.get("/api/v1/skill-packages/%d/detail" % sk.id, headers=_token(2, "admin"))
+    assert resp.json()["data"]["source_visit_ids"] == [3]
+
+
+def test_release_rejects_cancelled_visit(fresh_state):
+    _add_visit(3, rep_lines=4, status="cancelled")
+    resp = client.post("/api/v1/skill-packages/release", json={
+        "name": "亲和力型", "description": "心内科", "content": "话术素材",
+        "skill_weights": {"formal_level": "标准学术"},
+        "source_visit_ids": [3],
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 400
+
+
+def test_review_source_visit_admin_only(fresh_state):
+    """拜访溯源受控查看：SKILL_ADMIN_ROLES 可看原文（含医生行上下文，前缀已剥离），
+    rep 403，访问记审计 visit_source_view；不存在 → 4000。"""
+    _add_visit(3, rep_lines=4)
+    resp = client.get("/api/v1/skill-packages/source-visits/3", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    resp = client.get("/api/v1/skill-packages/source-visits/3", headers=_token(5, "compliance"))
+    body = resp.json()
+    assert body["code"] == 0
+    d = body["data"]
+    assert d["rep_name"] == "张代表"
+    assert d["rep_lines"] == 4
+    assert [l["speaker"] for l in d["lines"]] == ["rep", "doctor"] * 4
+    assert all(not l["content"].startswith("[") for l in d["lines"])
+    _, kwargs = fresh_state.call_args
+    assert kwargs["action"] == "visit_source_view"
+    assert kwargs["resource_type"] == "visit_record"
+    resp = client.get("/api/v1/skill-packages/source-visits/999", headers=_token(2, "admin"))
+    assert resp.json()["code"] == 4000
 
 
 def test_create_rejects_invalid_weight_enum():

@@ -5,7 +5,7 @@ import { App, Button, Descriptions, Drawer, Input, Radio, Space, Spin, Tag, Tool
 import { skillAPI } from '../../services/skill';
 import { practiceAPI } from '../../services/practice';
 import { useAuth } from '../../context/AuthContext';
-import type { PracticeTranscript, SkillAuditRecord, SkillPackage } from '../../types';
+import type { PracticeTranscript, SkillAuditRecord, SkillPackage, VisitSourceTranscript } from '../../types';
 
 const { Text } = Typography;
 const AUDIT_MAP: Record<string, { color: string; text: string }> = {
@@ -46,6 +46,8 @@ export default function SkillList() {
   const [offSubmitting, setOffSubmitting] = useState(false);
   const [transcript, setTranscript] = useState<PracticeTranscript | null>(null);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [visitSource, setVisitSource] = useState<VisitSourceTranscript | null>(null);
+  const [visitSourceLoading, setVisitSourceLoading] = useState(false);
 
   // 受控查看：列表接口不返回 content/skill_weights/source_session_ids（隐私边界附录B-1），
   // 审核/查看前走 detail 拿受控字段 + audits 拿审核留痕（2026-09-01 审核盲审修复）
@@ -128,6 +130,19 @@ export default function SkillList() {
       /* client.ts 拦截器已弹错误 */
     } finally {
       setTranscriptLoading(false);
+    }
+  };
+
+  // 审核溯源：受控查看提取来源拜访的转写原文（后端记 visit_source_view 审计，2026-09-10 扩拜访）
+  const openVisitSource = async (visitId: number) => {
+    setVisitSourceLoading(true);
+    try {
+      const res = await practiceAPI.visitTranscript(visitId);
+      setVisitSource(res.data.data);
+    } catch {
+      /* client.ts 拦截器已弹错误 */
+    } finally {
+      setVisitSourceLoading(false);
     }
   };
 
@@ -266,6 +281,17 @@ export default function SkillList() {
                       ))}
                     </Space>
                   )
+                  : '（未携带）'}
+              </Descriptions.Item>
+              <Descriptions.Item label="提取来源拜访">
+                {(current.source_visit_ids || []).length
+                  ? (
+                    <Space wrap>
+                      {(current.source_visit_ids || []).map((vid) => (
+                        <Button key={vid} size="small" onClick={() => openVisitSource(vid)}>拜访 #{vid}</Button>
+                      ))}
+                    </Space>
+                  )
                   : '（未携带/官方模版）'}
               </Descriptions.Item>
             </Descriptions>
@@ -353,6 +379,37 @@ export default function SkillList() {
             >
               确认下架
             </Button>
+          </Space>
+        )}
+      </Drawer>
+      <Drawer
+        title={visitSource ? '来源拜访 #' + visitSource.id : '来源拜访'}
+        width={520}
+        open={visitSourceLoading || !!visitSource}
+        onClose={() => setVisitSource(null)}
+        destroyOnHidden
+      >
+        {visitSourceLoading && !visitSource ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : visitSource && (
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Descriptions column={1} size="small" bordered>
+              <Descriptions.Item label="代表">{visitSource.rep_name || '#' + visitSource.representative_id}</Descriptions.Item>
+              <Descriptions.Item label="拜访医生">{visitSource.hcp_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="代表发言">{visitSource.rep_lines} 条</Descriptions.Item>
+              <Descriptions.Item label="拜访时间">{visitSource.visit_time || visitSource.created_at || '-'}</Descriptions.Item>
+            </Descriptions>
+            <div>
+              <Text type="secondary">拜访转写原文（核对提取摘录是否忠于本人原文，含医生发言上下文）</Text>
+              <div style={{ marginTop: 8 }}>
+                {(visitSource.lines || []).map((l, i) => (
+                  <div key={i} style={{ marginBottom: 8 }}>
+                    <Tag color={l.speaker === 'rep' ? 'blue' : 'green'}>{l.speaker === 'rep' ? '代表' : '医生'}</Tag>
+                    <span style={{ whiteSpace: 'pre-wrap' }}>{l.content}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </Space>
         )}
       </Drawer>

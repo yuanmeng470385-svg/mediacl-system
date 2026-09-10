@@ -1,8 +1,8 @@
 /**
- * 从陪练对话提取风格 Skill 草稿（三期 P 第三环）：
- * 多选本人已完成会话（completed + turn_count≥3）→ extract-draft 同步 LLM 提取 →
- * 草稿确认卡（name/description/标签/三维度/话术摘录）→ replace 到 SkillRelease 预填发布。
- * 门槛与后端对齐：代表发言合计 ≥10 条才能生成、会话最多选 10 个。
+ * 从本人对话记录提取风格 Skill 草稿（三期 P 第三环；2026-09-10 扩拜访）：
+ * 多选陪练会话（completed + turn_count≥3）与拜访记录（非取消 + ≥3 条代表发言）→
+ * extract-draft 同步 LLM 提取 → 草稿确认卡 → replace 到 SkillRelease 预填发布。
+ * 门槛与后端对齐：两类素材合计 1~10 条、代表发言合计 ≥10 条才能生成。
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -11,7 +11,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
-import { plazaAPI, practiceAPI } from '../../api/practice';
+import { plazaAPI, practiceAPI, twinAPI } from '../../api/practice';
 import type { RootStackParamList, SkillDraft } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
@@ -19,7 +19,7 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 // 后端 extract_draft 门槛（specialist-service skill_packages.py）的前端镜像
 const MIN_REP_TURNS = 10;
-const MAX_SESSIONS = 10;
+const MAX_SOURCES = 10;
 
 /** 会话列表项（GET /api/v1/practices 的 item 子集；transcript 不在前端展示） */
 interface SessionItem {
@@ -28,6 +28,14 @@ interface SessionItem {
   turn_count?: number;
   status?: string;
   created_at?: string;
+}
+
+/** 拜访列表项（GET /api/v1/specialists/style-sources 的 visits 项子集） */
+interface VisitItem {
+  visit_id: number;
+  rep_lines: number;
+  transcript_preview?: string;
+  visit_time?: string;
 }
 
 /** 提取草稿：正式类型 SkillDraft 已在 navigation/types.ts 导出（与后端 extract-draft 返回同构） */
@@ -45,9 +53,11 @@ function formatTime(iso?: string): string {
 export default function SkillExtractScreen() {
   const navigation = useNavigation<Nav>();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [visits, setVisits] = useState<VisitItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
+  const [selectedVisits, setSelectedVisits] = useState<number[]>([]);
   const [extracting, setExtracting] = useState(false);
   const [draft, setDraft] = useState<ExtractDraft | null>(null);
 
@@ -64,39 +74,67 @@ export default function SkillExtractScreen() {
     } finally {
       setLoaded(true);
     }
+    // 拜访素材复用「分身生成」的素材列表端点（本人拜访，含代表发言行数）；
+    // 该调用失败不阻塞陪练选材——拜访分组空展示即可
+    try {
+      const res = await twinAPI.styleSources();
+      const items: VisitItem[] = Array.isArray(res?.visits) ? res.visits : [];
+      // 后端门槛同款：单条拜访 ≥3 条代表发言才可作素材
+      setVisits(items.filter((v) => (v.rep_lines ?? 0) >= 3));
+    } catch {
+      setVisits([]);
+    }
   }, []);
 
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
 
+  const totalSelected = selected.length + selectedVisits.length;
+
   const toggle = (id: number) => {
     if (selected.includes(id)) {
       setSelected(selected.filter((x) => x !== id));
       return;
     }
-    if (selected.length >= MAX_SESSIONS) {
-      Alert.alert('最多选择 10 个会话', '素材足够即可，再多不会提升提取质量');
+    if (totalSelected >= MAX_SOURCES) {
+      Alert.alert('最多选择 10 条记录', '素材足够即可，再多不会提升提取质量');
       return;
     }
     setSelected([...selected, id]);
   };
 
-  // turn_count 即代表发言数（后端每轮 = 代表 1 条 + AI 回复 1 条，turn_count 只累计代表轮次）
-  const repTurns = sessions
-    .filter((s) => selected.includes(s.id))
-    .reduce((sum, s) => sum + (s.turn_count ?? 0), 0);
-  const canGenerate = selected.length > 0 && repTurns >= MIN_REP_TURNS && !extracting;
+  const toggleVisit = (id: number) => {
+    if (selectedVisits.includes(id)) {
+      setSelectedVisits(selectedVisits.filter((x) => x !== id));
+      return;
+    }
+    if (totalSelected >= MAX_SOURCES) {
+      Alert.alert('最多选择 10 条记录', '素材足够即可，再多不会提升提取质量');
+      return;
+    }
+    setSelectedVisits([...selectedVisits, id]);
+  };
 
-  const runExtract = async (ids: number[]) => {
+  // 代表发言合计：陪练 turn_count 只累计代表轮次；拜访 rep_lines 即 [代表] 行数
+  const repTurns =
+    sessions
+      .filter((s) => selected.includes(s.id))
+      .reduce((sum, s) => sum + (s.turn_count ?? 0), 0) +
+    visits
+      .filter((v) => selectedVisits.includes(v.visit_id))
+      .reduce((sum, v) => sum + (v.rep_lines ?? 0), 0);
+  const canGenerate = totalSelected > 0 && repTurns >= MIN_REP_TURNS && !extracting;
+
+  const runExtract = async (ids: number[], visitIds: number[]) => {
     setExtracting(true);
     try {
-      const res = await plazaAPI.extractDraft(ids);
+      const res = await plazaAPI.extractDraft(ids, visitIds);
       setDraft(res ?? null);
     } catch (err: any) {
       // 4002 限额 / 4003 LLM 失败 / 4xx 会话不合格——后端 message 已是中文，直接展示
       Alert.alert('生成失败', err?.message || '风格提取失败，请稍后重试', [
-        { text: '重试', onPress: () => runExtract(ids) },
+        { text: '重试', onPress: () => runExtract(ids, visitIds) },
         { text: '取消', style: 'cancel' },
       ]);
     } finally {
@@ -108,10 +146,14 @@ export default function SkillExtractScreen() {
   const goPublish = () => {
     if (!draft) return;
     // SkillRelease 读 route.params.draft 预填各字段（replace 避免返回时回到本屏）。
-    // 来源会话 ID 由本地补齐（后端 extract 不回传自己已校验过的 session_ids），
-    // release 提交时原样回传做审核溯源留档（2026-09-01）
+    // 来源会话/拜访 ID 由本地补齐（后端 extract 不回传自己已校验过的 ID 列表），
+    // release 提交时原样回传做审核溯源留档（2026-09-01；2026-09-10 扩拜访）
     navigation.replace('SkillRelease', {
-      draft: { ...draft, source_session_ids: selected },
+      draft: {
+        ...draft,
+        source_session_ids: selected,
+        source_visit_ids: selectedVisits,
+      },
     });
   };
 
@@ -121,7 +163,7 @@ export default function SkillExtractScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Icon name="chevron-left" size={22} color={Colors.textWhite} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>从陪练提取风格</Text>
+        <Text style={styles.headerTitle}>从对话提取风格</Text>
         <View style={{ width: 24 }} />
       </View>
 
@@ -135,13 +177,13 @@ export default function SkillExtractScreen() {
           <DraftCard
             draft={draft}
             regenerating={extracting}
-            onRegenerate={() => runExtract(selected)}
+            onRegenerate={() => runExtract(selected, selectedVisits)}
             onPublish={goPublish}
           />
         ) : loadFailed ? (
           <View style={styles.centerWrap}>
             <View style={[styles.card, Shadow.card]}>
-              <Text style={styles.cardTitle}>会话列表加载失败</Text>
+              <Text style={styles.cardTitle}>记录列表加载失败</Text>
               <Text style={styles.emptyText}>网络异常，请重试</Text>
               <TouchableOpacity style={styles.fullBtn} onPress={loadSessions} activeOpacity={0.7}>
                 <Icon name="refresh" size={18} color={Colors.textWhite} />
@@ -149,16 +191,16 @@ export default function SkillExtractScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        ) : sessions.length === 0 ? (
+        ) : sessions.length === 0 && visits.length === 0 ? (
           <View style={styles.centerWrap}>
             <View style={[styles.card, Shadow.card, styles.emptyCard]}>
               <View style={styles.emptyIconBox}>
                 <Icon name="robot-outline" size={30} color={Colors.primary} />
               </View>
-              <Text style={styles.emptyTitle}>先去陪练几轮再来</Text>
+              <Text style={styles.emptyTitle}>先去陪练或拜访几轮再来</Text>
               <Text style={styles.emptyHint}>
-                完成至少一场陪练（每场 ≥3 轮、各场代表发言合计 ≥10 条）后，
-                即可从你的真实发言中提取说话风格
+                完成至少一场陪练（≥3 轮）或一次有转写的拜访（≥3 条代表发言），
+                各素材代表发言合计 ≥10 条后，即可从你的真实发言中提取说话风格
               </Text>
               <TouchableOpacity style={styles.fullBtn} onPress={goPractice} activeOpacity={0.7}>
                 <Icon name="play" size={18} color={Colors.textWhite} />
@@ -169,50 +211,87 @@ export default function SkillExtractScreen() {
         ) : (
           <>
             <ScrollView contentContainerStyle={styles.content}>
-              <View style={[styles.card, Shadow.card]}>
-                <Text style={styles.cardTitle}>选择陪练会话（1~{MAX_SESSIONS} 个）</Text>
-                <Text style={styles.hint}>
-                  仅显示已结束且 ≥3 轮的会话；代表发言合计 ≥{MIN_REP_TURNS} 条才能生成
-                </Text>
-                {sessions.map((item) => {
-                  const active = selected.includes(item.id);
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[styles.sessionRow, active && styles.sessionRowActive]}
-                      onPress={() => toggle(item.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.sessionScenario} numberOfLines={1}>
-                          {item.scenario || `陪练 #${item.id}`}
-                        </Text>
-                        <Text style={styles.sessionMeta}>
-                          轮数 {item.turn_count ?? 0}
-                          {formatTime(item.created_at) ? ` · ${formatTime(item.created_at)}` : ''}
-                        </Text>
-                      </View>
-                      <Icon
-                        name={active ? 'check-circle' : 'circle-outline'}
-                        size={22}
-                        color={active ? Colors.primary : Colors.border}
-                      />
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              {sessions.length > 0 && (
+                <View style={[styles.card, Shadow.card]}>
+                  <Text style={styles.cardTitle}>陪练会话</Text>
+                  <Text style={styles.hint}>
+                    仅显示已结束且 ≥3 轮的会话，可与拜访记录混合选择（合计 ≤{MAX_SOURCES} 条）
+                  </Text>
+                  {sessions.map((item) => {
+                    const active = selected.includes(item.id);
+                    return (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={[styles.sessionRow, active && styles.sessionRowActive]}
+                        onPress={() => toggle(item.id)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.sessionScenario} numberOfLines={1}>
+                            {item.scenario || `陪练 #${item.id}`}
+                          </Text>
+                          <Text style={styles.sessionMeta}>
+                            轮数 {item.turn_count ?? 0}
+                            {formatTime(item.created_at) ? ` · ${formatTime(item.created_at)}` : ''}
+                          </Text>
+                        </View>
+                        <Icon
+                          name={active ? 'check-circle' : 'circle-outline'}
+                          size={22}
+                          color={active ? Colors.primary : Colors.border}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {visits.length > 0 && (
+                <View style={[styles.card, Shadow.card]}>
+                  <Text style={styles.cardTitle}>拜访记录</Text>
+                  <Text style={styles.hint}>
+                    拜访中你的真实发言（≥3 条代表发言的拜访），可与陪练会话混合选择
+                  </Text>
+                  {visits.map((item) => {
+                    const active = selectedVisits.includes(item.visit_id);
+                    return (
+                      <TouchableOpacity
+                        key={item.visit_id}
+                        style={[styles.sessionRow, active && styles.sessionRowActive]}
+                        onPress={() => toggleVisit(item.visit_id)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.sessionScenario} numberOfLines={1}>
+                            {item.transcript_preview || `拜访 #${item.visit_id}`}
+                          </Text>
+                          <Text style={styles.sessionMeta}>
+                            代表发言 {item.rep_lines} 条
+                            {formatTime(item.visit_time) ? ` · ${formatTime(item.visit_time)}` : ''}
+                          </Text>
+                        </View>
+                        <Icon
+                          name={active ? 'check-circle' : 'circle-outline'}
+                          size={22}
+                          color={active ? Colors.primary : Colors.border}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
             </ScrollView>
 
             {/* 底部：已选统计 + 生成入口（<10 条代表发言禁用） */}
             <View style={styles.footer}>
               <Text style={styles.footerCount}>
-                已选 {selected.length} 个 · 代表发言 {repTurns} 条
+                已选 {totalSelected} 条 · 代表发言 {repTurns} 条
                 {repTurns < MIN_REP_TURNS ? `（需 ≥${MIN_REP_TURNS} 条）` : ''}
               </Text>
               <TouchableOpacity
                 style={[styles.generateBtn, !canGenerate && { opacity: 0.5 }]}
                 disabled={!canGenerate}
-                onPress={() => runExtract(selected)}
+                onPress={() => runExtract(selected, selectedVisits)}
                 activeOpacity={0.7}
               >
                 <Icon name="creation" size={18} color={Colors.textWhite} />
@@ -228,7 +307,7 @@ export default function SkillExtractScreen() {
         <View style={styles.mask}>
           <View style={[styles.maskCard, Shadow.card]}>
             <ActivityIndicator size="large" color={Colors.primary} />
-            <Text style={styles.maskTitle}>正在分析你的陪练对话…</Text>
+            <Text style={styles.maskTitle}>正在分析你的对话…</Text>
             <Text style={styles.maskHint}>由 AI 提取说话风格，可能耗时约 1 分钟，请勿退出</Text>
           </View>
         </View>
@@ -263,7 +342,7 @@ function DraftCard({ draft, regenerating, onRegenerate, onPublish }: {
         <WeightRow label="正式程度" value={weights.formal_level} />
         <WeightRow label="回复长度" value={weights.reply_length} />
         <WeightRow label="开场方式" value={weights.opening_mode} />
-        <Text style={styles.label}>话术摘录（摘自本人陪练对话）</Text>
+        <Text style={styles.label}>话术摘录（摘自本人对话原文）</Text>
         <Text style={styles.contentBox}>{draft.content}</Text>
         <View style={styles.btnRow}>
           <TouchableOpacity

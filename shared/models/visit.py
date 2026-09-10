@@ -28,6 +28,7 @@ VISIT_STATUS_CANCELLED = "cancelled"
 # 拜访转写行首说话人前缀（visit_manager 追加转写时落库，2026-08-27 双方分离）：
 # 代表本人的发言行以 "[代表] " 开头，跨服务读取素材按此前缀过滤
 VISIT_TRANSCRIPT_REP_PREFIX = "[代表] "
+VISIT_TRANSCRIPT_DOCTOR_PREFIX = "[医生] "
 
 # 注册外键引用表的元数据（否则 SQLAlchemy 报 NoReferencedTableError）：
 # visit_records.hcp_id → hcps、product_id → products、specialist_id → digital_specialists

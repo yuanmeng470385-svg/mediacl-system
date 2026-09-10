@@ -34,21 +34,26 @@ export const plazaAPI = {
     style_tags?: string[]; skill_weights: Record<string, string>; is_anonymous?: boolean;
     /** 提取来源陪练会话 ID（2026-09-01 审核溯源）：extract 链路带入，后端校验归属并留档 */
     source_session_ids?: number[];
+    /** 提取来源拜访 ID（2026-09-10 溯源扩拜访）：extract 链路带入，后端校验归属并留档 */
+    source_visit_ids?: number[];
   }) => apiClient.request<any>('POST', '/api/v1/skill-packages/release', payload),
   mySkills: (params?: { page?: number; page_size?: number }) =>
     apiClient.request<any>('GET', '/api/v1/skill-packages/mine', params),
   /**
-   * 三期 P：从本人陪练会话提取风格 Skill 草稿（同步 LLM，120s 超时）。
-   * 入参 session_ids 1~10 个（本人 + completed + 单会话 ≥3 轮，门槛在后端校验）；
-   * 返回草稿 {name, description, content, style_tags, skill_weights, is_anonymous}，
-   * 与 releaseSkill payload 同构（直接预填发布表单）。
+   * 三期 P：从本人对话记录提取风格 Skill 草稿（同步 LLM，120s 超时）。
+   * sessionIds（陪练会话：本人 + completed + 单会话 ≥3 轮）与 visitIds（拜访记录：
+   * 本人 + 非取消 + 单条 ≥3 条代表发言）两类可选、合计 1~10 条（2026-09-10 扩拜访，
+   * 门槛在后端校验）；返回草稿 {name, description, content, style_tags, skill_weights,
+   * is_anonymous}，与 releaseSkill payload 同构（直接预填发布表单）。
    * 失败语义：4002 = 今日 3 次限额已满 / 4003 = LLM 生成失败可重试 / 4xx 中文 message = 会话不合格。
    */
-  extractDraft: (sessionIds: number[]) =>
+  extractDraft: (sessionIds: number[], visitIds?: number[]) =>
     apiClient.request<any>(
       'POST',
       '/api/v1/skill-packages/extract-draft',
-      { session_ids: sessionIds },
+      visitIds?.length
+        ? { session_ids: sessionIds, visit_ids: visitIds }
+        : { session_ids: sessionIds },
       AI_SYNC_TIMEOUT_MS,
     ),
 };

@@ -3,6 +3,7 @@ LLM 全程 monkeypatch QwenClient.chat，不烧真实调用。"""
 import json
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -25,6 +26,7 @@ from shared.common.db_session import get_db
 from shared.models.base import Base
 from shared.models.practice import PracticeSession
 from shared.models.user import User
+from shared.models.visit import VisitRecord
 
 from app.services import qwen_client as qc
 import app.api.skill_packages as sp_api
@@ -63,7 +65,7 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, PracticeSession.__table__]
+    tables = [User.__table__, PracticeSession.__table__, VisitRecord.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -95,6 +97,19 @@ def _add_session(sid: int, rep_count: int, owner: int = 1, status: str = "comple
         status=status, turn_count=rep_count if turn_count is None else turn_count,
         transcript=transcript,
     ))
+    db.commit()
+    db.close()
+
+
+def _add_visit(vid: int, rep_lines: int, owner: int = 1, status: str = "in_progress"):
+    """建一条拜访记录（2026-09-10 素材扩拜访）：[代表]/[医生] 行交错写入转写。"""
+    lines = []
+    for i in range(1, rep_lines + 1):
+        lines.append(f"[代表] 拜访中代表第{i}条发言，引用循证数据")
+        lines.append(f"[医生] 医生第{i}条回应")
+    db = TestSession()
+    db.add(VisitRecord(id=vid, user_id=owner, visit_time=datetime(2026, 9, 5, 10),
+                       status=status, conversation_transcript="\n".join(lines) + "\n"))
     db.commit()
     db.close()
 
@@ -169,7 +184,7 @@ def test_extract_success_prompt_and_fields(fresh_state, monkeypatch):
     _, kwargs = fresh_state.call_args
     assert kwargs["action"] == "skill_extract_draft"
     assert kwargs["user_id"] == 1
-    assert kwargs["after_value"] == {"session_ids": [1], "name": "亲和力型"}
+    assert kwargs["after_value"] == {"session_ids": [1], "visit_ids": [], "name": "亲和力型"}
 
 
 def test_extract_rejects_invalid_session_ids(fresh_state):
@@ -321,3 +336,74 @@ def test_extract_limit_query_failure_passes(fresh_state, monkeypatch):
                        headers=_token(1, "rep"))
     assert resp.json()["code"] == 0
     fresh_state.assert_awaited_once()
+
+
+# ==================== 素材扩拜访（2026-09-10 老板需求） ====================
+
+def test_extract_from_visits_only(fresh_state, monkeypatch):
+    """拜访单源提取：无陪练会话也能从拜访对话提取，仅 [代表] 行进素材。"""
+    _add_visit(1, rep_lines=10)
+    captured = {}
+    monkeypatch.setattr(qc.QwenClient, "chat", _fake_chat(captured))
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={"visit_ids": [1]},
+                       headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    user = captured["messages"][1]["content"]
+    assert "拜访中代表第1条发言" in user
+    assert "医生第1条回应" not in user       # 医生行不进素材
+    assert "拜访医生实录" in user             # 场景分块标签
+    _, kwargs = fresh_state.call_args
+    assert kwargs["after_value"]["visit_ids"] == [1]
+    assert kwargs["resource_id"] == "1"
+
+
+def test_extract_mixed_sessions_and_visits(fresh_state, monkeypatch):
+    """混合素材：陪练 5 条 + 拜访 5 条 = 10 条过门槛（单类都不足）。"""
+    _add_session(1, rep_count=5)
+    _add_visit(2, rep_lines=5)
+    captured = {}
+    monkeypatch.setattr(qc.QwenClient, "chat", _fake_chat(captured))
+    resp = client.post("/api/v1/skill-packages/extract-draft",
+                       json={"session_ids": [1], "visit_ids": [2]},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 0
+    user = captured["messages"][1]["content"]
+    assert "代表第1轮发言" in user and "拜访中代表第1条发言" in user
+    assert "陪练对话" in user and "拜访医生实录" in user
+    _, kwargs = fresh_state.call_args
+    assert kwargs["after_value"]["session_ids"] == [1]
+    assert kwargs["after_value"]["visit_ids"] == [2]
+    assert kwargs["resource_id"] == "1,2"
+
+
+def test_extract_rejects_empty_sources(fresh_state):
+    """两类素材都不传 → 合计 0 条，参数校验拒绝。"""
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_extract_rejects_visit_below_min_lines(fresh_state):
+    _add_visit(1, rep_lines=2)
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={"visit_ids": [1]},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert "代表发言不足" in resp.json()["message"]
+
+
+def test_extract_rejects_cancelled_visit(fresh_state):
+    _add_visit(1, rep_lines=6, status="cancelled")
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={"visit_ids": [1]},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert "取消" in resp.json()["message"]
+
+
+def test_extract_rejects_foreign_visit(fresh_state):
+    _add_visit(1, rep_lines=6, owner=2)
+    resp = client.post("/api/v1/skill-packages/extract-draft", json={"visit_ids": [1]},
+                       headers=_token(1, "rep"))
+    assert resp.status_code == 400
+    assert "非本人" in resp.json()["message"]

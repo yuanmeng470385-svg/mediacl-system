@@ -116,4 +116,6 @@ export type SkillDraft = {
   is_anonymous?: boolean;
   /** 提取来源会话 ID（2026-09-01 审核溯源）：extract 屏带入，release 提交时原样回传 */
   source_session_ids?: number[] | null;
+  /** 提取来源拜访 ID（2026-09-10 溯源扩拜访）：extract 屏带入，release 提交时原样回传 */
+  source_visit_ids?: number[] | null;
 };

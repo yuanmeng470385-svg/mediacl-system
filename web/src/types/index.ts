@@ -415,6 +415,8 @@ export interface SkillPackage {
   content?: string;
   /** 提取来源陪练会话 ID：仅审核 detail 接口受控返回（2026-09-01 审核溯源） */
   source_session_ids?: number[] | null;
+  /** 提取来源拜访 ID：仅审核 detail 接口受控返回（2026-09-10 溯源扩拜访） */
+  source_visit_ids?: number[] | null;
   created_at: string | null;
 }
 
@@ -439,6 +441,19 @@ export interface PracticeTranscript {
   status: string;
   turn_count: number;
   transcript: { role: string; content: string; turn?: number }[];
+  created_at: string | null;
+}
+
+// 字段与 specialist-service GET /skill-packages/source-visits/{id} 对齐（2026-09-10 溯源扩拜访）
+export interface VisitSourceTranscript {
+  id: number;
+  representative_id: number;
+  rep_name?: string | null;
+  hcp_name?: string | null;
+  status: string;
+  visit_time: string | null;
+  rep_lines: number;
+  lines: { speaker: string; content: string }[];
   created_at: string | null;
 }
 

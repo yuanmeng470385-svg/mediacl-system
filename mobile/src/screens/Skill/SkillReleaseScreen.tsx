@@ -66,8 +66,10 @@ export default function SkillReleaseScreen() {
           opening_mode: openingMode,
         },
         is_anonymous: isAnonymous,
-        // 审核溯源（2026-09-01）：提取链路带来的来源会话原样回传，后端校验归属后留档
+        // 审核溯源（2026-09-01；2026-09-10 扩拜访）：提取链路带来的来源会话/拜访
+        // 原样回传，后端校验归属后留档
         source_session_ids: draft?.source_session_ids ?? undefined,
+        source_visit_ids: draft?.source_visit_ids ?? undefined,
       });
       Alert.alert('已提交', 'Skill 已进入审核，审核通过后上架广场', [
         { text: '确定', onPress: () => navigation.goBack() },

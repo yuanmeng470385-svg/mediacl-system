@@ -97,6 +97,31 @@ describe('practice/plaza/twin API', () => {
     expect(body.source_session_ids).toEqual([7, 5]);
   });
 
+  it('releaseSkill 携带 source_visit_ids 时进 body（溯源扩拜访 2026-09-10）', async () => {
+    await plazaAPI.releaseSkill({
+      name: '严谨型', description: '心内科', content: '话术素材',
+      skill_weights: { formal_level: '标准学术' },
+      source_visit_ids: [3],
+    });
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/release');
+    expect(JSON.parse(init.body).source_visit_ids).toEqual([3]);
+  });
+
+  it('extractDraft 混合素材时 session_ids + visit_ids 同进 body（2026-09-10 扩拜访）', async () => {
+    await plazaAPI.extractDraft([1], [5, 6]);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/extract-draft');
+    expect(JSON.parse(init.body)).toEqual({ session_ids: [1], visit_ids: [5, 6] });
+  });
+
+  it('extractDraft 未选拜访时 body 不带 visit_ids（旧调用契约不变）', async () => {
+    await plazaAPI.extractDraft([101, 102]);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/skill-packages/extract-draft');
+    expect(JSON.parse(init.body)).toEqual({ session_ids: [101, 102] });
+  });
+
   it('mySkills 发 GET /api/v1/skill-packages/mine', async () => {
     await plazaAPI.mySkills();
     const { url, init } = lastCall();

@@ -718,6 +718,18 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - **mobile**：twinAPI.styleSources/styleFromRecords（AI_SYNC_TIMEOUT_MS 120s 同款）+ 新 StyleSourceScreen（三类分组多选/素材条数实时统计/生成中遮罩/4002·4003 后端中文 message 直显）+ TwinManage 问卷卡内「用我的真实对话记录生成（推荐）」入口 + focus 刷新列表（返回见新分身）
 - 测试基线（2026-09-10 实测）：specialist 364（+8：style-sources 三类聚合与 prep 排除 / 建分身全字段 / 自定义名+枚举归一 / 素材不足 / 他人拜访 / prep 会话拒 / 限额 4002 / LLM 失败不建号）/ visit 120（re-export 回归）/ gateway 88 / mobile jest 112（+4 契约：sources GET / sources+name body）/ mobile tsc 0 错
 - 实机走查（demo_rep 经网关 8000）：style-sources chats1+practices2；style-from-records 真实 qwen 3.9s 建号（style 枚举 + 画像 + sources 落库核对无误；bailian 为空系 .env 未配 DEFAULT_TWIN_BAILIAN_APP_ID——与 style-test 同口径环境态，非本次引入）；audit_logs 限额计数行已落；_inject_persona_style 四情形（新式全量/老式仅枚举/仅画像/无 persona）输出验证
+
+**Skill 溯源扩拜访批（2026-09-10，老板需求：发布 Skill 的提取素材从「仅陪练会话」扩到「陪练 + 拜访对话」）**：
+- **迁移 029**：`skill_packages.source_visit_ids JSONB`（init_db.sql 同步；本地 PG 已实跑）——与 source_session_ids 同口径的溯源留档，detail 受控查看才吐、/mine 不吐（附录 B-1）
+- **extract-draft 双源（skill_packages.py）**：可选 `visit_ids` 与 `session_ids` 并列（均 None→[] 向后兼容；两类素材合计 1~10 条，单类各自仍 ≤10；空列表跳过对应校验）；拜访门槛 = 本人 + 非 cancelled + 单条 ≥3 行 `[代表] ` 转写（`VISIT_TRANSCRIPT_DOCTOR_PREFIX` 本批新增，REP 前缀既有）；代表发言合计 ≥10 条否则提示先积累；素材按场景分块（陪练块 `[第N轮 代表]:` / 拜访块裸原文）合并截 6000 字；审计 skill_extract_draft 的 after_value 含 visit_ids+session_ids、resource_id 两类 id 逗号拼接
+- **release**：可选 `source_visit_ids`（同校验后去重落库），审计 after_value 含两键
+- **新端点** `GET /api/v1/skill-packages/source-visits/{visit_id}`（SKILL_ADMIN_ROLES；⚠ 注册在 `/{skill_id}/detail` 之前防动态段吞掉）：返回 rep_name/hcp_name(Hcp join)/rep_lines/lines[{speaker:rep|doctor, 前缀已剥离}]；rep 403；访问记审计 `visit_source_view`（resource_type=visit_record）——审核员核对提取摘录是否忠于拜访原文（含医生行上下文）
+- **mobile**：SkillExtractScreen 重写为双分组（陪练会话/拜访记录，共用合计上限 10 + 代表发言条数统计；拜访列表走 twinAPI.styleSources 复用）；release 提交带 source_visit_ids；extractDraft 契约 +4
+- **web**：SkillList 审核抽屉加「提取来源拜访」按钮 + 拜访溯源 Drawer（practiceAPI.visitTranscript）
+- **seed**：demo_transcript 扩为 10 轮代表发言（覆盖免疫治疗老年安全性/跨研究比较/真实世界研究），够单源提取门槛；transcript 幂等覆写刷新存量行
+- 测试基线（2026-09-10 实测）：specialist 373（+9：拜访单源/混合提取/空素材/行数不足/cancelled 拒/他人拜访拒/release 落库+detail 受控/溯源端点权限+剥离+审计）/ visit 120 / shared 21 / mobile jest 115 / web vitest 23 + tsc 0 + build PASS
+- 实机走查（demo_rep 经网关 8000）：style-sources visits=1（rep_lines=10）→ extract-draft 拜访单源 code=0（草稿三枚举合法）→ release skill#4 落库（source_visit_ids=[64] pending）→ source-visits 经网关 rep 403（路由通）；审计两行 after_value 核对无误
+
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：

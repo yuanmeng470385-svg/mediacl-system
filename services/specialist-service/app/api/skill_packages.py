@@ -16,9 +16,16 @@ from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.pagination import PaginationParams, paginate
 from shared.common.response import BusinessError, ParamError, success
+from shared.models.hcp import Hcp
 from shared.models.practice import PracticeSession
 from shared.models.skill import SkillAudit, SkillOffShelf, SkillPackage
 from shared.models.user import User
+from shared.models.visit import (
+    VISIT_STATUS_CANCELLED,
+    VISIT_TRANSCRIPT_DOCTOR_PREFIX,
+    VISIT_TRANSCRIPT_REP_PREFIX,
+    VisitRecord,
+)
 
 from app.services.audit_client import count_audit_logs, write_audit_log
 from app.services.qwen_client import QwenClient
@@ -73,8 +80,9 @@ def _today_start_utc_iso() -> str:
 
 
 _EXTRACT_PROMPT = (
-    "你是医药代表沟通风格分析师。基于代表在陪练中的发言，提炼其说话风格，生成 Skill 发布草稿。"
-    "只依据代表（rep）发言分析，不得虚构素材；content 必须从代表发言中精选原文片段"
+    "你是医药代表沟通风格分析师。素材来自该代表在 AI 陪练和拜访医生中的本人发言"
+    "（按场景分块，块内均为代表原话），提炼其说话风格，生成 Skill 发布草稿。"
+    "只依据代表发言分析，不得虚构素材；content 必须从代表发言中精选原文片段"
     "（开场、异议应对、收尾各 1~3 段拼接），不得编写新话术。只输出 JSON，格式："
     '{"name":"风格名称","description":"治疗领域/说明","content":"话术摘录",'
     '"style_tags":["严谨学术"],"skill_weights":{"formal_level":"标准学术",'
@@ -179,6 +187,35 @@ def _validate_source_sessions(db: Session, user_id: int, session_ids, label: str
     return sessions
 
 
+def _validate_source_visits(db: Session, user_id: int, visit_ids, label: str = "visit_ids") -> list:
+    """提取来源拜访校验（extract-draft 与 release 溯源共用，2026-09-10 素材扩拜访）：
+    1~10 个 int、本人、非 cancelled、单条 >=3 条 [代表] 发言行；
+    去重后返回 [(VisitRecord, [代表发言行])]。"""
+    if (
+        not isinstance(visit_ids, list)
+        or not 1 <= len(visit_ids) <= 10
+        or not all(isinstance(i, int) and not isinstance(i, bool) for i in visit_ids)
+    ):
+        raise ParamError("%s 必须是 1~10 个拜访 ID 数组" % label)
+    visits = []
+    for vid in dict.fromkeys(visit_ids):  # 去重：同拜访传两次不重复计数
+        v = db.query(VisitRecord).filter(VisitRecord.id == vid).first()
+        if not v or v.user_id != user_id:
+            raise ParamError("拜访记录不存在或非本人记录")
+        if v.status == VISIT_STATUS_CANCELLED:
+            raise ParamError("已取消的拜访不能作为素材")
+        rep_lines = [
+            ln[len(VISIT_TRANSCRIPT_REP_PREFIX):].strip()
+            for ln in (v.conversation_transcript or "").splitlines()
+            if ln.startswith(VISIT_TRANSCRIPT_REP_PREFIX)
+        ]
+        rep_lines = [ln for ln in rep_lines if ln]
+        if len(rep_lines) < 3:
+            raise ParamError("该拜访记录代表发言不足（需至少 3 条）")
+        visits.append((v, rep_lines))
+    return visits
+
+
 @router.post("")
 async def create_skill(
     payload: dict,
@@ -257,11 +294,16 @@ async def release_skill(
     """三期 J：代表发布 Skill 到公共空间 → pending，审核通过后上代表侧广场。
     is_public=True（发布意图）；/public 广场按 audit_status=approved 过滤，pending 不可见。"""
     data = _validate_release_payload(payload)
-    # 溯源留档（2026-09-01 审核盲审修复批）：提取->发布链路携带来源会话，校验同 extract 门槛
+    # 溯源留档（2026-09-01 审核盲审修复批；2026-09-10 扩拜访）：提取->发布链路
+    # 携带来源会话/来源拜访，校验同 extract 门槛
     source_ids = payload.get("source_session_ids")
     if source_ids is not None:
         _validate_source_sessions(db, current_user["id"], source_ids, label="source_session_ids")
         source_ids = list(dict.fromkeys(source_ids))
+    source_visit_ids = payload.get("source_visit_ids")
+    if source_visit_ids is not None:
+        _validate_source_visits(db, current_user["id"], source_visit_ids, label="source_visit_ids")
+        source_visit_ids = list(dict.fromkeys(source_visit_ids))
     sk = SkillPackage(
         name=data["name"], creator_id=current_user["id"],
         description=data["description"], content=data["content"],
@@ -269,6 +311,7 @@ async def release_skill(
         audit_status="pending", style_tags=data["style_tags"], heat=0,
         skill_weights=data["skill_weights"],
         source_session_ids=source_ids,
+        source_visit_ids=source_visit_ids,
     )
     db.add(sk)
     db.commit()
@@ -276,7 +319,8 @@ async def release_skill(
     await write_audit_log(
         action="skill_release", user_id=current_user["id"],
         resource_type="skill_package", resource_id=str(sk.id),
-        after_value={"name": sk.name, "description": sk.description, "source_session_ids": source_ids},
+        after_value={"name": sk.name, "description": sk.description,
+                     "source_session_ids": source_ids, "source_visit_ids": source_visit_ids},
         request_id=get_request_id() or None,
     )
     return success(sk.to_dict())
@@ -291,23 +335,48 @@ async def extract_draft(
     """三期 P：代表从本人陪练历史会话提取说话风格 → Skill 发布草稿。
     无状态不落库（决策 1），返回 JSON 供前端预填发布表单；content 只摘代表原文
     （决策 6），不生成新话术。
-    门槛（决策 8）：会话 1~10 个、本人、completed、单会话 ≥3 轮、合计 rep 发言
-    ≥10 条，素材按时间正序合并后截最近 6000 字。
+    2026-09-10 素材扩拜访：session_ids（陪练）与 visit_ids（拜访对话）两类可选、
+    合计 1~10 条（旧调用只传 session_ids 完全兼容）。
+    门槛（决策 8）：陪练会话本人+completed+单会话 ≥3 轮；拜访本人+非取消+单条 ≥3 条
+    [代表] 行；合计代表发言 ≥10 条，素材按场景分块合并后截最近 6000 字。
     限额（决策 4）：每用户每日 3 次 = audit-service 计数（成功后写审计），
     计数查询异常放行——审计可用性不卡死业务。"""
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
     session_ids = payload.get("session_ids")
-    if not isinstance(session_ids, list) or not session_ids:
-        raise ParamError("session_ids 必须是 1~10 个会话 ID 数组")
-    sessions = _validate_source_sessions(db, current_user["id"], session_ids)
+    visit_ids = payload.get("visit_ids")
+    if session_ids is None:
+        session_ids = []
+    if visit_ids is None:
+        visit_ids = []
+    if not isinstance(session_ids, list) or not isinstance(visit_ids, list):
+        raise ParamError("session_ids/visit_ids 必须是数组")
+    if not 1 <= len(session_ids) + len(visit_ids) <= 10:
+        raise ParamError("素材记录必须是 1~10 条（陪练会话 + 拜访记录）")
+    sessions = (
+        _validate_source_sessions(db, current_user["id"], session_ids)
+        if session_ids else []
+    )
+    visits = (
+        _validate_source_visits(db, current_user["id"], visit_ids)
+        if visit_ids else []
+    )
     sessions.sort(key=lambda s: s.id)  # 创建序即时间正序
-    rep_turns = [
-        t for s in sessions for t in (s.transcript or [])
-        if t.get("role") == "rep" and t.get("content")
-    ]
-    if len(rep_turns) < 10:
-        raise ParamError("对话轮次不足，先去陪练几轮吧")
+    # 素材按场景分块：陪练保留轮次序号，拜访为 [代表] 原文行
+    blocks = []
+    if sessions:
+        rep_turns = [
+            t for s in sessions for t in (s.transcript or [])
+            if t.get("role") == "rep" and t.get("content")
+        ]
+        blocks.append((
+            "陪练对话",
+            [f"[第{t.get('turn', '?')}轮 代表]: {t.get('content', '')}" for t in rep_turns],
+        ))
+    for v, rep_lines in visits:
+        blocks.append(("拜访医生实录", rep_lines))
+    if sum(len(lines) for _, lines in blocks) < 10:
+        raise ParamError("对话轮次不足，先去陪练或拜访医生积累几轮吧")
     used = await count_audit_logs(
         action="skill_extract_draft",
         user_id=current_user["id"],
@@ -316,10 +385,11 @@ async def extract_draft(
     if used is not None and used >= EXTRACT_DAILY_LIMIT:
         raise BusinessError("今日提取次数已达上限（3 次/天）", code=4002)
     material = "\n".join(
-        f"[第{t.get('turn', '?')}轮 代表]: {t.get('content', '')}" for t in rep_turns
+        f"—— {label}（代表发言）——\n" + "\n".join(lines)
+        for label, lines in blocks
     )[-6000:]
     user = (
-        "以下是该代表在陪练中的全部发言（仅代表轮次，按时间正序）：\n"
+        "以下是该代表在陪练/拜访中的全部本人发言（按场景分块，均为代表原话）：\n"
         f"<user_content>{material}</user_content>\n"
         "请输出风格草稿 JSON："
     )
@@ -349,8 +419,10 @@ async def extract_draft(
         action="skill_extract_draft",
         user_id=current_user["id"],
         resource_type="practice_session",
-        resource_id=",".join(str(sid) for sid in dict.fromkeys(session_ids)),
-        after_value={"session_ids": session_ids, "name": draft["name"]},
+        resource_id=",".join(
+            str(i) for i in [*dict.fromkeys(session_ids), *dict.fromkeys(visit_ids)]
+        ),
+        after_value={"session_ids": session_ids, "visit_ids": visit_ids, "name": draft["name"]},
         request_id=get_request_id() or None,
     )
     return success(draft)
@@ -418,13 +490,59 @@ async def asset_list(
     return success(paginate(items, total, p.page, p.page_size))
 
 
+@router.get("/source-visits/{visit_id}")
+async def review_source_visit(
+    visit_id: int,
+    current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """审核溯源（2026-09-10 Skill 溯源扩拜访）：受控查看 source_visit_ids 对应的
+    拜访转写原文（含 [医生] 行上下文），供审核人核对提取摘录是否忠于本人原文。
+    访问记审计 visit_source_view（对齐 practices/{id}/review-transcript 的
+    practice_source_view 先例）。注册在 /{skill_id}/detail 之前的静态段路由区。"""
+    v = db.query(VisitRecord).filter(VisitRecord.id == visit_id).first()
+    if not v:
+        raise BusinessError("拜访记录不存在", code=4000)
+    rep_name = db.query(User.full_name).filter(User.id == v.user_id).scalar()
+    hcp_name = None
+    if v.hcp_id:
+        hcp_name = db.query(Hcp.name).filter(Hcp.id == v.hcp_id).scalar()
+    lines = []
+    for ln in (v.conversation_transcript or "").splitlines():
+        if ln.startswith(VISIT_TRANSCRIPT_REP_PREFIX):
+            lines.append({"speaker": "rep", "content": ln[len(VISIT_TRANSCRIPT_REP_PREFIX):].strip()})
+        elif ln.startswith(VISIT_TRANSCRIPT_DOCTOR_PREFIX):
+            lines.append({"speaker": "doctor", "content": ln[len(VISIT_TRANSCRIPT_DOCTOR_PREFIX):].strip()})
+    rep_line_count = sum(1 for l in lines if l["speaker"] == "rep")
+    await write_audit_log(
+        action="visit_source_view",
+        user_id=current_user["id"],
+        resource_type="visit_record",
+        resource_id=str(v.id),
+        after_value={"rep_id": v.user_id, "rep_lines": rep_line_count},
+        request_id=get_request_id() or None,
+    )
+    return success({
+        "id": v.id,
+        "representative_id": v.user_id,
+        "rep_name": rep_name,
+        "hcp_name": hcp_name,
+        "status": v.status,
+        "visit_time": v.visit_time.isoformat() if v.visit_time else None,
+        "rep_lines": rep_line_count,
+        "lines": lines,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    })
+
+
 @router.get("/{skill_id}/detail")
 async def skill_detail(
     skill_id: int,
     current_user: dict = Depends(require_roles(*SKILL_ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """审核详情：受控查看 content/skill_weights/source_session_ids（2026-09-01 审核盲审修复）。
+    """审核详情：受控查看 content/skill_weights/source_session_ids/source_visit_ids
+    （2026-09-01 审核盲审修复；2026-09-10 扩 source_visit_ids）。
     方案 A「能审即能看」：SKILL_ADMIN_ROLES 全量 expose——此前 admin/manager 仅元数据
     可审，approve 即橡皮图章）。审核动作同日恢复全 SKILL_ADMIN_ROLES（单账号审核），
     广场/资产列表公共口径仍不含受控字段，访问照记审计（skill_detail_view）。"""

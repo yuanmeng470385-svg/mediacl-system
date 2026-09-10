@@ -22,6 +22,7 @@ class SkillPackage(Base, TimestampMixin):
     description = Column(String(200))      # 治疗领域/一句话说明（元数据，公共列表展示）
     content = Column(Text)                 # 话术素材（内容，仅审核人受控查看）
     source_session_ids = Column(JSONB)     # 提取来源陪练会话 ID（三期 P 审核溯源，仅受控查看）
+    source_visit_ids = Column(JSONB)       # 提取来源拜访 ID（2026-09-10 溯源扩拜访对话，仅受控查看）
     # 三期 J：下架（3.6(3)）
     off_shelf_status = Column(String(20), nullable=False, default="active")  # active/off_shelved
     off_shelf_reason = Column(String(500))
@@ -53,6 +54,7 @@ class SkillPackage(Base, TimestampMixin):
             d["skill_weights"] = self.skill_weights
             d["content"] = self.content
             d["source_session_ids"] = self.source_session_ids
+            d["source_visit_ids"] = self.source_visit_ids
         return d
 
 
