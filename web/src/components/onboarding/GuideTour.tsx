@@ -31,9 +31,11 @@ function writeProgress(key: string, c: number, t: Phase) {
 }
 
 /**
- * 陪玩式新人引导（2026-09-09 v2，替代 v1 antd Tour——Tour 气泡无法跨页导航/收卡召回）。
+ * 陪玩式新人引导（2026-09-10 v4，替代 v1 antd Tour——Tour 气泡无法跨页导航/收卡召回）。
  * 状态机：card（讲解卡）→「去试试」→ navigate(tryPath) 收卡、目标页自由体验 →
  * 点悬浮球「继续」→ 召回卡 →「下一个」→ 下一步；「上一个」可回退重看（首步禁用）。
+ * v4：每张讲解卡固定四按钮——跳过引导 / 上一个（首步禁用）/ 下一个（末步收尾）/ 去试试
+ * （v4 起全部步骤都配 tryPath，见 tourSteps.ts）。
  * 进度写 localStorage 断点续传；跳过=完成不再骚扰；"?"悬浮球平时=重看入口。
  * 必须挂在 AdminLayout 内（Modal 跨路由存活）。
  */
@@ -125,7 +127,6 @@ export default function GuideTour({ role }: { role?: string }) {
 
   if (!steps.length) return null;
   const step = steps[current];
-  const isLast = current === steps.length - 1;
   const recall = active && phase === 'trying';
   const stepLabel = (
     <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: 13 }}>
@@ -171,15 +172,12 @@ export default function GuideTour({ role }: { role?: string }) {
                 <Button style={{ marginRight: 8 }} disabled={current === 0} onClick={back}>
                   上一个
                 </Button>
-                {step?.tryPath ? (
-                  <Button type="primary" icon={<ArrowRightOutlined />} onClick={goTry}>
-                    去试试
-                  </Button>
-                ) : (
-                  <Button type="primary" onClick={advance}>
-                    {isLast ? '完成引导' : current === 0 ? '开始逛逛' : '下一个'}
-                  </Button>
-                )}
+                <Button style={{ marginRight: 8 }} onClick={advance}>
+                  下一个
+                </Button>
+                <Button type="primary" icon={<ArrowRightOutlined />} onClick={goTry}>
+                  去试试
+                </Button>
               </div>
             </>
           )}

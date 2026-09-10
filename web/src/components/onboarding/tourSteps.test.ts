@@ -1,6 +1,7 @@
 /**
  * 新人引导步骤防漂移断言（对齐 routeAccess.test.ts 的 M17 哲学）：
- * v3 全页面覆盖——每个角色必须按菜单顺序覆盖其可见的全部页面，一步不缺；
+ * v4 每卡四按钮——**每一步**（含开场/收尾）都必须有可访问的 tryPath；
+ * 每个角色必须按菜单顺序覆盖其可见的全部页面，一步不缺；
  * 「去试试」引用不存在/无权限的页面会把用户导航到 403，也必须炸出来。
  */
 import { describe, expect, it } from 'vitest';
@@ -23,13 +24,13 @@ function visibleMenuPaths(role: string): string[] {
 }
 
 describe('tourSteps（四角色全页面覆盖引导配置）', () => {
-  it('步数=可见页数+2（开场/收尾）；首末为纯讲解步', () => {
+  it('步数=可见页数+2（开场/收尾）；首末步的「去试试」都落在仪表盘（全角色可达）', () => {
     for (const role of ROLES) {
       const steps = getStepsForRole(role);
       const pages = visibleMenuPaths(role);
       expect(steps.length, `${role} 应=页数+2`).toBe(pages.length + 2);
-      expect(steps[0].tryPath, `${role} 首步应是价值叙事纯讲解`).toBeUndefined();
-      expect(steps[steps.length - 1].tryPath, `${role} 末步应是收尾纯讲解`).toBeUndefined();
+      expect(steps[0].tryPath, `${role} 首步（价值叙事）应可去仪表盘`).toBe('/dashboard');
+      expect(steps[steps.length - 1].tryPath, `${role} 末步（收尾）应可去仪表盘`).toBe('/dashboard');
     }
   });
 
@@ -47,15 +48,15 @@ describe('tourSteps（四角色全页面覆盖引导配置）', () => {
     }
   });
 
-  it('体验步 tryPath 均为该角色可访问且菜单真实存在的页面；tryName/tryHint 必填；每角色 ≥3 步', () => {
+  it('v4 每一步都带「去试试」：tryPath 均为菜单真实存在且该角色可访问的页面；tryName/tryHint 必填', () => {
     const allPaths = menuConfig.flatMap((i) =>
       [i.path, ...(i.children ?? []).map((c) => c.path)].filter(Boolean) as string[],
     );
     for (const role of ROLES) {
-      const trySteps = (getStepsForRole(role) as GuideStep[]).filter(
-        (s): s is GuideStep & { tryPath: string } => !!s.tryPath,
-      );
-      expect(trySteps.length, `${role} 体验步应 ≥3`).toBeGreaterThanOrEqual(3);
+      const steps = getStepsForRole(role) as GuideStep[];
+      // v4 四按钮要求：任何一步点「去试试」都不能落空
+      const trySteps = steps.filter((s): s is GuideStep & { tryPath: string } => !!s.tryPath);
+      expect(trySteps.length, `${role} 每一步都应有 tryPath`).toBe(steps.length);
       for (const s of trySteps) {
         expect(allPaths, `${role} 引用 ${s.tryPath} 不在 menuConfig`).toContain(s.tryPath);
         expect(canAccess(s.tryPath, role), `${role} 无权访问引导目标页 ${s.tryPath}`).toBe(true);
@@ -68,7 +69,7 @@ describe('tourSteps（四角色全页面覆盖引导配置）', () => {
   it('未知角色回落 admin 配置；完成/进度 key 带角色维度', () => {
     expect(getStepsForRole('unknown-role')).toEqual(getStepsForRole('admin'));
     expect(getStepsForRole(undefined)).toEqual(getStepsForRole('admin'));
-    expect(tourDoneKey('admin')).toBe('onboarding.web.admin.v3');
+    expect(tourDoneKey('admin')).toBe('onboarding.web.admin.v4');
     expect(tourDoneKey('compliance')).not.toBe(tourDoneKey('admin'));
     expect(tourProgressKey('admin')).toBe('onboarding.web.admin.progress');
     expect(tourProgressKey('admin')).not.toBe(tourDoneKey('admin'));

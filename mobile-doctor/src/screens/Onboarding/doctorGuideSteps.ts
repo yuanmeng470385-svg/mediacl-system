@@ -1,5 +1,6 @@
 /**
- * 医生端陪玩式引导步骤（2026-09-09 v2）：价值叙事开场 → 4 个「去试试」体验步 → 操作说明收尾。
+ * 医生端陪玩式引导步骤（2026-09-10 v3）：价值叙事开场 → 5 个「去试试」体验步 → 操作说明收尾。
+ * v3 增补患教工具步。
  * tryRoute 为编译期锁定的真实路由名（keyof RootStackParamList | keyof MainTabParamList，
  * 路由改名时本文件 tsc 炸出）。
  */
@@ -20,8 +21,8 @@ export interface GuideStep {
   tryHint?: string;
 }
 
-/** AsyncStorage 完成标记（跳过=完成；v2=陪玩式升级，看过 v1 轮播的用户重弹） */
-export const DOCTOR_GUIDE_DONE_KEY = 'onboarding.doctor.v2';
+/** AsyncStorage 完成标记（跳过=完成；v3=增补患教工具步，看过 v2 的用户重弹） */
+export const DOCTOR_GUIDE_DONE_KEY = 'onboarding.doctor.v3';
 /** 断点续传进度（current 步号） */
 export const DOCTOR_GUIDE_PROGRESS_KEY = 'onboarding.doctor.progress';
 
@@ -85,10 +86,22 @@ export const DOCTOR_GUIDE_STEPS: GuideStep[] = [
     tryHint: '看看收件箱里的学术卡片（没有内容也正常）。逛完点顶部蓝色引导条继续。',
   },
   {
+    icon: '📢',
+    title: '第五步：患教工具',
+    bullets: [
+      '选模板一键 AI 生成患者教育材料（如出院注意事项），默认仅自己可见',
+      '可分享到患教专区（审核通过后同行可见），或转发给患者并附 AI 免责声明',
+      '不采集任何患者数据；专区里还能看同行分享的优质材料',
+    ],
+    tryRoute: 'PatientEdu',
+    tryName: '患教工具',
+    tryHint: '看看模板列表与已生成的患教材料（不用真的生成）。逛完点顶部蓝色引导条继续。',
+  },
+  {
     icon: '🧭',
     title: '最后几件事',
     bullets: [
-      '「我的」页还有：患教工具、官方广场、偏好设置、收藏历史、隐私中心',
+      '「我的」页还有：官方广场、偏好设置、收藏历史、隐私中心',
       '偏好设置：选择关注领域，内容推送更精准',
       '本引导随时可重看：我的 → 功能引导',
     ],

@@ -1,5 +1,6 @@
 /**
- * 代表端陪玩式引导步骤（2026-09-09 v2）：价值叙事开场 → 4 个「去试试」体验步 → 操作说明收尾。
+ * 代表端陪玩式引导步骤（2026-09-10 v3）：价值叙事开场 → 9 个「去试试」体验步 → 操作说明收尾。
+ * v3 增补「我的」页五个功能步：夜间简报/学术卡片/AI 陪练/Skill 广场/Skill 发布。
  * tryRoute 为编译期锁定的真实路由名（keyof RootStackParamList | keyof MainTabParamList，
  * 路由改名时本文件 tsc 炸出——比 web 端 menuConfig 防漂移断言更前移）。
  */
@@ -20,8 +21,8 @@ export interface GuideStep {
   tryHint?: string;
 }
 
-/** AsyncStorage 完成标记（跳过=完成；v2=陪玩式升级，看过 v1 轮播的用户重弹） */
-export const REP_GUIDE_DONE_KEY = 'onboarding.rep.v2';
+/** AsyncStorage 完成标记（跳过=完成；v3=增补五个「我的」页功能步，看过 v2 的用户重弹） */
+export const REP_GUIDE_DONE_KEY = 'onboarding.rep.v3';
 /** 断点续传进度（current 步号） */
 export const REP_GUIDE_PROGRESS_KEY = 'onboarding.rep.progress';
 
@@ -85,10 +86,70 @@ export const REP_GUIDE_STEPS: GuideStep[] = [
     tryHint: '看看你的备案状态和培训考试入口（在「我的」里也能进来）。逛完点顶部蓝色引导条继续。',
   },
   {
+    icon: '🌙',
+    title: '夜间简报：你睡觉，它干活',
+    bullets: [
+      '每天凌晨自动汇总：昨天医生问了什么、哪些学术卡片被追问',
+      '附建议跟进动作，早上花一分钟掌握分身动态',
+      '简报就绪会发站内通知，不会错过',
+    ],
+    tryRoute: 'BriefingList',
+    tryName: '夜间简报',
+    tryHint: '看看最近一份简报长什么样（没有也正常，凌晨才生成）。逛完点顶部蓝色引导条继续。',
+  },
+  {
+    icon: '📇',
+    title: '学术卡片：给医生的轻触达',
+    bullets: [
+      'AI 按主题生成带文献引用的学术卡片，生成前过三层合规预检',
+      '一键推送给订阅你的医生，阅读/反馈/追问全程可追踪',
+      '医生的「有用」反馈会计入分身好评率',
+    ],
+    tryRoute: 'AcademicCardCreate',
+    tryName: '学术卡片',
+    tryHint: '看看 AI 生成卡片的表单（不用真的生成），右上角可看已生成的卡片。逛完点顶部蓝色引导条继续。',
+  },
+  {
+    icon: '🥊',
+    title: 'AI 陪练：上场前先过两招',
+    bullets: [
+      '选场景和医生性格，AI 扮演医生与你多轮对话',
+      '结束按循证准确性/异议处理/沟通逻辑等四维打分，逐句给反馈',
+      '练得越多，进步曲线越能看出变化',
+    ],
+    tryRoute: 'PracticeList',
+    tryName: 'AI 陪练',
+    tryHint: '看看场景列表与历史成绩（不用真的开一局）。逛完点顶部蓝色引导条继续。',
+  },
+  {
+    icon: '🏪',
+    title: 'Skill 广场：好用的打法直接拿',
+    bullets: [
+      '官方与同事发布的话术风格模版，审核通过才上架',
+      '一键加载进陪练，评分会对照模版风格给匹配分',
+      '按热度排序，经过验证的排在前面',
+    ],
+    tryRoute: 'Plaza',
+    tryName: 'Skill 广场',
+    tryHint: '逛逛有哪些 Skill 模版（加载即体验，随时可换）。逛完点顶部蓝色引导条继续。',
+  },
+  {
+    icon: '✨',
+    title: 'Skill 发布：把你的打法变成资产',
+    bullets: [
+      '从陪练/拜访对话里提取你的说话风格，一键生成草稿',
+      '补全描述发布到广场，审核通过后全公司可加载',
+      '「我的 Skill」里随时看热度与审核状态',
+    ],
+    tryRoute: 'SkillRelease',
+    tryName: 'Skill 发布',
+    tryHint: '看看发布表单长什么样（草稿也可以从「AI 陪练」历史里一键提取）。逛完点顶部蓝色引导条继续。',
+  },
+  {
     icon: '🧭',
     title: '最后几件事',
     bullets: [
-      '「我的」页还有：分身分享、夜间简报、AI 陪练、Skill 广场',
+      '「我的」页还有：分身分享、通知中心、我的 Skill、设置',
       '本引导随时可重看：我的 → 设置 → 功能引导',
       '有问题先去「帮助中心」翻一翻（含合规红线清单）',
     ],
