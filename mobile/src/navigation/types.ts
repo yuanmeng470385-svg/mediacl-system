@@ -58,6 +58,8 @@ export type RootStackParamList = {
   PracticeChat: { sessionId: number };
   Plaza: undefined;
   TwinManage: undefined;
+  // 从历史记录生成分身（2026-09-10）：选三类对话记录 → LLM 提取本人风格
+  StyleSource: undefined;
   // Skill 生态（三期 J）
   SkillRelease: { draft?: SkillDraft } | undefined;
   MySkillList: undefined;

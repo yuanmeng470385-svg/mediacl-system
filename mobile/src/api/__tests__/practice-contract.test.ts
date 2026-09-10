@@ -45,6 +45,33 @@ describe('practice/plaza/twin API', () => {
     expect(JSON.parse(init.body)).toEqual({ answers: [1, 2, 0, 1, 2] });
   });
 
+  it('styleSources 发 GET /api/v1/specialists/style-sources', async () => {
+    await twinAPI.styleSources();
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/specialists/style-sources');
+    expect(init.method).toBe('GET');
+  });
+
+  it('styleFromRecords 发 POST /api/v1/specialists/style-from-records（sources 进 body）', async () => {
+    await twinAPI.styleFromRecords([
+      { type: 'visit', id: 1 }, { type: 'chat', id: 'sess-a' },
+    ]);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/specialists/style-from-records');
+    expect(JSON.parse(init.body)).toEqual({
+      sources: [{ type: 'visit', id: 1 }, { type: 'chat', id: 'sess-a' }],
+    });
+  });
+
+  it('styleFromRecords 带 name 时一并进 body', async () => {
+    await twinAPI.styleFromRecords([{ type: 'practice', id: 3 }], '我的专属分身');
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/specialists/style-from-records');
+    expect(JSON.parse(init.body)).toEqual({
+      sources: [{ type: 'practice', id: 3 }], name: '我的专属分身',
+    });
+  });
+
   it('releaseSkill 发 POST /api/v1/skill-packages/release', async () => {
     await plazaAPI.releaseSkill({
       name: '亲和力型', description: '心内科', content: '话术素材',

@@ -1,6 +1,7 @@
-"""分身管理测试（Task 4）：风格设置/启停/风格测试生成"""
+"""分身管理测试（Task 4）：风格设置/启停/风格测试生成 + 从历史记录生成分身（2026-09-10）"""
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -22,8 +23,11 @@ from shared.common.auth import create_token, get_current_user
 from shared.common.db_session import get_db
 from shared.models.base import Base
 from shared.models.digital_specialist import Specialist
+from shared.models.practice import PracticeSession
 from shared.models.user import User
+from shared.models.visit import VisitRecord
 
+from app.models.conversation import Conversation
 import app.api.specialists as spec_api
 from app.main import app
 
@@ -60,7 +64,9 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, Specialist.__table__]
+    from app.models.conversation import Conversation as _Conv
+    tables = [User.__table__, Specialist.__table__, _Conv.__table__,
+              PracticeSession.__table__, VisitRecord.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -153,3 +159,151 @@ def test_style_test_attaches_default_bailian_app(fresh_state, monkeypatch):
         "answers": [1, 1, 1, 1, 1],
     }, headers=_token(1, "rep"))
     assert resp.json()["data"]["bailian_app_id"] is None
+
+
+# ==================== 从历史记录生成分身（2026-09-10） ====================
+
+def _seed_style_material(user_id=1):
+    """三类素材：2 个专员会话（各 4 条 user 行）、1 条本人拜访（代表 6 行）、
+    1 场完成陪练（rep 5 轮）；另埋 prep 机器会话与他人拜访做排除/归属用例。"""
+    db = TestSession()
+    for sid in ("sess-a", "sess-b"):
+        for i in range(4):
+            db.add(Conversation(user_id=user_id, specialist_id=None, session_id=sid,
+                                role="user", content=f"关于适应症的问题{i}",
+                                created_at=datetime(2026, 9, 1, 10, i)))
+            db.add(Conversation(user_id=user_id, specialist_id=None, session_id=sid,
+                                role="assistant", content=f"答复{i}",
+                                created_at=datetime(2026, 9, 1, 10, i)))
+    db.add(Conversation(user_id=user_id, specialist_id=None, session_id="visit_prep_x",
+                        role="user", content="系统指令", created_at=datetime(2026, 9, 1, 11)))
+    db.add(VisitRecord(id=1, user_id=user_id, visit_time=datetime(2026, 9, 2, 9),
+                       status="in_progress",
+                       conversation_transcript="[代表] 王主任您好，好久不见。\n[医生] 你好。\n" * 3))
+    db.add(VisitRecord(id=2, user_id=4, visit_time=datetime(2026, 9, 2, 9),
+                       status="in_progress", conversation_transcript="[代表] 他人拜访发言\n"))
+    transcript = []
+    for i in range(5):
+        transcript.append({"turn": i + 1, "role": "rep", "content": f"代表发言{i}"})
+        transcript.append({"turn": i + 1, "role": "ai", "content": f"医生回应{i}"})
+    db.add(PracticeSession(id=1, representative_id=user_id, scenario="心内科",
+                           status="completed", turn_count=5, transcript=transcript,
+                           created_at=datetime(2026, 9, 3)))
+    db.commit()
+    db.close()
+
+
+_ALL_SOURCES = [
+    {"type": "chat", "id": "sess-a"},
+    {"type": "chat", "id": "sess-b"},
+    {"type": "visit", "id": 1},
+    {"type": "practice", "id": 1},
+]
+
+
+def test_style_sources_lists_three_types(fresh_state):
+    _seed_style_material(1)
+    resp = client.get("/api/v1/specialists/style-sources", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    d = body["data"]
+    # prep 机器会话排除；他人拜访（user_id=4）不出现
+    assert sorted(c["turns"] for c in d["chats"]) == [4, 4]
+    assert all("visit_prep" not in c["session_id"] for c in d["chats"])
+    assert len(d["visits"]) == 1
+    assert d["visits"][0]["rep_lines"] == 3
+    assert len(d["practices"]) == 1
+    assert d["practices"][0]["turn_count"] == 5
+
+
+def test_style_from_records_creates_twin(fresh_state, monkeypatch):
+    import app.services.qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {
+        "content": '{"name":"沉稳学术型","style":{"formal_level":"非常严谨",'
+                   '"reply_length":"简洁","opening_mode":"先寒暄再进入"},'
+                   '"style_profile":"开场先寒暄，短句为主"}',
+        "usage": {},
+    })
+    monkeypatch.setattr("app.services.audit_client.count_audit_logs", AsyncMock(return_value=None))
+    _seed_style_material(1)
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": _ALL_SOURCES,
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["message"] == "分身已生成"
+    assert body["data"]["representative_id"] == 1
+    assert body["data"]["status"] == "active"
+    assert body["data"]["name"] == "沉稳学术型"
+    persona = body["data"]["persona"]
+    assert persona["style"]["formal_level"] == "非常严谨"
+    assert persona["style"]["opening_mode"] == "先寒暄再进入"
+    assert persona["style_profile"].startswith("开场先寒暄")
+    assert persona["generated_from"] == "records"
+    assert len(persona["sources"]) == 4
+
+
+def test_style_from_records_custom_name_wins(fresh_state, monkeypatch):
+    import app.services.qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {
+        "content": '{"name":"LLM起的名","style":{},"style_profile":"x"}', "usage": {},
+    })
+    monkeypatch.setattr("app.services.audit_client.count_audit_logs", AsyncMock(return_value=None))
+    _seed_style_material(1)
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": _ALL_SOURCES, "name": "我指定的名字",
+    }, headers=_token(1, "rep"))
+    assert resp.json()["data"]["name"] == "我指定的名字"
+    # style 传空对象 → 枚举归一回默认值（与 _parse_draft 同口径）
+    assert resp.json()["data"]["persona"]["style"]["formal_level"] == "标准学术"
+
+
+def test_style_from_records_insufficient_material(fresh_state):
+    _seed_style_material(1)
+    # 单会话 4 条 < 10 条门槛
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": [{"type": "chat", "id": "sess-a"}],
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 1000
+    assert "素材不足" in resp.json()["message"]
+
+
+def test_style_from_records_rejects_foreign_visit(fresh_state):
+    _seed_style_material(1)
+    # visit_id=2 是 rep02（user_id=4）的记录 → 归属校验拦截
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": [{"type": "visit", "id": 2}],
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 1000
+    assert "非本人" in resp.json()["message"]
+
+
+def test_style_from_records_rejects_prep_chat(fresh_state):
+    _seed_style_material(1)
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": [{"type": "chat", "id": "visit_prep_x"}],
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 1000
+
+
+def test_style_from_records_daily_limit(fresh_state, monkeypatch):
+    monkeypatch.setattr("app.services.audit_client.count_audit_logs", AsyncMock(return_value=3))
+    _seed_style_material(1)
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": _ALL_SOURCES,
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 4002
+
+
+def test_style_from_records_llm_failure_no_twin(fresh_state, monkeypatch):
+    import app.services.qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "not json", "usage": {}})
+    monkeypatch.setattr("app.services.audit_client.count_audit_logs", AsyncMock(return_value=None))
+    _seed_style_material(1)
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": _ALL_SOURCES,
+    }, headers=_token(1, "rep"))
+    assert resp.json()["code"] == 4003
+    db = TestSession()
+    assert db.query(Specialist).count() == 0
+    db.close()

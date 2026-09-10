@@ -60,4 +60,25 @@ export const twinAPI = {
   resume: (twinId: number) => apiClient.request<any>('POST', `/api/v1/specialists/${twinId}/resume`, {}),
   styleTest: (answers: number[]) =>
     apiClient.request<any>('POST', '/api/v1/specialists/style-test', { answers }),
+  /**
+   * 2026-09-10 从历史记录生成分身：可选素材列表（本人三类对话记录，各最近 20 条）。
+   * chats 项 id 为 session_id 字符串；visits 项 visit_id / practices 项 session_id 为整数。
+   */
+  styleSources: () =>
+    apiClient.request<any>('GET', '/api/v1/specialists/style-sources'),
+  /**
+   * 从历史记录生成分身（同步 LLM，120s 超时）。sources: 1~10 条 {type, id}，
+   * 素材合计 ≥10 条代表发言（门槛在后端校验）；name 可选自定义分身名。
+   * 失败语义：4002 = 今日 3 次限额已满 / 4003 = LLM 生成失败可重试。
+   */
+  styleFromRecords: (
+    sources: Array<{ type: 'chat' | 'visit' | 'practice'; id: string | number }>,
+    name?: string,
+  ) =>
+    apiClient.request<any>(
+      'POST',
+      '/api/v1/specialists/style-from-records',
+      name ? { sources, name } : { sources },
+      AI_SYNC_TIMEOUT_MS,
+    ),
 };

@@ -420,14 +420,19 @@ def seed(db, password: str) -> dict:
                   "status": "active"},
     )
     visit_time = y + timedelta(hours=2)
+    # 转写用现行 [代表]/[医生] 行首前缀（visit_manager 2026-08-27 双方分离落库口径，
+    # 也是 style-sources 拜访素材 [代表] 行聚合的抓取依据——旧「李明：」格式抓不到）
+    demo_transcript = (
+        "[代表] 王主任好，上次提到的免疫治疗数据我整理好了。\n"
+        "[医生] 嗯，老年患者那部分再展开讲讲。\n"
+        "[代表] 老年亚组安全性与总体一致，常见不良事件是骨髓抑制……\n"
+        "[医生] 行，下周科室会你来讲真实世界研究这块。"
+    )
     if db.execute(SQL_COUNT_DEMO_VISIT, {"uid": rep.id, "visit_time": visit_time}).scalar() == 0:
         db.execute(SQL_INSERT_VISIT, {
             "hcp_id": hcp.id, "user_id": rep.id, "specialist_id": twin.id,
             "visit_time": visit_time,
-            "transcript": "李明：王主任好，上次提到的免疫治疗数据我整理好了。\n"
-                          "王主任：嗯，老年患者那部分再展开讲讲。\n"
-                          "李明：老年亚组安全性与总体一致，常见不良事件是骨髓抑制……\n"
-                          "王主任：行，下周科室会你来讲真实世界研究这块。",
+            "transcript": demo_transcript,
             "summary": "拜访市第一人民医院肿瘤内科王建国主任，围绕免疫联合治疗老年患者安全性"
                        "展开交流，王主任对真实世界研究数据表达关注，约定下周科室会讲解。",
             "key_points": json.dumps(["老年亚组安全性", "真实世界研究关注"]),
@@ -437,6 +442,13 @@ def seed(db, password: str) -> dict:
             "created_at": datetime.utcnow() - timedelta(days=1),
         })
         stats["visits"] = 1
+    else:
+        # transcript 幂等刷无条件覆写（卡片 feedback 同款先例）：
+        # 存量行的旧「李明：」格式刷新后才能被分身选材命中
+        db.execute(text(
+            "UPDATE visit_records SET conversation_transcript = :t "
+            "WHERE user_id = :uid AND visit_time = :visit_time"
+        ), {"t": demo_transcript, "uid": rep.id, "visit_time": visit_time})
 
     db.commit()
     return stats

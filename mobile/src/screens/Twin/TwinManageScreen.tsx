@@ -69,6 +69,12 @@ export default function TwinManageScreen() {
     loadTwins();
   }, [loadTwins]);
 
+  // 从「从历史记录生成分身」返回时刷新列表（生成成功后新分身要出现）
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', loadTwins);
+    return unsub;
+  }, [navigation, loadTwins]);
+
   const togglePause = async (twin: Twin) => {
     setBusyId(twin.id);
     try {
@@ -189,6 +195,16 @@ export default function TwinManageScreen() {
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.cardTitle}>风格测试生成分身</Text>
           <Text style={styles.hint}>回答 5 题，系统按你的风格画像创建专属分身</Text>
+          {/* 2026-09-10 双入口：也可选历史对话记录，由 AI 从真实发言提炼风格 */}
+          <TouchableOpacity
+            style={styles.fromRecordsBtn}
+            onPress={() => navigation.navigate('StyleSource')}
+            activeOpacity={0.7}
+          >
+            <Icon name="history" size={16} color={Colors.primary} />
+            <Text style={styles.fromRecordsText}>用我的真实对话记录生成（推荐）</Text>
+            <Icon name="chevron-right" size={16} color={Colors.border} />
+          </TouchableOpacity>
           {STYLE_QUESTIONS.map((item, qi) => (
             <View key={qi} style={styles.question}>
               <Text style={styles.questionText}>{qi + 1}. {item.q}</Text>
@@ -294,6 +310,12 @@ const styles = StyleSheet.create({
   toggleBtnResume: { borderColor: Colors.success },
   toggleText: { color: Colors.danger, fontSize: FontSize.sm, fontWeight: '600' },
   question: { marginBottom: Spacing.md },
+  fromRecordsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.xs,
+    borderWidth: 1, borderColor: Colors.primary, borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.primarySurface, padding: Spacing.sm, marginBottom: Spacing.md,
+  },
+  fromRecordsText: { flex: 1, fontSize: FontSize.sm, color: Colors.primary, fontWeight: '600' },
   questionText: { fontSize: FontSize.sm, color: Colors.textPrimary, marginBottom: Spacing.xs, lineHeight: 20 },
   generateBtn: {
     marginTop: Spacing.sm, backgroundColor: Colors.primary, borderRadius: BorderRadius.sm,

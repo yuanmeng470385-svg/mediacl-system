@@ -51,14 +51,18 @@ def _inject_preference(question: str, db, user_id: int) -> str:
 
 
 def _inject_persona_style(question: str, specialist) -> str:
-    """分身 persona.style → prompt 风格注入（写而不读收尾 2026-08-27）。
+    """分身 persona → prompt 风格注入（写而不读收尾 2026-08-27）。
 
     代表在分身管理设置/风格测试产出的 persona.style（formal_level /
     reply_length / opening_mode）此前全仓无消费方，对话完全不受影响。
     本函数把风格设定作为提示注入，让「风格设置」真正作用于回答。
+    2026-09-10 增量：从历史记录生成的分身还带 persona.style_profile
+    （LLM 依据本人真实发言提炼的语言画像），一并注入。
 
-    - 无 persona/style（或读取异常）→ 原样返回 question（零扰动）
+    - 无 persona/style/style_profile（或读取异常）→ 原样返回 question（零扰动）
     - 只注入分身自身设定，不改任何医学事实；合规/流式门禁不动
+    - style_profile 是 LLM 产出的自由文本：压平换行（防结构性内容混入
+      prompt）并截 500 字，枚举缺失但有画像时仍注入画像
     - 与 _inject_preference 同拼接模式，REST generate 与 WS generate_stream 共用
     """
     try:
@@ -71,6 +75,9 @@ def _inject_persona_style(question: str, specialist) -> str:
         v = style.get(key)
         if v:
             parts.append(f"{label}：{v}")
+    profile = persona.get("style_profile")
+    if isinstance(profile, str) and profile.strip():
+        parts.append("风格画像：" + " ".join(profile.split())[:500])
     if not parts:
         return question
     return f"{question}\n（分身风格设定——请在回答中体现：" + "；".join(parts) + "）"

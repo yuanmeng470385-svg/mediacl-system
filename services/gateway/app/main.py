@@ -328,6 +328,9 @@ async def proxy(request: Request, path: str):
     elif (
         path == "api/v1/skill-packages/extract-draft"
         or (path.startswith("api/v1/practices/") and path.endswith("/complete"))
+        # 从历史记录生成分身（2026-09-10）：合并素材全文直调 LLM 同步提取风格，
+        # 与 extract-draft 同款慢链 —— 精确匹配，勿并入 startswith 分支
+        or path == "api/v1/specialists/style-from-records"
     ):
         proxy_timeout = 120.0
     else:
