@@ -51,6 +51,7 @@ from shared.models.academic import AcademicCard, CardPushRecord, Notification  #
 from shared.models.doctor_profile import DoctorProfile  # noqa: E402
 from shared.models.patient_edu import PatientEduTemplate, EduContentRecord  # noqa: E402
 from shared.models.hcp import Hcp  # noqa: E402
+from shared.models.practice import ObjectionScript  # noqa: E402
 
 SH = ZoneInfo("Asia/Shanghai")
 DEMO_EXPIRE = date(2027, 12, 31)   # 演示备案到期日：必须未来（24h 扫描会冻结过期的 approved 代表）
@@ -467,6 +468,31 @@ def seed(db, password: str) -> dict:
             "WHERE user_id = :uid AND visit_time = :visit_time"
         ), {"t": demo_transcript, "uid": rep.id, "visit_time": visit_time})
 
+    # ---------- 异议话术库（2026-09-10 异议话术批：AI 陪练考点 + 收尾考点回顾有数据） ----------
+    # 6 条 approved（心内科 ×4 + 肿瘤科 ×2）：陪练 turn 注入素材 + complete 回显 objections_used；
+    # 幂等键 = scenario_type + objection_content（同 _get_or_create 先例）
+    admin_id = admin.id if admin else None
+    for scen, content, guidance in [
+        ("心内科推广", "医生异议：这款药有真实世界数据吗？",
+         "引用中国真实世界研究的疗效与安全性结果，说明样本特征与注册研究的差异。"),
+        ("心内科推广", "医生异议：和现在的一线方案比，有头对头研究吗？",
+         "如实回答是否有头对头研究；无则说明不同研究的人群与终点差异，不建议跨研究直接比较。"),
+        ("心内科推广", "医生异议：老年患者长期使用的安全性怎么样？",
+         "引用老年亚组安全性与总体人群一致的数据，提示常见不良事件与监测要点。"),
+        ("心内科推广", "医生异议：这个药进医保了吗？自付比例高不高？",
+         "按当前医保目录如实回答，不确定的报销政策建议医生咨询当地医保部门。"),
+        ("肿瘤科推广", "医生异议：免疫联合治疗老年患者耐受得住吗？",
+         "引用老年亚组安全性与总体人群一致的数据，强调早识别、早干预的管理原则。"),
+        ("肿瘤科推广", "医生异议：不同研究的数据能放在一起比吗？",
+         "说明跨研究比较受人群与终点设计差异限制，建议以各自研究内部结论为准。"),
+    ]:
+        _get_or_create(
+            db, ObjectionScript, scenario_type=scen, objection_content=content,
+            defaults={"response_guidance": guidance, "review_status": "approved",
+                      "version": "1.0", "created_by": admin_id, "reviewed_by": admin_id},
+        )
+    stats["objection_scripts"] = db.query(ObjectionScript).filter_by(review_status="approved").count()
+
     db.commit()
     return stats
 
@@ -490,12 +516,14 @@ def main() -> int:
     print(f"  demo_doctor id={doctor_id} 13900001002  演示医生·周琴（认证 approved）")
     print(f"  密码：{args.password}（用户名或手机号均可登录）")
     print(f"  分身：官方 #{official_id} / 李明的分身 #{twin_id}（百炼 App：{'已挂' if stats['bailian_app'] else '未找到，对话将降级！'}）")
-    print("  数据：医生对话×%s 卡片×1 推送×1 通知×4 简报×1 患教模板×2 患教专区×1 拜访×%s" % (stats.get("conversations", 0), stats.get("visits", 0)))
+    print("  数据：医生对话×%s 卡片×1 推送×1 通知×4 简报×1 患教模板×2 患教专区×1 拜访×%s 异议话术×%s" % (
+        stats.get("conversations", 0), stats.get("visits", 0), stats.get("objection_scripts", 0)))
     print("-" * 62)
     print("演示动线建议：")
     print("  web   admin 登录 → 仪表盘/MAH 总览（备案+培训完成率 100%）→ 监管报告导出")
     print("  rep   demo_rep → 工作台 → 与分身对话 → 通知中心（2 条未读）→ 夜间简报")
     print("        → 学术卡片推送（push-targets 勾选周琴）→ 拜访记录")
+    print("        → AI 陪练（心内科推广：异议话术命中注入 + 收尾「本次考点回顾」）")
     print("  doc   demo_doctor → 广场/订阅 → 收件箱（1 张卡片）→ 患教专区 → 我的患教")
     print("=" * 62)
     return 0

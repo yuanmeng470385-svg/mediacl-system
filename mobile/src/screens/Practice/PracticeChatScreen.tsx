@@ -11,6 +11,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Icon from '../../components/Icon';
 import { practiceAPI } from '../../api/practice';
+import type { ObjectionUsedItem } from '../../api/practice';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
@@ -49,6 +50,8 @@ export default function PracticeChatScreen() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [scores, setScores] = useState<Scores | null>(null);
+  /** 2026-09-10 异议话术批：本场命中的考点话术（complete 响应回显，api 层已映射） */
+  const [objectionsUsed, setObjectionsUsed] = useState<ObjectionUsedItem[]>([]);
   const [completing, setCompleting] = useState(false);
 
   const send = async () => {
@@ -74,6 +77,7 @@ export default function PracticeChatScreen() {
     try {
       const session = await practiceAPI.complete(sessionId);
       setScores(session?.scores ?? null);
+      setObjectionsUsed(session?.objectionsUsed ?? []);
     } catch (err: any) {
       Alert.alert('结束失败', err?.message || '请稍后重试');
     } finally {
@@ -163,6 +167,22 @@ export default function PracticeChatScreen() {
                     <View key={i} style={styles.turnItem}>
                       <Text style={styles.turnLabel}>第 {pt.turn ?? i + 1} 轮</Text>
                       <Text style={styles.turnFeedback}>{pt.feedback || '—'}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+
+              {/* 2026-09-10 异议话术批：本场命中的考点话术与标准回应思路 */}
+              {objectionsUsed.length > 0 ? (
+                <View style={styles.turnBlock}>
+                  <Text style={styles.turnTitle}>本次考点回顾（{objectionsUsed.length}）</Text>
+                  <Text style={styles.reviewHint}>本场陪练命中的异议题库与标准回应思路</Text>
+                  {objectionsUsed.map((o, i) => (
+                    <View key={i} style={styles.reviewItem}>
+                      <Text style={styles.reviewQ}>异议 {i + 1}：{o.content}</Text>
+                      {o.guidance ? (
+                        <Text style={styles.reviewA}>回应思路：{o.guidance}</Text>
+                      ) : null}
                     </View>
                   ))}
                 </View>
@@ -280,6 +300,13 @@ const styles = StyleSheet.create({
   turnItem: { backgroundColor: Colors.backgroundAlt, borderRadius: BorderRadius.md, padding: Spacing.md, marginBottom: Spacing.sm },
   turnLabel: { fontSize: FontSize.xs, fontWeight: '600', color: Colors.textSecondary, marginBottom: 2 },
   turnFeedback: { fontSize: FontSize.sm, color: Colors.textPrimary, lineHeight: 20 },
+  reviewHint: { fontSize: FontSize.xs, color: Colors.textHint, marginBottom: Spacing.sm },
+  reviewItem: {
+    backgroundColor: Colors.backgroundAlt, borderRadius: BorderRadius.md,
+    padding: Spacing.md, marginBottom: Spacing.sm, borderLeftWidth: 3, borderLeftColor: Colors.primary,
+  },
+  reviewQ: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.textPrimary, lineHeight: 20 },
+  reviewA: { fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 20, marginTop: 4 },
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end', padding: Spacing.md, gap: Spacing.sm,
     backgroundColor: Colors.white, ...Shadow.header,

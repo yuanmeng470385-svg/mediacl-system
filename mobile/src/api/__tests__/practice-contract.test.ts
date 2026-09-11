@@ -24,6 +24,34 @@ describe('practice/plaza/twin API', () => {
     expect(JSON.parse(init.body)).toEqual({ message: '您好' });
   });
 
+  it('complete 发 POST 且 objections_used 映射为 objectionsUsed（异议话术批 2026-09-10）', async () => {
+    fetchMock.mockResolvedValue(okResponse({
+      id: 1, status: 'completed',
+      scores: { overall: 0.8 },
+      objections_used: [
+        { content: '医生异议：真实世界数据在哪？', guidance: '引用中国亚组数据' },
+        { content: '老年患者用着安全吗？', guidance: null },
+      ],
+    }));
+    const res = await practiceAPI.complete(1);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/practices/1/complete');
+    expect(init.method).toBe('POST');
+    // 映射后形状（2026-09-04 通知契约同款教训：响应形状也要锁，不只锁请求）
+    expect(res.objectionsUsed).toEqual([
+      { content: '医生异议：真实世界数据在哪？', guidance: '引用中国亚组数据' },
+      { content: '老年患者用着安全吗？', guidance: null },
+    ]);
+    expect(res.objections_used).toBeUndefined();  // snake_case 不外漏
+    expect(res.scores).toEqual({ overall: 0.8 }); // 其余字段原样透传
+  });
+
+  it('complete 后端无异议字段时 objectionsUsed 兜底空数组', async () => {
+    fetchMock.mockResolvedValue(okResponse({ id: 2, status: 'completed', scores: {} }));
+    const res = await practiceAPI.complete(2);
+    expect(res.objectionsUsed).toEqual([]);
+  });
+
   it('plazaList 发 GET /api/v1/skill-packages/public', async () => {
     await plazaAPI.list();
     const { url, init } = lastCall();

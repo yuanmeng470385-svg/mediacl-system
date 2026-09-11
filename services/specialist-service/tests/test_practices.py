@@ -1,6 +1,8 @@
 """陪练会话测试（Task 3）：创建/多轮对话/评分/历史"""
+import json
 import os
 import sys
+from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -24,6 +26,7 @@ from shared.models.base import Base
 from shared.models.practice import ObjectionScript, PracticeSession
 from shared.models.skill import SkillPackage
 from shared.models.user import User
+from shared.models.visit import VisitRecord
 
 import app.api.practices as practices_api
 from app.main import app
@@ -61,7 +64,10 @@ def _token(user_id: int, role: str) -> dict:
 
 @pytest.fixture(autouse=True)
 def fresh_state(monkeypatch):
-    tables = [User.__table__, SkillPackage.__table__, PracticeSession.__table__, ObjectionScript.__table__]
+    # VisitRecord（2026-09-10 异议话术提取扩拜访素材）：仅建本表即可——
+    # SQLite 不强制外键，hcps/products 等被引用表可以不存在（同 test_twin_manage）
+    tables = [User.__table__, SkillPackage.__table__, PracticeSession.__table__,
+              ObjectionScript.__table__, VisitRecord.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     db = TestSession()
@@ -758,3 +764,201 @@ def test_session_to_dict_transcript_switch():
     s = PracticeSession(id=1, representative_id=1, scenario="心内科", transcript=[{"turn": 1}])
     assert s.to_dict()["transcript"] == [{"turn": 1}]
     assert "transcript" not in s.to_dict(include_transcript=False)
+
+
+# ============ 2026-09-10 异议话术批：编辑 / AI 起草 / 真实数据提取 / 收尾考点回显 ============
+
+def test_update_objection_script_pending_resets(fresh_state):
+    _add_objection(id=1, review_status="pending")
+    resp = client.put("/api/v1/practices/objection-scripts/1", json={
+        "scenario_type": "心内科", "objection_content": "医生异议：真实世界数据在哪？",
+        "response_guidance": "引用中国亚组数据", "version": "2.0",
+    }, headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["objection_content"] == "医生异议：真实世界数据在哪？"
+    assert body["data"]["version"] == "2.0"
+    assert body["data"]["review_status"] == "pending"
+    _, kwargs = fresh_state.call_args
+    assert kwargs["action"] == "objection_script_update"
+    assert kwargs["before_value"]["objection_content"] == "医生异议：和竞品相比优势在哪？"
+
+
+def test_update_objection_script_rejected_clears_review(fresh_state):
+    _add_objection(id=1, review_status="rejected", review_reason="表述不严谨", reviewed_by=2)
+    resp = client.put("/api/v1/practices/objection-scripts/1", json={
+        "scenario_type": "心内科", "objection_content": "改好的异议",
+    }, headers=_token(2, "admin"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["review_status"] == "pending"
+    assert body["data"]["review_reason"] is None
+    assert body["data"]["reviewed_by"] is None
+
+
+def test_update_objection_script_approved_forbidden(fresh_state):
+    _add_objection(id=1, review_status="approved")
+    resp = client.put("/api/v1/practices/objection-scripts/1", json={
+        "scenario_type": "心内科", "objection_content": "x",
+    }, headers=_token(2, "admin"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_update_objection_script_rep_403_missing_4000(fresh_state):
+    resp = client.put("/api/v1/practices/objection-scripts/1", json={
+        "scenario_type": "心内科", "objection_content": "x",
+    }, headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    _add_objection(id=1)
+    resp = client.put("/api/v1/practices/objection-scripts/999", json={
+        "scenario_type": "心内科", "objection_content": "x",
+    }, headers=_token(2, "admin"))
+    assert resp.json()["code"] == 4000
+
+
+def _mk_items_chat(captured: dict, items=None):
+    """构造回 {"items": [...]} JSON（带 ``` 围栏）的 fake chat，捕获 messages/kwargs"""
+    from app.services import qwen_client as qc
+    if items is None:
+        items = [
+            {"scenario_type": "心内科推广", "objection_content": "有头对头研究吗？",
+             "response_guidance": "引用 III 期注册研究结果对比"},
+            {"scenario_type": "心内科推广", "objection_content": "老年患者用着安全吗？",
+             "response_guidance": ""},
+        ]
+    content = "```json\n" + json.dumps({"items": items}, ensure_ascii=False) + "\n```"
+
+    def fake_chat(self, messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": content, "usage": {}}
+
+    return qc, fake_chat
+
+
+def test_ai_generate_returns_drafts_without_persisting(fresh_state, monkeypatch):
+    captured = {}
+    qc, fake = _mk_items_chat(captured)
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/objection-scripts/ai-generate",
+                       json={"scenario": "心内科推广"}, headers=_token(3, "medical"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["scenario"] == "心内科推广"
+    assert len(body["data"]["items"]) == 2
+    assert body["data"]["items"][0]["scenario_type"] == "心内科推广"
+    assert body["data"]["items"][1]["response_guidance"] is None  # 空串归一为 None
+    db = TestSession()
+    assert db.query(ObjectionScript).count() == 0  # 草稿无状态不落库
+    db.close()
+    user_msg = captured["messages"][1]["content"]
+    assert "<user_content>心内科推广</user_content>" in user_msg
+    assert captured["kwargs"]["timeout"] == 90.0  # 慢链预算与 extract-draft 对齐
+    _, kwargs = fresh_state.call_args
+    assert kwargs["action"] == "objection_script_ai_generate"
+
+
+def test_ai_generate_requires_scenario(fresh_state):
+    resp = client.post("/api/v1/practices/objection-scripts/ai-generate", json={},
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 400
+    assert resp.json()["code"] == 1000
+
+
+def test_ai_generate_llm_failure_4003(fresh_state, monkeypatch):
+    from app.services import qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {"content": "not json", "usage": {}})
+    resp = client.post("/api/v1/practices/objection-scripts/ai-generate",
+                       json={"scenario": "心内科推广"}, headers=_token(2, "admin"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4003
+
+
+def test_ai_generate_rep_403(fresh_state):
+    resp = client.post("/api/v1/practices/objection-scripts/ai-generate",
+                       json={"scenario": "心内科推广"}, headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def _add_extract_material():
+    db = TestSession()
+    db.add(PracticeSession(
+        id=11, representative_id=1, skill_id=None, scenario="心内科推广",
+        status="completed", turn_count=2,
+        transcript=[
+            {"turn": 1, "role": "rep", "content": "代表开场白"},
+            {"turn": 1, "role": "ai", "content": "这款药有真实世界数据吗？"},
+            {"turn": 2, "role": "ai", "content": "老年患者安全性如何？"},
+        ],
+    ))
+    db.add(VisitRecord(
+        id=21, user_id=1, visit_time=datetime(2026, 9, 1, 10), status="completed",
+        hcp_objections=["竞品已经进了医保，你们的自付比例高吗？"],
+        conversation_transcript="[代表] 主任好，想同步下最新数据\n[医生] 我担心跨研究比较的可行性\n",
+    ))
+    db.commit()
+    db.close()
+
+
+def test_extract_drafts_mines_practices_and_visits(fresh_state, monkeypatch):
+    _add_extract_material()
+    captured = {}
+    qc, fake = _mk_items_chat(captured)
+    monkeypatch.setattr(qc.QwenClient, "chat", fake)
+    resp = client.post("/api/v1/practices/objection-scripts/extract-draft",
+                       headers=_token(2, "admin"))  # 空 body 合法
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["sources"] == {"practice_sessions": 1, "visits": 1}
+    user_msg = captured["messages"][1]["content"]
+    # 陪练 AI 医生发言 + 拜访医生异议 + [医生] 转写行都进素材；代表发言不进
+    assert "这款药有真实世界数据吗？" in user_msg
+    assert "竞品已经进了医保" in user_msg
+    assert "我担心跨研究比较的可行性" in user_msg
+    assert "代表开场白" not in user_msg
+    db = TestSession()
+    assert db.query(ObjectionScript).count() == 0  # 草稿无状态不落库
+    db.close()
+    _, kwargs = fresh_state.call_args
+    assert kwargs["action"] == "objection_script_extract"
+
+
+def test_extract_drafts_empty_material_4001(fresh_state):
+    resp = client.post("/api/v1/practices/objection-scripts/extract-draft",
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 422
+    assert resp.json()["code"] == 4001
+
+
+def test_extract_drafts_skips_cancelled_visits(fresh_state):
+    db = TestSession()
+    db.add(VisitRecord(id=21, user_id=1, visit_time=datetime(2026, 9, 1, 10),
+                       status="cancelled", hcp_objections=["取消拜访的异议"]))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/practices/objection-scripts/extract-draft",
+                       headers=_token(2, "admin"))
+    assert resp.status_code == 422  # 唯一素材是 cancelled 拜访 → 无可提取素材
+
+
+def test_complete_includes_objections_used(fresh_state):
+    db = TestSession()
+    db.add(PracticeSession(id=1, representative_id=1, skill_id=None, scenario="心内科推广",
+                           status="in_progress", turn_count=2))
+    db.add(ObjectionScript(id=1, scenario_type="心内科", objection_content="医生异议：真实世界数据在哪？",
+                           response_guidance="引用中国亚组数据", review_status="approved"))
+    db.add(ObjectionScript(id=2, scenario_type="肿瘤科", objection_content="不该出现的场景话术",
+                           review_status="approved"))
+    db.add(ObjectionScript(id=3, scenario_type="心内科", objection_content="pending 不回显",
+                           review_status="pending"))
+    db.commit()
+    db.close()
+    resp = client.post("/api/v1/practices/1/complete", json={}, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["objections_used"] == [
+        {"content": "医生异议：真实世界数据在哪？", "guidance": "引用中国亚组数据"},
+    ]
+    _, kwargs = fresh_state.call_args
+    assert kwargs["after_value"]["objections"] == 1

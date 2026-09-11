@@ -92,9 +92,11 @@ def test_visits_ai_routes_timeout_carve_out(monkeypatch):
 
 
 def test_skill_practices_ai_routes_timeout_carve_out(monkeypatch):
-    """extract-draft / practices complete（同步 LLM 慢链）走 120s，其余维持 30s
+    """extract-draft / practices complete / 异议话术 AI 草稿两路由（同步 LLM 慢链）
+    走 120s，其余维持 30s
 
-    红线：精确匹配 —— release 与 practices turn 等非 LLM 轻路由不得被顺带放宽。
+    红线：精确匹配 —— release 与 practices turn 等非 LLM 轻路由不得被顺带放宽；
+    objection-scripts 的 create/review 同理维持 30s（2026-09-10 异议话术批补入断言）。
     sub=3：独立限流窗口，避免与本文件及其他用例的 u:1 请求在 60/min 内存
     窗口里累计顶限。
     """
@@ -107,6 +109,9 @@ def test_skill_practices_ai_routes_timeout_carve_out(monkeypatch):
             await c.post("/api/v1/skill-packages/release", headers=_auth_headers("3"))
             await c.post("/api/v1/practices/1/complete", headers=_auth_headers("3"))
             await c.post("/api/v1/practices/1/turn", headers=_auth_headers("3"))
+            await c.post("/api/v1/practices/objection-scripts/ai-generate", headers=_auth_headers("3"))
+            await c.post("/api/v1/practices/objection-scripts", headers=_auth_headers("3"))
+            await c.post("/api/v1/practices/objection-scripts/extract-draft", headers=_auth_headers("3"))
 
     asyncio.run(_run())
-    assert timeouts == [120.0, 30.0, 120.0, 30.0]
+    assert timeouts == [120.0, 30.0, 120.0, 30.0, 120.0, 30.0, 120.0]

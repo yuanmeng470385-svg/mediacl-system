@@ -13,6 +13,26 @@ import { apiClient } from './client';
  */
 const AI_SYNC_TIMEOUT_MS = 120000;
 
+/** complete 响应中的考点话术（2026-09-10 异议话术批） */
+export interface ObjectionUsedItem {
+  content: string;
+  guidance: string | null;
+}
+
+/** complete 响应映射（收口 api 层）：后端 objections_used → objectionsUsed（原键不外漏） */
+const mapComplete = (raw: any): any => {
+  const { objections_used: _rawUsed, ...rest } = raw ?? {};
+  return {
+    ...rest,
+    objectionsUsed: (Array.isArray(raw?.objections_used) ? raw.objections_used : []).map(
+      (o: any): ObjectionUsedItem => ({
+        content: String(o?.content ?? ''),
+        guidance: typeof o?.guidance === 'string' ? o.guidance : null,
+      }),
+    ),
+  };
+};
+
 export const practiceAPI = {
   create: (payload: { skill_id?: number; scenario: string }) =>
     apiClient.request<any>('POST', '/api/v1/practices', payload),
@@ -20,7 +40,9 @@ export const practiceAPI = {
     apiClient.request<any>('POST', `/api/v1/practices/${sessionId}/turn`, { message }),
   // complete：评分链同步等 LLM，超时放宽到 120s（决策 11，与网关 carve-out 对齐）
   complete: (sessionId: number) =>
-    apiClient.request<any>('POST', `/api/v1/practices/${sessionId}/complete`, {}, AI_SYNC_TIMEOUT_MS),
+    apiClient
+      .request<any>('POST', `/api/v1/practices/${sessionId}/complete`, {}, AI_SYNC_TIMEOUT_MS)
+      .then(mapComplete),
   list: () => apiClient.request<any>('GET', '/api/v1/practices'),
 };
 
