@@ -752,9 +752,18 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - **§2 web build+nginx**：`deploy/nginx/medagent-web.conf`（SPA try_files 回退——BrowserRouter 深链依赖；/api/ 反代 8000 + WS 升级头透传；client_max_body_size 20m；gzip；/health 同步代理）+ `deploy/README.md` 部署总手册（.env 生产值/compose 起后端/nginx 起 web/APK/账号入口/转正式清单）+ `deploy/env.production.example`。web build 过（37s）
 - **§3 AUTH_DEV_MODE 生产守卫**：auth config 加 `DEPLOY_ENV`（默认 dev）；main.py 启动守卫——`DEV_MODE=true 且 DEPLOY_ENV=production` → RuntimeError 拒绝启动，dev 环境维持警告。`.env.example` 补 DEPLOY_ENV/SHARE_WEB_URL_BASE 注释。测试 test_deploy_guard.py（子进程 import 断言三条，B5 库密码守卫用非默认密码 DATABASE_URL 绕开聚焦被测守卫）
 - **§4 分享落地页**：specialist `twin_subscriptions.py` 的 share_url 前缀改 `_share_url(token)` 每请求读 env——设 `SHARE_WEB_URL_BASE` → `{base}/share/twin/{token}`，不设 → 深链 `medagent-doctor://twin/{token}` 兼容（SHARE_URL_PREFIX 常量删，全仓无外部引用）；specialist conftest autouse 清该键防根 .env 演示值污染断言。web 新增公开路由 `/share/twin/:token`（`web/src/pages/ShareTwin/`，token 32hex 校验、激活码大字+复制（clipboard+execCommand 兜底）+唤起 App+微信提示，深链拼装抽 `deepLink.ts` 纯函数供 vitest）；根 .env 加 `SHARE_WEB_URL_BASE=http://192.168.1.229:3000`（演示态；上 nginx 改 80）。医生端 App 无需改（token 兼容手输）
-- **§5 医生自助注册**：auth `POST /api/v1/auth/register`（公开；phone `^1[3-9]\d{9}$` + full_name 2-30 + 密码≥8 含字母数字；重复 4001「该手机号已注册」；建 User{username=phone, role=doctor, active, bcrypt}；hospital/department/title 选填落 **hcps 表**（医生档案归宿；doctor_profiles 是偏好画像无这些列——**未新增迁移，下一编号仍 030**）；审计 auth_register；响应 {token,user} 注册即登录）。网关 PUBLIC_PATHS += `/api/v1/auth/register`。mobile-doctor：authAPI.register + AuthContext.register + RegisterScreen（仿 LoginScreen 卡片范式，7 字段+协议勾选+两次密码确认）+ LoginScreen「立即注册」入口 + 未登录栈 Register 路由 + auth-contract.test.ts 5 用例
+- **§5 医生自助注册**：auth `POST /api/v1/auth/register`（公开；phone `^1[3-9]\d{9}$` + full_name 2-30 + 密码≥8 含字母数字；重复 4001「该手机号已注册」；建 User{username=phone, role=doctor, active, bcrypt}；hospital/department/title 选填落 **hcps 表**（医生档案归宿；doctor_profiles 是偏好画像无这些列——**未新增迁移，下一编号仍 030**）；审计 auth_register；响应 {token,user} 注册即登录）。网关 PUBLIC_PATHS += `/api/v1/auth/register`。mobile-doctor：authAPI.register + AuthContext.register + RegisterScreen（仿 LoginScreen 卡片范式，7 字段+协议勾选+两次密码确认）+ LoginScreen「立即注册」入口 + 未登录栈 Register 路由 + auth-contract.test.ts 5 用例（**当日下午升级为验证码制：密码撤、code 必填，见下方增补批**）
 - 基线：specialist 389 / gateway 90 / auth 179+7skip / mobile 117 / mobile-doctor 48 / web vitest 26 / web build PASS / 双 assembleRelease PASS；8 服务 dev_up 重启 + 接口冒烟全过（注册→注册 token 取 profile→密码登录→重复 422/4001→弱密码 400→share_url 落地页形态；冒烟医生行按三期 L 注销语义软删——users 被 audit_logs FK 挡物理删除属 002 设计）；web dev :3000 已起（落地页 curl 200）
 - 新 env 键：`DEPLOY_ENV`（dev/production，auth 生产守卫）、`SHARE_WEB_URL_BASE`（分享落地页前缀；specialist 每请求读，重启生效）
+
+**医生端验证码注册批（2026-09-14 下午，§5 升级为验证码制）**：手机号真实性由短信通道验证，注册不再收密码（登录走验证码，登录页密码模式对未设密码账号不适用）。
+- 后端 `code_store.py`：CodeStore 全方法加 `scene` 参数（默认 login，键格式不变；register 场景独立键 `authcode:reg:*`，两场景码互不通用）+ 新增 `daily_count/bump_daily`（滚动 24h 日限，跨场景按手机号累计）；MemoryCodeStore 键改 `(phone, scene)` 元组
+- `send-code` 加 `scene` 参数：register 场景**反向防枚举**——已注册号（含 username 撞号）4001「该手机号已注册，请直接登录」明确拒绝不发码，未注册号才发；login 场景行为不变（对未注册号静默）；审计 after_value 记 scene
+- `register` 端点：`code` 必填（scene=register 码核销，consume 原子防重放；**查重在验码前——撞号不烧码**）；`password` 改选填（填了才校验强度，不填 password_hash=None 禁密码登录）；错码 400「验证码错误或已过期」（notfound/mismatch/exhausted 统一文案）
+- 新 env `AUTH_CODE_DAILY_LIMIT=10`（SMS 成本护栏，.env.example 有注释）
+- mobile-doctor：authAPI.sendCode(phone, 'register') + register payload {phone, code, full_name, ...}（密码字段撤）；RegisterScreen 验证码行+60s 倒计时（照 LoginScreen），密码/确认密码字段撤
+- 测试坑：test_auth 的 `BrokenCodeStore` 桩必须跟接口加 scene kwarg+daily 两方法（抽象类缺实现直接 TypeError）；test_auth 全文件共用一个 store，发码用例会累积触顶日限把后面的用例拖死——autouse fixture 每用例清 `_daily`（冷却/码键不动）；「注册测试 token 真验 profile」可行——shared get_current_user 走 Depends(get_db)，SQLite override 下注册用户查得到，不必 stub
+- 基线：auth 198（Redis 在跑 0 skip）/ mobile-doctor jest 49 + tsc 0；gateway 零改动
 
 ## Backup & Restore（2026-08-12 新增）
 

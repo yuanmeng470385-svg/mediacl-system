@@ -54,8 +54,9 @@ release 包已放开明文流量（`app/src/release/AndroidManifest.xml`），AP
 
 ## 5. 账号入口
 
-- **医生自助注册**：医生端 App 登录页「立即注册」（手机号+姓名+密码，注册即登录，
-  后端 `POST /api/v1/auth/register`）——给新医生装机后先走这里。
+- **医生自助注册**：医生端 App 登录页「立即注册」（验证码制：手机号→获取验证码→
+  姓名+选填医院信息，注册即登录，后端 `POST /api/v1/auth/register`；验证码走
+  `send-code` 的 `scene=register`，只对未注册号下发）——给新医生装机后先走这里。
 - 管理员/代表账号：admin 在 web 后台 `POST /api/v1/users` 建号，或 seed 脚本。
 - 演示账号备案见根 CLAUDE.md。
 

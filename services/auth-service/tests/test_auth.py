@@ -71,16 +71,22 @@ class RecordingSender:
 class BrokenCodeStore(CodeStore):
     """模拟 Redis 挂掉"""
 
-    def in_cooldown(self, phone):
+    def in_cooldown(self, phone, scene="login"):
         raise CodeStoreError("redis down")
 
-    def save(self, phone, code, ttl, cooldown):
+    def save(self, phone, code, ttl, cooldown, scene="login"):
         raise CodeStoreError("redis down")
 
-    def consume(self, phone, code, max_attempts):
+    def consume(self, phone, code, max_attempts, scene="login"):
         raise CodeStoreError("redis down")
 
-    def drop(self, phone):
+    def drop(self, phone, scene="login"):
+        raise CodeStoreError("redis down")
+
+    def daily_count(self, phone):
+        raise CodeStoreError("redis down")
+
+    def bump_daily(self, phone):
         raise CodeStoreError("redis down")
 
 
@@ -100,6 +106,15 @@ def _override_db():
 app.dependency_overrides[get_db] = _override_db
 app.dependency_overrides[get_code_store] = lambda: store
 app.dependency_overrides[get_sender] = lambda: sender
+
+
+@pytest.fixture(autouse=True)
+def _reset_daily_limit():
+    """滚动日限（默认 10 条/号/24h）是产品行为，本文件不测它——
+    但整文件共用一个 store，十几个发码用例会累积触顶，把后面的用例
+    一起拖死。每用例清空日限计数（冷却/验证码键不动，各自的用例自理）。"""
+    store._daily.clear()
+    yield
 
 client = TestClient(app)
 

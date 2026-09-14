@@ -1,9 +1,10 @@
 /**
- * 注册页 - 医生端（部署挂账 §5：医生无自助注册）
- * 手机号+姓名+密码自助注册（医院/科室/职称选填），注册即登录。
+ * 注册页 - 医生端（验证码制注册，2026-09-14 升级）
+ * 手机号+验证码（scene=register，只对未注册号发）+姓名（医院/科室/职称选填），
+ * 注册即登录；不设密码，登录走验证码（登录页密码模式对未设密码账号不适用）。
  * 视觉/交互照 LoginScreen（同一张卡片范式），校验口径与后端 register 端点一致。
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +20,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../store/AuthContext';
+import { authAPI } from '../../api/auth';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { RootStackParamList } from '../../navigation/types';
 
@@ -28,35 +30,64 @@ export default function RegisterScreen() {
   const { register } = useAuth();
 
   const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
   const [fullName, setFullName] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
   const [hospital, setHospital] = useState('');
   const [department, setDepartment] = useState('');
   const [title, setTitle] = useState('');
   const [agreed, setAgreed] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [countdown, setCountdown] = useState(0);
   const [loading, setLoading] = useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setInterval>>();
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   const validatePhone = (p: string) => /^1[3-9]\d{9}$/.test(p);
-  const validatePassword = (p: string) =>
-    p.length >= 8 && /[A-Za-z]/.test(p) && /\d/.test(p);
+
+  const handleSendCode = async () => {
+    if (!validatePhone(phone)) {
+      Alert.alert('提示', '请输入正确的手机号');
+      return;
+    }
+    setSendingCode(true);
+    try {
+      // 注册场景：只对未注册号发码；已注册号后端返回 4001「请直接登录」
+      await authAPI.sendCode(phone, 'register');
+      setCountdown(60);
+      timerRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      Alert.alert('提示', '验证码已发送，请查收短信');
+    } catch (e: any) {
+      Alert.alert('发送失败', e.message || '请稍后重试');
+    } finally {
+      setSendingCode(false);
+    }
+  };
 
   const handleRegister = async () => {
     if (!validatePhone(phone)) {
       Alert.alert('提示', '请输入正确的手机号');
       return;
     }
+    if (!code || code.length < 4) {
+      Alert.alert('提示', '请输入验证码');
+      return;
+    }
     const name = fullName.trim();
     if (name.length < 2 || name.length > 30) {
       Alert.alert('提示', '姓名长度须为 2-30 个字符');
-      return;
-    }
-    if (!validatePassword(password)) {
-      Alert.alert('提示', '密码至少 8 位，且须同时包含字母和数字');
-      return;
-    }
-    if (password !== confirm) {
-      Alert.alert('提示', '两次输入的密码不一致');
       return;
     }
     if (!agreed) {
@@ -68,8 +99,8 @@ export default function RegisterScreen() {
       // 注册即登录：AuthContext 更新登录态后导航栈自动切到主 Tab
       await register({
         phone,
+        code,
         full_name: name,
-        password,
         hospital: hospital.trim() || undefined,
         department: department.trim() || undefined,
         title: title.trim() || undefined,
@@ -111,13 +142,47 @@ export default function RegisterScreen() {
             <Text style={styles.inputLabel}>手机号 *</Text>
             <TextInput
               style={styles.input}
-              placeholder="用于登录与接收验证码"
+              placeholder="用于注册与接收验证码"
               placeholderTextColor={Colors.textHint}
               keyboardType="phone-pad"
               maxLength={11}
               value={phone}
               onChangeText={setPhone}
             />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>验证码 *</Text>
+            <View style={styles.codeRow}>
+              <TextInput
+                style={[styles.input, styles.codeInput]}
+                placeholder="短信验证码"
+                placeholderTextColor={Colors.textHint}
+                keyboardType="number-pad"
+                maxLength={6}
+                value={code}
+                onChangeText={setCode}
+              />
+              <TouchableOpacity
+                style={[
+                  styles.codeBtn,
+                  (countdown > 0 || sendingCode || !validatePhone(phone)) && styles.codeBtnDisabled,
+                ]}
+                onPress={handleSendCode}
+                disabled={countdown > 0 || sendingCode || !validatePhone(phone)}
+                activeOpacity={0.7}
+              >
+                {sendingCode ? (
+                  <ActivityIndicator color={Colors.primary} size="small" />
+                ) : (
+                  <Text
+                    style={[styles.codeBtnText, countdown > 0 && styles.codeBtnDisabledText]}
+                  >
+                    {countdown > 0 ? `${countdown}s` : '获取验证码'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={styles.inputGroup}>
@@ -129,30 +194,6 @@ export default function RegisterScreen() {
               maxLength={30}
               value={fullName}
               onChangeText={setFullName}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>密码 *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="至少 8 位，须包含字母和数字"
-              placeholderTextColor={Colors.textHint}
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-          </View>
-
-          <View style={styles.inputGroup}>
-            <Text style={styles.inputLabel}>确认密码 *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="再次输入密码"
-              placeholderTextColor={Colors.textHint}
-              secureTextEntry
-              value={confirm}
-              onChangeText={setConfirm}
             />
           </View>
 
@@ -288,6 +329,21 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     backgroundColor: Colors.backgroundAlt,
   },
+  codeRow: { flexDirection: 'row', gap: Spacing.md },
+  codeInput: { flex: 1 },
+  codeBtn: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 110,
+  },
+  codeBtnDisabled: { borderColor: Colors.border },
+  codeBtnText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '600' },
+  codeBtnDisabledText: { color: Colors.textHint },
   sectionHint: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: Spacing.sm },
   halfRow: { flexDirection: 'row', gap: Spacing.md },
   halfCol: { flex: 1 },

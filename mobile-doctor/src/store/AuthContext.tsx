@@ -23,11 +23,12 @@ interface AuthState {
   setPendingToken: (token: string | null) => void;
   login: (phone: string, code: string) => Promise<void>;
   loginByPassword: (username: string, password: string) => Promise<void>;
-  /** 医生自助注册（部署挂账 §5）：注册即登录 */
+  /** 医生自助注册（验证码制）：注册即登录 */
   register: (payload: {
     phone: string;
+    code: string;
     full_name: string;
-    password: string;
+    password?: string;
     hospital?: string;
     department?: string;
     title?: string;

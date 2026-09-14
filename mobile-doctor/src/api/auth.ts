@@ -9,12 +9,16 @@ import type { LoginResponse, User } from '../types';
 const USER_CACHE_KEY = 'medagent_user';
 
 export const authAPI = {
-  /** 发送验证码 */
-  async sendCode(phone: string): Promise<{ expire_seconds: number }> {
+  /** 发送验证码（scene 缺省=登录场景；register=注册场景，只对未注册号发） */
+  async sendCode(phone: string, scene?: 'register'): Promise<{ expire_seconds: number }> {
+    const body: Record<string, string> = { phone };
+    if (scene) {
+      body.scene = scene;
+    }
     return apiClient.request<{ expire_seconds: number }>(
       'POST',
       '/api/v1/auth/send-code',
-      { phone }
+      body
     );
   },
 
@@ -51,11 +55,13 @@ export const authAPI = {
     return result;
   },
 
-  /** 医生自助注册（部署挂账 §5，公开端点）：注册即登录，返回 {token, user} 同 login */
+  /** 医生自助注册（验证码制，公开端点）：注册即登录，返回 {token, user} 同 login。
+   *  code 必填（scene=register 的 send-code 下发）；password 选填，不填则只能验证码登录 */
   async register(payload: {
     phone: string;
+    code: string;
     full_name: string;
-    password: string;
+    password?: string;
     hospital?: string;
     department?: string;
     title?: string;

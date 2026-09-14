@@ -28,15 +28,25 @@ CONSUME_MISMATCH = "mismatch"    # 不匹配，已消耗一次尝试（仍在上
 CONSUME_EXHAUSTED = "exhausted"  # 尝试次数用尽，验证码已作废
 
 
+# 验证码场景：login=登录（只对已注册号发，键格式保持历史不变）；
+# register=医生自助注册（只对未注册号发，独立键命名空间，两场景的码互不通用，
+# 注册码不能拿来登录、登录码不能拿来注册）
+SCENE_LOGIN = "login"
+SCENE_REGISTER = "register"
+
+# 日限的滚动窗口（非自然日）：首个验证码发出后 24h 内计数
+_DAILY_WINDOW_SECONDS = 86400
+
+
 class CodeStore(ABC):
     """验证码存储接口"""
 
     @abstractmethod
-    def in_cooldown(self, phone: str) -> int:
+    def in_cooldown(self, phone: str, scene: str = SCENE_LOGIN) -> int:
         """返回还需等待的秒数；0 表示可以发送"""
 
     @abstractmethod
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
+    def save(self, phone: str, code: str, ttl: int, cooldown: int, scene: str = SCENE_LOGIN) -> bool:
         """写入验证码并起冷却计时。
 
         A9（并发安全）：验证码键用 SET NX 语义——键已存在（并发请求已先
@@ -45,7 +55,7 @@ class CodeStore(ABC):
         """
 
     @abstractmethod
-    def consume(self, phone: str, code: str, max_attempts: int) -> str:
+    def consume(self, phone: str, code: str, max_attempts: int, scene: str = SCENE_LOGIN) -> str:
         """
         原子「校验并消耗」验证码：比较与作废必须在同一原子操作内完成，
         防止两个并发请求携带同一正确码各自通过校验（签出多个 token）。
@@ -60,16 +70,33 @@ class CodeStore(ABC):
         """
 
     @abstractmethod
-    def drop(self, phone: str) -> None:
+    def drop(self, phone: str, scene: str = SCENE_LOGIN) -> None:
         """校验成功后立即作废，防止重放"""
 
+    @abstractmethod
+    def daily_count(self, phone: str) -> int:
+        """滚动 24h 窗口内该手机号已实际发出的验证码条数（跨场景累计）"""
 
-def _key(phone: str) -> str:
+    @abstractmethod
+    def bump_daily(self, phone: str) -> None:
+        """实际发出一条验证码后计数 +1（滚动 24h 窗口）"""
+
+
+def _key(phone: str, scene: str = SCENE_LOGIN) -> str:
+    if scene == SCENE_REGISTER:
+        return f"authcode:reg:{phone}"
     return f"authcode:{phone}"
 
 
-def _cooldown_key(phone: str) -> str:
+def _cooldown_key(phone: str, scene: str = SCENE_LOGIN) -> str:
+    if scene == SCENE_REGISTER:
+        return f"authcode:regcd:{phone}"
     return f"authcode:cd:{phone}"
+
+
+def _daily_key(phone: str) -> str:
+    # 日限跨场景共享（按手机号计），SMS 成本护栏
+    return f"authcode:daily:{phone}"
 
 
 # 原子校验并消耗验证码（H1 修复 2026-08-13）：
@@ -153,22 +180,22 @@ class RedisCodeStore(CodeStore):
             redis_url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2
         )
 
-    def in_cooldown(self, phone: str) -> int:
+    def in_cooldown(self, phone: str, scene: str = SCENE_LOGIN) -> int:
         try:
-            ttl = self._redis.ttl(_cooldown_key(phone))
+            ttl = self._redis.ttl(_cooldown_key(phone, scene))
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
         return ttl if ttl and ttl > 0 else 0
 
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
+    def save(self, phone: str, code: str, ttl: int, cooldown: int, scene: str = SCENE_LOGIN) -> bool:
         payload = json.dumps({"code": code, "attempts": 0, "created_at": int(time.time())})
         try:
             return bool(
                 self._redis.eval(
                     _SAVE_NX_LUA,
                     2,
-                    _key(phone),
-                    _cooldown_key(phone),
+                    _key(phone, scene),
+                    _cooldown_key(phone, scene),
                     payload,
                     str(int(ttl)),
                     str(int(cooldown)),
@@ -177,13 +204,13 @@ class RedisCodeStore(CodeStore):
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
-    def consume(self, phone: str, code: str, max_attempts: int) -> str:
+    def consume(self, phone: str, code: str, max_attempts: int, scene: str = SCENE_LOGIN) -> str:
         try:
             # 原子校验并消耗（H1 修复 2026-08-13）：比较与作废在同一 Lua 脚本内，
             # Redis 单线程保证两个并发请求只有一个能 matched。
             state = int(
                 self._redis.eval(
-                    _CONSUME_LUA, 1, _key(phone), code, str(int(max_attempts))
+                    _CONSUME_LUA, 1, _key(phone, scene), code, str(int(max_attempts))
                 )[0]
             )
             return (
@@ -195,9 +222,26 @@ class RedisCodeStore(CodeStore):
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
-    def drop(self, phone: str) -> None:
+    def drop(self, phone: str, scene: str = SCENE_LOGIN) -> None:
         try:
-            self._redis.delete(_key(phone))
+            self._redis.delete(_key(phone, scene))
+        except Exception as exc:
+            raise CodeStoreError(f"Redis 不可用: {exc}") from exc
+
+    def daily_count(self, phone: str) -> int:
+        try:
+            raw = self._redis.get(_daily_key(phone))
+        except Exception as exc:
+            raise CodeStoreError(f"Redis 不可用: {exc}") from exc
+        return int(raw) if raw else 0
+
+    def bump_daily(self, phone: str) -> None:
+        try:
+            n = self._redis.incr(_daily_key(phone))
+            if n == 1:
+                # INCR 与 EXPIRE 之间崩溃会留下无 TTL 键（该号被永久限额）。
+                # 窗口极小、概率可忽略，且方向是"宁紧勿松"（SMS 成本护栏）
+                self._redis.expire(_daily_key(phone), _DAILY_WINDOW_SECONDS)
         except Exception as exc:
             raise CodeStoreError(f"Redis 不可用: {exc}") from exc
 
@@ -208,37 +252,52 @@ class MemoryCodeStore(CodeStore):
     def __init__(self):
         self._codes: dict = {}
         self._cooldowns: dict = {}
+        self._daily: dict = {}
         # 模拟 Redis 单线程语义：consume 整段持锁，并发下验证码也只消耗一次
         self._lock = threading.Lock()
 
-    def in_cooldown(self, phone: str) -> int:
-        expire = self._cooldowns.get(phone, 0)
+    def in_cooldown(self, phone: str, scene: str = SCENE_LOGIN) -> int:
+        expire = self._cooldowns.get((phone, scene), 0)
         remaining = int(expire - time.time())
         return remaining if remaining > 0 else 0
 
-    def save(self, phone: str, code: str, ttl: int, cooldown: int) -> bool:
+    def save(self, phone: str, code: str, ttl: int, cooldown: int, scene: str = SCENE_LOGIN) -> bool:
         # 模拟 Redis SET NX 语义（A9）：键已存在（未过期）时不覆盖、返回 False
-        entry = self._codes.get(phone)
+        entry = self._codes.get((phone, scene))
         if entry and entry["expire"] > time.time():
             return False
-        self._codes[phone] = {"code": code, "attempts": 0, "expire": time.time() + ttl}
-        self._cooldowns[phone] = time.time() + cooldown
+        self._codes[(phone, scene)] = {"code": code, "attempts": 0, "expire": time.time() + ttl}
+        self._cooldowns[(phone, scene)] = time.time() + cooldown
         return True
 
-    def consume(self, phone: str, code: str, max_attempts: int) -> str:
+    def consume(self, phone: str, code: str, max_attempts: int, scene: str = SCENE_LOGIN) -> str:
         with self._lock:
-            entry = self._codes.get(phone)
+            entry = self._codes.get((phone, scene))
             if not entry or entry["expire"] < time.time():
-                self._codes.pop(phone, None)
+                self._codes.pop((phone, scene), None)
                 return CONSUME_NOTFOUND
             entry["attempts"] += 1
             if entry["attempts"] > max_attempts:
-                self._codes.pop(phone, None)
+                self._codes.pop((phone, scene), None)
                 return CONSUME_EXHAUSTED
             if entry["code"] == code:
-                self._codes.pop(phone, None)
+                self._codes.pop((phone, scene), None)
                 return CONSUME_MATCHED
             return CONSUME_MISMATCH
 
-    def drop(self, phone: str) -> None:
-        self._codes.pop(phone, None)
+    def drop(self, phone: str, scene: str = SCENE_LOGIN) -> None:
+        self._codes.pop((phone, scene), None)
+
+    def daily_count(self, phone: str) -> int:
+        entry = self._daily.get(phone)
+        if not entry or entry[1] < time.time():
+            self._daily.pop(phone, None)
+            return 0
+        return entry[0]
+
+    def bump_daily(self, phone: str) -> None:
+        entry = self._daily.get(phone)
+        if not entry or entry[1] < time.time():
+            self._daily[phone] = [1, time.time() + _DAILY_WINDOW_SECONDS]
+        else:
+            entry[0] += 1

@@ -1,14 +1,18 @@
 """
 认证服务 API
 
-    POST /api/v1/auth/send-code   发送手机验证码
+    POST /api/v1/auth/send-code   发送手机验证码（scene=login 默认 / register 注册）
     POST /api/v1/auth/login       登录（手机号+验证码 或 用户名+密码）
-    POST /api/v1/auth/register    医生自助注册（部署挂账 §5，公开；注册即登录）
+    POST /api/v1/auth/register    医生自助注册（公开；验证码制，注册即登录）
     GET  /api/v1/auth/profile     当前用户（移动端调这个）
     GET  /api/v1/auth/me          当前用户（Web 后台调这个，同一实现）
 
 安全约定：
   - 错误信息统一模糊化，不区分"用户不存在"和"凭证错误"，避免账号枚举。
+  - 注册场景（scene=register）刻意反向：已注册号明确提示"请直接登录"，
+    未注册号才发码——注册页行业标准做法，与登录场景的防枚举不冲突
+    （愿调注册场景探测的人，本来就等于在用注册页探测）。
+  - 两场景验证码键命名空间独立，互不通用（注册码不能登录，登录码不能注册）。
   - 验证码匹配即作废：比较与作废在同一原子操作内完成，防并发重放。
   - Redis 不可用 → 抛 5xx，绝不放行。
   - profile/me 每次都从库里重新读用户，被停用的账号即便持有有效 token 也会被拒。
@@ -33,6 +37,8 @@ from app.config import settings
 from app.core.code_store import (
     CONSUME_EXHAUSTED,
     CONSUME_MATCHED,
+    SCENE_LOGIN,
+    SCENE_REGISTER,
     CodeStore,
     CodeStoreError,
     RedisCodeStore,
@@ -111,6 +117,42 @@ def _client_ip(request: Request) -> Optional[str]:
 
 # ==================== 发送验证码 ====================
 
+async def _issue_code(store: CodeStore, sender, phone: str, scene: str) -> str:
+    """生成并发送一条验证码（真实发出，计入日限）。send-code 两个场景共用。"""
+    issued = generate_code(settings.CODE_LENGTH)
+    try:
+        saved = store.save(
+            phone,
+            issued,
+            settings.CODE_TTL_SECONDS,
+            settings.CODE_RESEND_SECONDS,
+            scene=scene,
+        )
+    except CodeStoreError as exc:
+        logger.error(f"验证码写入失败: {exc}")
+        raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
+    if not saved:
+        # A9：冷却检查与 save 之间不再有竞态——save 用 SET NX，键已存在
+        # （并发请求已先写入）时返回 False。这里按冷却处理（响应码与
+        # in_cooldown 一致），后到者不再覆盖先发验证码（覆盖会让用户拿到废码）。
+        # 注：验证码 TTL（默认 300s）大于冷却（60s）时，冷却结束但验证码仍
+        # 在存的重发请求也会走到这里——先发验证码未被覆盖，行为可接受。
+        # 文案与实际一致：本次请求并未发出新验证码，已有验证码仍在有效期内
+        raise BusinessError("验证码仍在有效期内，请稍后再试", code=4002)
+    try:
+        # A8：send_sms 是同步阻塞网络调用，丢线程池执行，不阻塞事件循环
+        await asyncio.to_thread(sender.send_code, phone, issued)
+    except SmsSendError as exc:
+        logger.error(f"短信发送失败 phone={phone}: {exc}")
+        raise BusinessError(f"短信发送失败: {exc}", code=6001) from exc
+    try:
+        store.bump_daily(phone)
+    except CodeStoreError:
+        # 计数失败只影响日限精度；验证码已实际发出，不回滚不阻断
+        pass
+    return issued
+
+
 @router.post("/send-code")
 async def send_code(
     payload: dict,
@@ -120,7 +162,8 @@ async def send_code(
     sender=Depends(get_sender),
 ):
     """
-    Request:  {"phone": "13800000000"}
+    Request:  {"phone": "13800000000"}                        —— 登录场景（默认）
+              {"phone": "13800000000", "scene": "register"}   —— 注册场景（只对未注册号发）
     Response: {"expire_seconds": 300}   dev 模式下额外返回 {"code": "123456"}
     """
     # A3：非 JSON 对象（数组/字符串等）直接参数错误，不让 dict 方法抛 AttributeError 500
@@ -131,41 +174,37 @@ async def send_code(
     if not PHONE_RE.match(phone):
         raise ParamError("手机号格式不正确")
 
+    scene = str(payload.get("scene") or SCENE_LOGIN).strip().lower()
+    if scene not in (SCENE_LOGIN, SCENE_REGISTER):
+        raise ParamError("不支持的验证码场景")
+
+    user = UserRepo.get_by_phone(db, phone)
+
+    # 注册场景：已注册号（含 username 撞号）明确拒绝不发码。
+    # 放在冷却/日限检查之前——注册页语义优先给「请直接登录」，
+    # 否则刚发过码又撞注册入口的用户只会看到干等 60s 的冷却提示
+    if scene == SCENE_REGISTER and (
+        user is not None or UserRepo.get_by_username(db, phone) is not None
+    ):
+        raise BusinessError("该手机号已注册，请直接登录", code=4001)
+
     try:
-        remaining = store.in_cooldown(phone)
+        remaining = store.in_cooldown(phone, scene=scene)
+        if remaining > 0:
+            raise BusinessError(f"请 {remaining} 秒后再试", code=4002)
+        if store.daily_count(phone) >= settings.CODE_DAILY_LIMIT:
+            # 滚动 24h 日限（跨场景按手机号累计）：SMS 成本护栏
+            raise BusinessError("今日验证码发送次数已达上限，请明天再试", code=4002)
     except CodeStoreError as exc:
         logger.error(f"验证码存储不可用: {exc}")
         raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
 
-    if remaining > 0:
-        raise BusinessError(f"请 {remaining} 秒后再试", code=4002)
-
-    user = UserRepo.get_by_phone(db, phone)
     issued: Optional[str] = None
 
-    if UserRepo.is_active(user):
-        issued = generate_code(settings.CODE_LENGTH)
-        try:
-            saved = store.save(
-                phone, issued, settings.CODE_TTL_SECONDS, settings.CODE_RESEND_SECONDS
-            )
-        except CodeStoreError as exc:
-            logger.error(f"验证码写入失败: {exc}")
-            raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
-        if not saved:
-            # A9：冷却检查与 save 之间不再有竞态——save 用 SET NX，键已存在
-            # （并发请求已先写入）时返回 False。这里按冷却处理（响应码与
-            # in_cooldown 一致），后到者不再覆盖先发验证码（覆盖会让用户拿到废码）。
-            # 注：验证码 TTL（默认 300s）大于冷却（60s）时，冷却结束但验证码仍
-            # 在存的重发请求也会走到这里——先发验证码未被覆盖，行为可接受。
-            # 文案与实际一致：本次请求并未发出新验证码，已有验证码仍在有效期内
-            raise BusinessError("验证码仍在有效期内，请稍后再试", code=4002)
-        try:
-            # A8：send_sms 是同步阻塞网络调用，丢线程池执行，不阻塞事件循环
-            await asyncio.to_thread(sender.send_code, phone, issued)
-        except SmsSendError as exc:
-            logger.error(f"短信发送失败 phone={phone}: {exc}")
-            raise BusinessError(f"短信发送失败: {exc}", code=6001) from exc
+    if scene == SCENE_REGISTER:
+        issued = await _issue_code(store, sender, phone, scene)
+    elif UserRepo.is_active(user):
+        issued = await _issue_code(store, sender, phone, scene)
     else:
         # 手机号未注册或已停用：不生成验证码，但仍然起冷却，
         # 让响应和耗时特征与正常流程一致，避免用 send-code 枚举账号。
@@ -187,6 +226,7 @@ async def send_code(
         user_id=user.id if user else None,
         resource_type="user",
         resource_id=phone,
+        after_value={"scene": scene},
         client_ip=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
         # A6：取 RequestIDMiddleware 校验过的上下文 ID（超长/非法头会被中间件
@@ -202,17 +242,20 @@ async def send_code(
     return success(data)
 
 
-# ==================== 医生自助注册（部署挂账 §5） ====================
+# ==================== 医生自助注册（部署挂账 §5 → 2026-09-14 升级验证码制） ====================
 
 @router.post("/register")
 async def register(
     payload: dict,
     request: Request,
     db: Session = Depends(get_db),
+    store: CodeStore = Depends(get_code_store),
 ):
-    """医生自助注册（公开端点，注册即登录）。
+    """医生自助注册（公开端点，验证码制，注册即登录）。
 
-    Request:  {"phone","full_name","password","hospital?","department?","title?"}
+    Request:  {"phone","code","full_name","password?","hospital?","department?","title?"}
+              code 必填——scene=register 的 send-code 下发的验证码（只对未注册号发，
+              手机号真实性由短信通道验证）；password 选填，不填则该账号只能验证码登录。
     Response: {"token","user"} —— 同 login，前端注册成功直接进入已登录态。
 
     医院信息（hospital/department/title）落 hcps 医生档案表（与 hcp-service
@@ -223,6 +266,7 @@ async def register(
 
     phone = str(payload.get("phone") or "").strip()
     full_name = str(payload.get("full_name") or "").strip()
+    code = str(payload.get("code") or "").strip()
     password = str(payload.get("password") or "")
     hospital = str(payload.get("hospital") or "").strip() or None
     department = str(payload.get("department") or "").strip() or None
@@ -232,23 +276,38 @@ async def register(
         raise ParamError("手机号格式不正确")
     if not (2 <= len(full_name) <= 30):
         raise ParamError("姓名长度须为 2-30 个字符")
-    if (
+    if not code:
+        raise ParamError("请输入验证码")
+    if password and (
         len(password) < 8
         or not re.search(r"[A-Za-z]", password)
         or not re.search(r"\d", password)
     ):
+        # 密码选填：填了才校验强度；不填 = 未设密码、禁止密码登录（模型注释口径）
         raise ParamError("密码至少 8 位，且须同时包含字母和数字")
 
-    # users.phone 有部分唯一索引、username 唯一；注册 username=phone，两查都做
+    # users.phone 有部分唯一索引、username 唯一；注册 username=phone，两查都做。
+    # 查重放在验码之前——撞号不烧码（码是被真实发出的资源）
     if UserRepo.get_by_phone(db, phone) or UserRepo.get_by_username(db, phone):
         # 4001 与 users.py 创建用户撞号同码（username/phone 冲突统一口径）
         raise BusinessError("该手机号已注册，请直接登录", code=4001)
+
+    # 验证码核销（注册场景独立命名空间，登录码不通用）。consume 原子
+    # （比对+作废同一拍），并发携带同一码只有一个能通过，天然防重放
+    try:
+        result = store.consume(phone, code, settings.CODE_MAX_ATTEMPTS, scene=SCENE_REGISTER)
+    except CodeStoreError as exc:
+        logger.error(f"验证码存储不可用: {exc}")
+        raise BusinessError("验证码服务暂时不可用，请稍后重试", code=5004) from exc
+    if result != CONSUME_MATCHED:
+        # notfound/mismatch/exhausted 对外统一文案（走到这里的号必未注册，无枚举面）
+        raise ParamError("验证码错误或已过期，请重新获取")
 
     user = User(
         username=phone,
         full_name=full_name,
         phone=phone,
-        password_hash=hash_password(password),
+        password_hash=hash_password(password) if password else None,
         role="doctor",
         status="active",
     )
