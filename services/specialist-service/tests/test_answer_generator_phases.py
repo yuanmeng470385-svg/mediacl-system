@@ -43,7 +43,7 @@ class RecordingBailian:
     def __init__(self):
         self.phase_at_call = None
 
-    async def chat(self, app_id, prompt, session_id=None):
+    async def chat(self, app_id, prompt, session_id=None, history=None, user_id=None):
         self.phase_at_call = registry.get(1).phase if registry.get(1) else None
         return {"text": "你好", "citations": [], "dialog_id": "dlg-1"}
 
@@ -53,7 +53,7 @@ class RecordingStreamBailian:
     def __init__(self):
         self.phase_at_call = None
 
-    async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+    async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
         self.phase_at_call = registry.get(1).phase if registry.get(1) else None
         yield {"type": "delta", "text": "你"}
         yield {"type": "done", "text": "你好", "dialog_id": "dlg-1", "citations": []}
@@ -139,7 +139,7 @@ def test_generate_review_blocked_still_idle(monkeypatch):
 def test_generate_stream_review_blocked_still_idle(monkeypatch):
     """流式审核阶段 blocked：done 帧发出后注册表必已置空"""
     class FakeStream:
-        async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+        async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
             yield {"type": "done", "text": "你好", "dialog_id": "dlg-1", "citations": []}
 
     g = _mk(monkeypatch, _check_pass)
@@ -170,7 +170,7 @@ def test_generate_bailian_fallback_still_idle(monkeypatch):
 
     phases_at_call = []
 
-    async def _raising_chat(app_id, prompt, session_id=None):
+    async def _raising_chat(app_id, prompt, session_id=None, history=None, user_id=None):
         phases_at_call.append(registry.get(1).phase if registry.get(1) else None)
         raise BailianException("模拟百炼不可用")
 
@@ -186,7 +186,7 @@ def test_generate_bailian_fallback_still_idle(monkeypatch):
 def test_generate_stream_aclose_still_idle(monkeypatch):
     """流中途断开（只消费一帧即 aclose）：finally 仍须置 idle"""
     class FakeStream:
-        async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+        async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
             yield {"type": "delta", "text": "一"}
             yield {"type": "delta", "text": "二"}
             yield {"type": "done", "text": "你好", "dialog_id": "dlg-1", "citations": []}
@@ -226,7 +226,7 @@ def test_generate_stream_injects_preference_context(monkeypatch):
         return P()
 
     class FakeBailian:
-        async def chat_stream(self, app_id, prompt, session_id=None):
+        async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
             captured["prompt"] = prompt
             yield {"type": "delta", "text": "好的"}
             yield {"type": "done", "text": "好的"}
@@ -265,7 +265,7 @@ def test_generate_stream_injects_persona_style(monkeypatch):
     captured = {}
 
     class FakeBailian:
-        async def chat_stream(self, app_id, prompt, session_id=None):
+        async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
             captured["prompt"] = prompt
             yield {"type": "delta", "text": "好的"}
             yield {"type": "done", "text": "好的"}
@@ -289,7 +289,7 @@ def test_generate_no_persona_style_unchanged(monkeypatch):
     captured = {}
 
     class FakeBailian:
-        async def chat(self, app_id, prompt, session_id=None):
+        async def chat(self, app_id, prompt, session_id=None, history=None, user_id=None):
             captured["prompt"] = prompt
             return {"text": "好的", "citations": [], "dialog_id": "dlg-1"}
 
@@ -322,7 +322,7 @@ def test_generate_injects_preference_context(monkeypatch):
         return P()
 
     class FakeBailian:
-        async def chat(self, app_id, prompt, session_id=None):
+        async def chat(self, app_id, prompt, session_id=None, history=None, user_id=None):
             captured["prompt"] = prompt
             return {"text": "好的", "citations": [], "dialog_id": "dlg-1"}
 

@@ -136,7 +136,7 @@ export default function FavoritesScreen() {
           <View style={styles.empty}>
             <Icon name={ActionIcons.star} size={48} color={Colors.textHint} />
             <Text style={styles.emptyTitle}>{error || '暂无收藏'}</Text>
-            <Text style={styles.emptyDesc}>在对话中收藏的问答会出现在这里</Text>
+            <Text style={styles.emptyDesc}>在分身对话中，点击回答下方的「收藏」即可保存有价值的问答</Text>
             {error ? (
               <TouchableOpacity style={styles.retryBtn} onPress={load} activeOpacity={0.8}>
                 <Text style={styles.retryText}>重试</Text>

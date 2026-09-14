@@ -19,7 +19,7 @@ class FakeBailianStream:
     def __init__(self, frames):
         self._frames = list(frames)
 
-    async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+    async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
         for f in self._frames:
             yield f
 
@@ -63,7 +63,7 @@ class _BailianDown:
     """chat_stream 首次迭代即抛错，触发 qwen 降级路径（须是 async generator，
     普通 async def 返回协程无法被 async for 消费）"""
 
-    async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+    async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
         from app.services.bailian_client import BailianException
         raise BailianException("bailian down")
         yield  # pragma: no cover —— 让函数成为 async generator
@@ -295,7 +295,7 @@ def test_generate_fallback_runs_in_worker_thread(monkeypatch):
     from app.services.bailian_client import BailianException
 
     class _BailianChatDown:
-        async def chat(self, app_id, prompt, session_id=None, history=None):
+        async def chat(self, app_id, prompt, session_id=None, history=None, user_id=None):
             raise BailianException("bailian down")
 
     real_to_thread = asyncio.to_thread

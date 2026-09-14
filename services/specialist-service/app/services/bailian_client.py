@@ -37,6 +37,7 @@ class BailianClient:
         prompt: str,
         session_id: Optional[str] = None,
         history: Optional[List[Dict]] = None,
+        user_id: Optional[int] = None,
     ) -> Dict:
         """
         发送文本问题，获取 AI 回答
@@ -46,6 +47,7 @@ class BailianClient:
             prompt: 用户问题
             session_id: 对话 ID（继续之前会话时传入，由上次返回的 dialog_id 担任）
             history: 历史对话 [{"role":"user","content":"..."}, {"role":"assistant","content":"..."}]
+            user_id: 真实用户 ID（client_info.user_id 分流用，见 chat_stream docstring）
 
         Returns:
             {
@@ -60,7 +62,7 @@ class BailianClient:
             dialog_id = session_id
             async for frame in self.chat_stream(
                 app_id=app_id, prompt=prompt,
-                session_id=session_id, history=history,
+                session_id=session_id, history=history, user_id=user_id,
             ):
                 if frame["type"] == "delta":
                     answer_parts.append(frame["text"])
@@ -88,11 +90,18 @@ class BailianClient:
         prompt: str,
         session_id: Optional[str] = None,
         history: Optional[List[Dict]] = None,
+        user_id: Optional[int] = None,
     ):
         """流式版 chat()：每帧 yield {"type":"delta","text":...}，末尾 yield done 帧。
 
         done 帧: {"type":"done","text","dialog_id","citations"}
         Error 事件抛 BailianException（与 chat() 一致）。
+
+        user_id（2026-09-11 张浩然幻觉批）：client_info.user_id 按真实用户分流
+        （medagent-u{user_id}）。此前硬编码 "medagent-user" 把全部真人折叠成
+        同一个百炼侧用户——App 开启记忆/用户画像时，8 月测试期 "我叫张浩然"
+        的对话被记成"该用户"的画像，之后所有端、所有分身、全新会话都被
+        App 称呼为张浩然。分流后各用户的百炼侧记忆互不污染。
 
         G2（2026-08-13）：传输层异常（wait_for 超时 TimeoutError / ws 断连
         ConnectionClosed / 畸形帧 JSONDecodeError/AttributeError 等）同样统一转
@@ -127,7 +136,8 @@ class BailianClient:
                         },
                         "parameters": {
                             "upstream": {"type": "AudioOnly", "mode": "duplex"},
-                            "client_info": {"user_id": "medagent-user"},
+                            # 按真实用户分流（防 App 侧记忆跨用户串味，见 chat_stream docstring）
+                            "client_info": {"user_id": f"medagent-u{user_id}" if user_id else "medagent-user"},
                         },
                     },
                 }

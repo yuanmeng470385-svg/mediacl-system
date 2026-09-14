@@ -37,7 +37,7 @@ const menuItems = [
   { icon: 'creation', label: 'Skill 发布', route: 'SkillRelease' as const },
   { icon: 'clipboard-list-outline', label: '我的 Skill', route: 'MySkillList' as const },
   // 「我的统计」已移除：无对应页面，此前误路由到 Settings
-  { icon: 'bell-outline', label: '通知设置', route: 'NotificationSettings' as const },
+  // 「通知设置」已移除（2026-09-11）：全死开关无实际功能，站内通知走上方「站内通知」行
   { icon: 'shield-check-outline', label: '合规手册', route: 'ComplianceManual' as const },
   { icon: 'help-circle-outline', label: '帮助中心', route: 'HelpCenter' as const },
   { icon: 'information-outline', label: '关于', route: 'Settings' as const },

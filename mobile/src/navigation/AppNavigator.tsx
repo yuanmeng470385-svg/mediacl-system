@@ -31,7 +31,7 @@ import ComplianceCenterScreen from '../screens/Compliance/ComplianceCenterScreen
 import TrainingMaterialScreen from '../screens/Compliance/TrainingMaterialScreen';
 import ExamScreen from '../screens/Compliance/ExamScreen';
 import CommitmentScreen from '../screens/Compliance/CommitmentScreen';
-import NotificationSettingsScreen from '../screens/NotificationSettings/NotificationSettingsScreen';
+import PerformanceStatsScreen from '../screens/Stats/PerformanceStatsScreen';
 import HelpCenterScreen from '../screens/HelpCenter/HelpCenterScreen';
 import GuideController from '../screens/Onboarding/GuideController';
 import { REP_GUIDE_STEPS, REP_GUIDE_DONE_KEY, REP_GUIDE_PROGRESS_KEY } from '../screens/Onboarding/repGuideSteps';
@@ -219,7 +219,7 @@ export default function AppNavigator() {
             <Stack.Screen name="TrainingMaterial" component={TrainingMaterialScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="Exam" component={ExamScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="Commitment" component={CommitmentScreen} options={{ animation: 'slide_from_right' }} />
-            <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="PerformanceStats" component={PerformanceStatsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="HelpCenter" component={HelpCenterScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="VisitDetail" component={VisitDetailScreen} options={{ animation: 'slide_from_right' }} />
             {/* 分身分享 & 夜间简报 */}

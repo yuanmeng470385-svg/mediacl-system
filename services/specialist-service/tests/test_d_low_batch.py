@@ -69,7 +69,7 @@ def test_compliance_blocks_incremented_on_stream_gate_block(monkeypatch):
     before = REGISTRY.get_sample_value("compliance_blocks_total", labels) or 0.0
 
     class _Stream:
-        async def chat_stream(self, app_id, prompt, session_id=None, history=None):
+        async def chat_stream(self, app_id, prompt, session_id=None, history=None, user_id=None):
             yield {"type": "delta", "text": "正常"}
             yield {"type": "delta", "text": "违禁内容"}
             yield {"type": "done", "text": "违禁内容", "dialog_id": "dlg-1", "citations": []}
@@ -442,6 +442,27 @@ def test_fallback_injects_session_history_messages():
     assert "300" in msgs[2]["content"]  # 300 字约束提示仍在最终 prompt
 
 
+def test_fallback_prompt_forbids_invented_names():
+    """降级 prompt 身份中性 + 防虚构姓名（2026-09-11 张浩然幻觉批）：
+    医生端 TwinChat 降级时不再被框成"代表"；qwen 无从得知提问者身份，
+    必须显式禁止它编造称呼（08-24 起实测会自由发挥出具体人名）"""
+    captured = {}
+
+    class _Qwen:
+        def chat(self, messages, model, temperature, max_tokens=None):
+            captured["messages"] = list(messages)
+            return {"content": "回答"}
+
+    g = AnswerGenerator()
+    g.qwen = _Qwen()
+    g._fallback_generate("你好", _spec(), history=[])
+    prompt = captured["messages"][0]["content"]
+    assert "代表问题" not in prompt
+    assert "用户问题" in prompt
+    assert "不得称呼用户姓名" in prompt
+    assert "不得虚构用户身份" in prompt
+
+
 class _HistChain:
     def __init__(self, rows):
         self._rows = list(rows)
@@ -541,7 +562,7 @@ def test_generate_fallback_uses_session_history_from_db(monkeypatch):
     追问不再丢上下文"""
 
     class _BailianDown:
-        async def chat(self, app_id, prompt, session_id=None):
+        async def chat(self, app_id, prompt, session_id=None, history=None, user_id=None):
             raise BailianException("bailian down")
 
     captured = {}

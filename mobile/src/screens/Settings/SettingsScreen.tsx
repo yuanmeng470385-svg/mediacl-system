@@ -1,5 +1,7 @@
 /**
- * 设置页 - 个人资料 / 通知 / 团队 / 关于
+ * 设置页 - 个人资料 / 工作 / 关于
+ * 2026-09-11 死页清理：撤「账号安全/我的团队/语言/主题」（无后端、纯敬请期待壳）
+ * 与「通知」入口（通知设置整页撤除）；「业绩统计」改指真实数据页 PerformanceStats。
  */
 import React, { useState } from 'react';
 import {
@@ -19,23 +21,18 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const APP_VERSION: string = require('../../../package.json').version;
 
-type RowAction = 'profile' | 'notifications' | 'compliance' | 'onboarding' | 'coming' | 'about';
+type RowAction = 'profile' | 'compliance' | 'stats' | 'onboarding' | 'about';
 
 const sections: { title: string; items: { icon: string; label: string; desc: string; action: RowAction }[] }[] = [
   { title: '个人资料', items: [
     { icon: 'account', label: '查看资料', desc: '姓名、手机号、区域（只读）', action: 'profile' },
-    { icon: 'shield-account', label: '账号安全', desc: '密码、绑定设备', action: 'coming' },
   ]},
   { title: '工作', items: [
-    { icon: 'account-group', label: '我的团队', desc: '团队成员与协作', action: 'coming' },
+    { icon: 'chart-bar', label: '业绩统计', desc: '拜访、AI 陪练、学术卡片数据', action: 'stats' },
     { icon: 'shield-account', label: '备案与资质', desc: '备案状态、资质审核', action: 'compliance' },
-    { icon: 'chart-bar', label: '业绩统计', desc: '拜访、对话、合规数据', action: 'coming' },
   ]},
   { title: '通用', items: [
-    { icon: 'bell-outline', label: '通知', desc: '拜访提醒、合规告警等推送设置', action: 'notifications' },
     { icon: 'compass', label: '功能引导', desc: '重看陪玩式功能引导（带你逛核心动线）', action: 'onboarding' },
-    { icon: 'translate', label: '语言', desc: '简体中文', action: 'coming' },
-    { icon: 'palette', label: '主题', desc: '临床精准 / 浅色', action: 'coming' },
     { icon: 'information', label: '关于 MedAgent', desc: 'v' + APP_VERSION, action: 'about' },
   ]},
 ];
@@ -50,8 +47,8 @@ export default function SettingsScreen() {
       case 'profile':
         setProfileVisible(true);
         break;
-      case 'notifications':
-        navigation.navigate('NotificationSettings');
+      case 'stats':
+        navigation.navigate('PerformanceStats');
         break;
       case 'onboarding':
         // 陪玩式引导重看：清完成/进度标记 → 事件通知 GuideController 从第 1 步重演 → 回主界面
@@ -66,8 +63,6 @@ export default function SettingsScreen() {
       case 'compliance':
         navigation.navigate('ComplianceCenter');
         break;
-      default:
-        Alert.alert('提示', '该功能将在后续版本开放，敬请期待');
     }
   };
 

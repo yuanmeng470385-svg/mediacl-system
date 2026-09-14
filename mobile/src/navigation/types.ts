@@ -41,7 +41,7 @@ export type RootStackParamList = {
   Favorites: undefined;
   // 设置
   Settings: undefined;
-  NotificationSettings: undefined;
+  PerformanceStats: undefined;
   HelpCenter: undefined;
   ComplianceCenter: undefined;
   // 分身分享 & 夜间简报

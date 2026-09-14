@@ -4,6 +4,7 @@
  *   - REST 兜底 twinAPI.chat（POST /api/v1/specialists/{id}/chat）
  *   - 顶部常驻"该分身由 AI 生成"标识条（合规要求，不可关闭）
  *   - blocked 态渲染后端安全话术 + 违规提示明细
+ *   - 收藏星标（2026-09-11 死页清理批）：回答气泡下 toggle 收藏，激活既有收藏历史页
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -16,11 +17,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import Icon, { ActionIcons } from '../../components/Icon';
 import { twinAPI } from '../../api/twin';
+import { favoritesAPI } from '../../api/favorites';
 import { apiClient } from '../../api/client';
 import { openChatWs } from '../../services/wsChat';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
@@ -36,6 +39,10 @@ interface Message {
   citations?: { title: string; url?: string }[];
   blocked?: boolean;
   violations?: ChatViolation[];
+  /** 收藏主键（assistant 行 id）；入库失败/欢迎语为空 → 星标不显示（rep 端同款条件） */
+  conversationId?: number | null;
+  /** 收藏态（toggle 成功后回写，本地乐观不持久化——以列表页为准） */
+  favorite?: boolean;
 }
 
 function violationTextOf(violations: ChatViolation[] | undefined): string {
@@ -114,6 +121,7 @@ export default function TwinChatScreen() {
               citations: (d.citations ?? []) as Message['citations'],
               blocked: d.blocked ?? false,
               violations: d.violations,
+              conversationId: d.conversationId ?? null,
             };
             setMessages((prev) => [...prev, aiMsg]);
             wsRef.current = null;
@@ -172,6 +180,7 @@ export default function TwinChatScreen() {
       const aiMsg: Message = {
         id: response.request_id || `a_${Date.now()}`,
         role: 'assistant',
+        conversationId: response.conversation_id ?? null,
         content: response.blocked
           ? [response.answer, violationText && `（${violationText}）`]
               .filter(Boolean)
@@ -197,6 +206,21 @@ export default function TwinChatScreen() {
       ]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  /** 收藏/取消收藏（conversationId 为空的消息天然无按钮，与 rep 端一致） */
+  const handleFavorite = async (msg: Message) => {
+    if (!msg.conversationId) return;
+    try {
+      const res = await favoritesAPI.toggleFavorite(msg.conversationId);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, favorite: !!res?.is_favorite } : m))
+      );
+    } catch (e: any) {
+      // catch 闭包内先取字符串（同 Hermes 坑防御）
+      const errMsg = e?.message || '请稍后重试';
+      Alert.alert('收藏失败', errMsg);
     }
   };
 
@@ -232,6 +256,24 @@ export default function TwinChatScreen() {
               <Icon name={ActionIcons.close} size={14} color={Colors.danger} />
               <Text style={styles.violationText}>违规提示：{violationText}</Text>
             </View>
+          ) : null}
+
+          {!isUser && !item.blocked && item.conversationId ? (
+            <TouchableOpacity
+              style={styles.favoriteRow}
+              onPress={() => handleFavorite(item)}
+              activeOpacity={0.7}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Icon
+                name={item.favorite ? ActionIcons.starFilled : ActionIcons.star}
+                size={16}
+                color={item.favorite ? Colors.warning : Colors.textHint}
+              />
+              <Text style={[styles.favoriteText, item.favorite && styles.favoriteTextOn]}>
+                {item.favorite ? '已收藏' : '收藏'}
+              </Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       </View>
@@ -386,6 +428,18 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.dangerLight,
   },
   violationText: { flex: 1, fontSize: FontSize.xs, color: Colors.danger },
+  favoriteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+    marginTop: Spacing.sm,
+    paddingTop: Spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: Colors.divider,
+  },
+  favoriteText: { fontSize: FontSize.xs, color: Colors.textHint },
+  favoriteTextOn: { color: Colors.warning },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',

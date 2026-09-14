@@ -174,6 +174,7 @@ class AnswerGenerator:
                     app_id=specialist.bailian_app_id,
                     prompt=question,
                     session_id=session_id,
+                    user_id=user_id,
                 )
                 answer = bailian_result.get("text", "")
                 if not answer.strip():
@@ -338,6 +339,7 @@ class AnswerGenerator:
                     app_id=specialist.bailian_app_id,
                     prompt=question,
                     session_id=session_id,
+                    user_id=user_id,
                 ):
                     if frame["type"] == "delta":
                         # 流式合规门禁（S-*）：对累积文本做关键词/正则快速检查
@@ -537,12 +539,14 @@ class AnswerGenerator:
         """
         prompt = f"""你是{specialist.name}，医药产品 AI 学术专员。
 
-代表问题：{question}
+用户问题：{question}
 
 要求：
 1. 简洁回答，不超过 300 字
 2. 不确定时建议咨询医学顾问
 3. 严禁承诺疗效、提及回扣、讨论医生处方量
+4. 不得称呼用户姓名，不得虚构用户身份（医生与代表均可能提问，
+   身份不明时直接回答问题本身，不要猜测对方是谁）
 
 回答："""
 

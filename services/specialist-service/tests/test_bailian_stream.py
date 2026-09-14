@@ -62,6 +62,48 @@ def test_chat_stream_yields_delta_and_done(monkeypatch):
     assert start_sent["app_id"] == "app-1"
 
 
+def test_chat_stream_client_info_user_scoped(monkeypatch):
+    """client_info.user_id 按真实用户分流（2026-09-11 张浩然幻觉批）：
+    硬编码 medagent-user 会把全部真人折叠成同一个百炼侧用户，App 记忆跨用户
+    串味（8 月 "我叫张浩然" 被记成全员画像）。带 user_id → medagent-u{id}；
+    不带（兼容旧调用）回落 medagent-user。"""
+    replies = [
+        _ev("Started", dialog_id="dlg-1"),
+        _ev("DialogStateChanged", state="Listening"),
+        _ev("RespondingContent", text="答", finished=True),
+    ]
+
+    def make_fake():
+        return _FakeWs(list(replies))
+
+    f1, f2 = make_fake(), make_fake()
+    monkeypatch.setattr("app.services.bailian_client.websockets.connect", lambda *a, **k: f1)
+
+    async def run_with_user():
+        client = BailianClient()
+        out = []
+        async for frame in client.chat_stream(app_id="app-1", prompt="你好", user_id=50):
+            out.append(frame)
+        return out
+
+    asyncio.run(run_with_user())
+    info = f1.sent[0]["payload"]["parameters"]["client_info"]
+    assert info["user_id"] == "medagent-u50"
+
+    monkeypatch.setattr("app.services.bailian_client.websockets.connect", lambda *a, **k: f2)
+
+    async def run_without_user():
+        client = BailianClient()
+        out = []
+        async for frame in client.chat_stream(app_id="app-1", prompt="你好"):
+            out.append(frame)
+        return out
+
+    asyncio.run(run_without_user())
+    info = f2.sent[0]["payload"]["parameters"]["client_info"]
+    assert info["user_id"] == "medagent-user"
+
+
 def test_chat_stream_error_event_raises(monkeypatch):
     replies = [
         _ev("Started", dialog_id="dlg-1"),

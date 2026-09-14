@@ -97,9 +97,10 @@ export default function HomeScreen() {
             </Text>
             <Text style={styles.date}>{dateStr}</Text>
           </View>
+          {/* 工作台铃铛 → 站内通知中心（2026-09-11 死页清理：原指「通知设置」全是死开关） */}
           <TouchableOpacity
             style={styles.notifyBtn}
-            onPress={() => navigation.navigate('NotificationSettings')}
+            onPress={() => navigation.navigate('Notifications')}
           >
             <Icon name={ActionIcons.notification} size={20} color={Colors.textWhite} />
           </TouchableOpacity>
