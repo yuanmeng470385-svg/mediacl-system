@@ -28,10 +28,12 @@ logger = logging.getLogger(__name__)
 # （例如 "/api/v1/audit/log" 会连 "/api/v1/audit/logs" 一起放开）。
 PUBLIC_PATHS = [
     "/health",
-    # 认证入口（auth-service :8007）—— 只有这两个免认证，
+    # 认证入口（auth-service :8007）—— 只有这三个免认证，
     # /api/v1/auth/profile 和 /api/v1/auth/me 需要携带 token
     "/api/v1/auth/login",
     "/api/v1/auth/send-code",
+    # 部署挂账 §5：医生自助注册（register 无子路径，前缀匹配无副作用）
+    "/api/v1/auth/register",
     "/docs",
     "/openapi.json",
     "/redoc",

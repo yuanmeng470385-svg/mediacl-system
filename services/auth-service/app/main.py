@@ -29,6 +29,12 @@ if settings.JWT_SECRET in _WEAK_SECRETS:
         "请在 .env 中设置一个足够随机的 JWT_SECRET（例：openssl rand -hex 32）。"
     )
 
+if settings.DEV_MODE and settings.DEPLOY_ENV == "production":
+    raise RuntimeError(
+        "AUTH_DEV_MODE=true 且 DEPLOY_ENV=production：验证码会在响应体里明文回传，"
+        "auth-service 拒绝启动。生产 .env 必须设 AUTH_DEV_MODE=false。"
+    )
+
 if settings.DEV_MODE:
     logger.warning("AUTH_DEV_MODE=true：send-code 会在响应体里回传验证码，生产环境必须关闭！")
 

@@ -8,6 +8,8 @@ import RequireAuth from './components/RequireAuth';
 import { AuthProvider } from './context/AuthContext';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+// 部署挂账 §4：数字分身分享落地页（公开，无需登录；微信内深链会被吞，落地页展示激活码+引导唤起 App）
+const ShareTwinPage = lazy(() => import('./pages/ShareTwin'));
 const SpecialistList = lazy(() => import('./pages/Specialist/SpecialistList'));
 const VisitList = lazy(() => import('./pages/Visit/VisitList'));
 const KnowledgeList = lazy(() => import('./pages/Knowledge/KnowledgeList'));
@@ -58,6 +60,7 @@ export default function App() {
             <Suspense fallback={<Loading />}>
               <Routes>
                 <Route path="/login" element={<LoginPage />} />
+                <Route path="/share/twin/:token" element={<ShareTwinPage />} />
                 <Route
                   element={
                     <RequireAuth>

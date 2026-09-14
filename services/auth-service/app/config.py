@@ -35,6 +35,8 @@ class Settings:
     # --- 开发模式 ---
     # 打开后 send-code 会在响应体里回传验证码，方便本地联调。生产必须为 false。
     DEV_MODE = _as_bool(os.getenv("AUTH_DEV_MODE", "false"))
+    # 部署环境标记：production 下 DEV_MODE=true 会被启动守卫直接拒绝（见 main.py）
+    DEPLOY_ENV = os.getenv("DEPLOY_ENV", "dev")
 
     GATEWAY_URL = os.getenv("GATEWAY_URL", "http://localhost:8000")
 

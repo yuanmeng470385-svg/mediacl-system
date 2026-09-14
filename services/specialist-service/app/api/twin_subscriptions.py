@@ -17,6 +17,7 @@
 后端只留痕每次 subscribe 的 consent 记录（不在此做跨 twin 去重）。
 """
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta
 
@@ -43,7 +44,19 @@ def _twin_info(specialist: Specialist) -> dict:
     return {"id": specialist.id, "name": specialist.name, "status": specialist.status}
 
 
-SHARE_URL_PREFIX = "medagent-doctor://twin/"
+SHARE_DEEP_LINK_PREFIX = "medagent-doctor://twin/"
+
+
+def _share_url(token: str) -> str:
+    """分享链接完整 URL（部署挂账 §4）。
+
+    设了 SHARE_WEB_URL_BASE（生产/演示 web）→ `{base}/share/twin/{token}` web 落地页：
+    微信等内置浏览器可直接打开（深链会被吞），页面展示激活码并引导唤起 App；
+    未设 → 保持 App 深链（本地开发兼容）。每请求现读 env，测试可 monkeypatch。
+    """
+    base = os.getenv("SHARE_WEB_URL_BASE", "").rstrip("/")
+    prefix = f"{base}/share/twin/" if base else SHARE_DEEP_LINK_PREFIX
+    return f"{prefix}{token}"
 
 
 def _require_rep(current_user: dict):
@@ -99,7 +112,7 @@ async def create_share_link(
     return success({
         **link.to_dict(),
         "twin_name": specialist.name,
-        "share_url": f"{SHARE_URL_PREFIX}{link.url_token}",
+        "share_url": _share_url(link.url_token),
     })
 
 
@@ -119,7 +132,7 @@ async def list_share_links(
     )
     return success([
         {**link.to_dict(), "twin_name": spec.name,
-         "share_url": f"{SHARE_URL_PREFIX}{link.url_token}"}
+         "share_url": _share_url(link.url_token)}
         for link, spec in rows
     ])
 

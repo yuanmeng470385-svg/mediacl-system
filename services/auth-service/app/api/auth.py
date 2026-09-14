@@ -3,6 +3,7 @@
 
     POST /api/v1/auth/send-code   发送手机验证码
     POST /api/v1/auth/login       登录（手机号+验证码 或 用户名+密码）
+    POST /api/v1/auth/register    医生自助注册（部署挂账 §5，公开；注册即登录）
     GET  /api/v1/auth/profile     当前用户（移动端调这个）
     GET  /api/v1/auth/me          当前用户（Web 后台调这个，同一实现）
 
@@ -25,6 +26,8 @@ from shared.common.auth import create_token, get_current_user
 from shared.common.context import get_request_id
 from shared.common.db_session import get_db
 from shared.common.response import success, ParamError, AuthError, BusinessError
+from shared.models.hcp import Hcp
+from shared.models.user import User
 
 from app.config import settings
 from app.core.code_store import (
@@ -34,7 +37,7 @@ from app.core.code_store import (
     CodeStoreError,
     RedisCodeStore,
 )
-from app.core.security import generate_code, verify_password
+from app.core.security import generate_code, hash_password, verify_password
 from app.db.repositories.user_repo import UserRepo
 from app.services.audit_client import write_audit_log
 from app.services.sms import SmsSendError, get_sms_sender
@@ -197,6 +200,87 @@ async def send_code(
         # 仅开发联调用。AUTH_DEV_MODE 必须在生产关闭。
         data["code"] = issued
     return success(data)
+
+
+# ==================== 医生自助注册（部署挂账 §5） ====================
+
+@router.post("/register")
+async def register(
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """医生自助注册（公开端点，注册即登录）。
+
+    Request:  {"phone","full_name","password","hospital?","department?","title?"}
+    Response: {"token","user"} —— 同 login，前端注册成功直接进入已登录态。
+
+    医院信息（hospital/department/title）落 hcps 医生档案表（与 hcp-service
+    共表，按 phone 关联）；doctor_profiles 是偏好画像、不含这些列，不为此加列。
+    """
+    if not isinstance(payload, dict):
+        raise ParamError("请求体必须是 JSON 对象")
+
+    phone = str(payload.get("phone") or "").strip()
+    full_name = str(payload.get("full_name") or "").strip()
+    password = str(payload.get("password") or "")
+    hospital = str(payload.get("hospital") or "").strip() or None
+    department = str(payload.get("department") or "").strip() or None
+    title = str(payload.get("title") or "").strip() or None
+
+    if not PHONE_RE.match(phone):
+        raise ParamError("手机号格式不正确")
+    if not (2 <= len(full_name) <= 30):
+        raise ParamError("姓名长度须为 2-30 个字符")
+    if (
+        len(password) < 8
+        or not re.search(r"[A-Za-z]", password)
+        or not re.search(r"\d", password)
+    ):
+        raise ParamError("密码至少 8 位，且须同时包含字母和数字")
+
+    # users.phone 有部分唯一索引、username 唯一；注册 username=phone，两查都做
+    if UserRepo.get_by_phone(db, phone) or UserRepo.get_by_username(db, phone):
+        # 4001 与 users.py 创建用户撞号同码（username/phone 冲突统一口径）
+        raise BusinessError("该手机号已注册，请直接登录", code=4001)
+
+    user = User(
+        username=phone,
+        full_name=full_name,
+        phone=phone,
+        password_hash=hash_password(password),
+        role="doctor",
+        status="active",
+    )
+    db.add(user)
+    hcp = None
+    if hospital or department or title:
+        hcp = Hcp(
+            name=full_name,
+            phone=phone,
+            hospital=hospital,
+            department=department,
+            title=title,
+        )
+        db.add(hcp)
+    db.commit()
+    db.refresh(user)
+
+    token = create_token(user_id=user.id, username=user.username, role=user.role)
+
+    await write_audit_log(
+        action="auth_register",
+        user_id=user.id,
+        resource_type="user",
+        resource_id=str(user.id),
+        after_value={"role": "doctor", "hcp_id": hcp.id if hcp else None},
+        client_ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        request_id=get_request_id() or None,
+    )
+    logger.info(f"医生自助注册成功 user_id={user.id}")
+
+    return success({"token": token, "user": user.to_dict()})
 
 
 # ==================== 登录 ====================

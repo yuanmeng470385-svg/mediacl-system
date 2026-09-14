@@ -16,6 +16,8 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   // 认证
   Login: undefined;
+  // 医生自助注册（部署挂账 §5，未登录栈）
+  Register: undefined;
   // 主 Tab
   MainTabs: undefined;
   // 分身激活（深链接场景由 Task 9 注入分享链接 token；列表入口不带 token 手动输入）

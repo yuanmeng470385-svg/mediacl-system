@@ -23,6 +23,15 @@ interface AuthState {
   setPendingToken: (token: string | null) => void;
   login: (phone: string, code: string) => Promise<void>;
   loginByPassword: (username: string, password: string) => Promise<void>;
+  /** 医生自助注册（部署挂账 §5）：注册即登录 */
+  register: (payload: {
+    phone: string;
+    full_name: string;
+    password: string;
+    hospital?: string;
+    department?: string;
+    title?: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -90,6 +99,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(result.token);
   }, []);
 
+  const register = useCallback(async (payload: Parameters<typeof authAPI.register>[0]) => {
+    const result = await authAPI.register(payload);
+    setUser(result.user);
+    setToken(result.token);
+  }, []);
+
   const logout = useCallback(async () => {
     await authAPI.logout();
     setUser(null);
@@ -116,6 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPendingToken,
         login,
         loginByPassword,
+        register,
         logout,
         refreshProfile,
       }}

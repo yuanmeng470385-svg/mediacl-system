@@ -14,6 +14,7 @@ import type { RootStackParamList, MainTabParamList } from './types';
 
 // Screens
 import LoginScreen from '../screens/Login/LoginScreen';
+import RegisterScreen from '../screens/Login/RegisterScreen';
 import MedicalQAScreen from '../screens/MedicalQA/MedicalQAScreen';
 import MyTwinsScreen from '../screens/MyTwins/MyTwinsScreen';
 import ProfileScreen from '../screens/Profile/ProfileScreen';
@@ -243,11 +244,19 @@ export default function AppNavigator() {
             />
           </>
         ) : (
-          <Stack.Screen
-            name="Login"
-            component={LoginScreen}
-            options={{ animationTypeForReplace: 'pop' }}
-          />
+          <>
+            <Stack.Screen
+              name="Login"
+              component={LoginScreen}
+              options={{ animationTypeForReplace: 'pop' }}
+            />
+            {/* 部署挂账 §5：医生自助注册（注册即登录，成功后自动切主 Tab） */}
+            <Stack.Screen
+              name="Register"
+              component={RegisterScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>

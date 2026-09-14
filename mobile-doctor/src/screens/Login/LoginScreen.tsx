@@ -14,12 +14,17 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAuth } from '../../store/AuthContext';
 import { authAPI } from '../../api/auth';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
+import type { RootStackParamList } from '../../navigation/types';
 
 export default function LoginScreen() {
   const { login, loginByPassword } = useAuth();
+  const navigation =
+    useNavigation<NativeStackNavigationProp<RootStackParamList, 'Login'>>();
   const [mode, setMode] = useState<'code' | 'password'>('code');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
@@ -227,6 +232,15 @@ export default function LoginScreen() {
             <Text style={styles.switchText}>
               {mode === 'code' ? '使用密码登录' : '使用验证码登录'}
             </Text>
+          </TouchableOpacity>
+
+          {/* 部署挂账 §5：医生自助注册入口 */}
+          <TouchableOpacity
+            style={styles.switchRow}
+            onPress={() => navigation.navigate('Register')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.switchText}>还没有账号？立即注册</Text>
           </TouchableOpacity>
 
           <TouchableOpacity

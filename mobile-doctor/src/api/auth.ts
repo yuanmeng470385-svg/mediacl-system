@@ -51,6 +51,29 @@ export const authAPI = {
     return result;
   },
 
+  /** 医生自助注册（部署挂账 §5，公开端点）：注册即登录，返回 {token, user} 同 login */
+  async register(payload: {
+    phone: string;
+    full_name: string;
+    password: string;
+    hospital?: string;
+    department?: string;
+    title?: string;
+  }): Promise<LoginResponse> {
+    const result = await apiClient.request<LoginResponse>(
+      'POST',
+      '/api/v1/auth/register',
+      payload
+    );
+    if (result.token) {
+      await apiClient.setToken(result.token);
+    }
+    if (result.user) {
+      await authAPI.cacheUser(result.user);
+    }
+    return result;
+  },
+
   /** 缓存用户信息到本地（登录时写入；checkAuth 网络失败时读取兜底） */
   async cacheUser(user: User): Promise<void> {
     try {

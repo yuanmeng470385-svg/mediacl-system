@@ -168,6 +168,26 @@ def test_create_link_twin_inactive_4000(fresh_state):
     assert resp.status_code == 404
     assert resp.json()["code"] == 4000
 
+
+# ==================== 部署挂账 §4：share_url 前缀双形态 ====================
+
+def test_create_link_share_url_web_landing(fresh_state, monkeypatch):
+    """设 SHARE_WEB_URL_BASE → web 落地页 URL（微信内置浏览器可打开）"""
+    monkeypatch.setenv("SHARE_WEB_URL_BASE", "http://192.168.1.229:3000")
+    resp = client.post("/api/v1/share-links", json={"twin_id": 1}, headers=_token(3, "rep"))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["share_url"] == f"http://192.168.1.229:3000/share/twin/{data['url_token']}"
+
+
+def test_create_link_share_url_deep_link_without_base(fresh_state, monkeypatch):
+    """不设 SHARE_WEB_URL_BASE → 保持 App 深链（本地兼容；conftest 已清根 .env 演示值）"""
+    monkeypatch.delenv("SHARE_WEB_URL_BASE", raising=False)
+    resp = client.post("/api/v1/share-links", json={"twin_id": 1}, headers=_token(3, "rep"))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["share_url"] == f"medagent-doctor://twin/{data['url_token']}"
+
     # 不存在 twin
     resp = client.post("/api/v1/share-links", json={"twin_id": 999}, headers=_token(3, "rep"))
     assert resp.status_code == 404

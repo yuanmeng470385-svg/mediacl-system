@@ -86,7 +86,7 @@ cd web && npm run build            # tsc -b && vite build
 # 运行单个服务
 cd services/specialist-service && python -m uvicorn app.main:app --port 8001 --reload
 
-# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-20 全量 822 = 8 服务 803 + shared 19；此后各批增量见各段——2026-09-03 时点：specialist 348 / gateway 88 / visit 118 / compliance 120 / hcp 67 / audit 32 / shared 21 / mobile jest 104 / mobile-doctor jest 32 / web vitest 19；2026-09-07 演示打磨批：specialist 356 / visit 120 / mobile jest 105 / mobile-doctor jest 36，其余不变；2026-09-10 异议话术批：specialist 385 / gateway 88 / mobile jest 117 / web vitest 23，其余不变；2026-09-11 死页清理+张浩然批：specialist 387 / mobile-doctor jest 43，其余不变；auth 另有 7 skipped——本机 Redis 未起，7 个 Lua 并发用例跳过）
+# 运行测试（必须在服务目录下运行，sys.path 依赖 cwd；2026-08-20 全量 822 = 8 服务 803 + shared 19；此后各批增量见各段——2026-09-03 时点：specialist 348 / gateway 88 / visit 118 / compliance 120 / hcp 67 / audit 32 / shared 21 / mobile jest 104 / mobile-doctor jest 32 / web vitest 19；2026-09-07 演示打磨批：specialist 356 / visit 120 / mobile jest 105 / mobile-doctor jest 36，其余不变；2026-09-10 异议话术批：specialist 385 / gateway 88 / mobile jest 117 / web vitest 23，其余不变；2026-09-11 死页清理+张浩然批：specialist 387 / mobile-doctor jest 43，其余不变；**2026-09-14 部署挂账批：specialist 389 / gateway 90 / auth 179 passed + 7 skipped（新增 deploy_guard 3 + register 7）/ mobile-doctor jest 48（新增 auth-contract 5）/ web vitest 26（新增 ShareTwin deepLink 3）**，其余不变；auth 另有 7 skipped——本机 Redis 未起，7 个 Lua 并发用例跳过）
 cd services/auth-service && python -m pytest tests/ -v        # 152 passed + 7 skipped（2026-08-21 三期 L 全量回归实测，本机 Redis 未起——7 个跳过为验证码并发 consume Lua 用例，Redis 起时 159；2026-08-19 二期 E 实测 135（Redis 已起）；含备案资质 / 医生认证 / 培训材料 test_training_materials 8 / 题库考试 test_exams 19（二期 F 修复 fae0777 补 test_list_questions_exposes_answer_to_admin）/ 承诺书 test_commitment 4 / 隐私中心 test_privacy 24（三期 L：政策/个人信息/四类申请校验/me/管理列表 SLA/handle 落地/数据包/去标识化）用例）
 cd services/specialist-service && python -m pytest tests/ -v  # 331 passed（2026-09-02 风格归属澄清批 331 = 陪练记忆批 330 + 1；2026-08-20 三期 K Task 6 全量回归实测 267；三期 N 256 + 评分校验修复 1（5aa899c 排除 bool 防污染进步曲线）+ 三期 K 数据治理 10（mah_overview 2 / data_exports 申请·审批·下载 7 / ExportRequest 模型 1）；三期 M 终审 252 + 三期 N 陪练 LLM 深度评分 +4（迁移 021 transcript 模型 1 / 逐轮落库 transcript 1 / LLM 深度评分+降级基线 2）；三期 J 终审 239 + 三期 M 患教审核流 13（audit_status to_dict 1 / publish·unpublish 5 / review-queue·review 5 / zone 2）；219（二期 I：198 + 医生偏好 test_doctor_profiles 6 / 患教 test_patient_edu 5 / 广场 test_doctor_plaza 4 + chat 订阅硬校验 test_chat_subscription 3 + 运营统计 test_doctor_stats 3）+ 三期 J to_dict 1 / release·mine 5 / asset-list·detail·public·load 5 / off-shelf·陪练禁用 7 + 终审修复 2（内容可见收窄 / content 上限）；含一期 C 反馈明细/流式门禁全量帧/降级多轮上下文/医学问答/分享简报 + 二期 E 对话全文检索 test_conv_search 5 / 分身监控统计 test_monitor_specialists 9 / 冻结解冻/review-queue + 二期 G 学术卡片 test_academic_cards 6 / 卡片推送 test_card_pushes 7 + 二期 H Skill 模版 test_skill_packages 9 / AI 陪练 test_practices 9 / 分身管理 test_twin_manage 5；2026-08-21 三期 L 收尾复测 268 passed——三期 K 终审 6bd5d2f 补 xlsx 公式清洗 1 用例后的实数，三期 L 无 specialist 改动）
 cd services/hcp-service && python -m pytest tests/ -v         # 54
@@ -400,7 +400,7 @@ cd mobile-doctor && npx jest                         # 24 契约用例（doctor-
 cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17 + ANDROID_HOME 同 mobile）
 ```
 
-结构：`src/navigation/AppNavigator.tsx`（linking 深链 + Stack：Login → MainTabs[MedicalQA/MyTwins/Profile] → TwinActivate/TwinChat/CertUpload → Inbox/CardDetail（2026-08-19 二期 G 学术卡片收件箱/详情反馈）→ Plaza/Preference/PatientEdu/Favorites（2026-08-20 二期 I 官方广场/偏好/患教/收藏历史）；未登录时深链落到 Login）、`navigation/types.ts`（TwinActivate 参数 `{ token?: string }`——深链参数为 string）、`src/api/`（client.ts 自 mobile 原样拷贝，`medagent_token` 存储键一致；auth/doctor/medical/twin/inbox/doctorExp/favorites 七文件，契约以 api/*.ts 为唯一映射点）、`src/store/AuthContext.tsx`（useAuth：user/login/logout）、`src/constants/theme.ts` + `src/components/Icon.tsx` 自 mobile 拷贝。新增依赖仅 react-native-document-picker（上传）。细节：MyTwins 屏蔽态置灰禁聊；TwinActivate 对 activate 返回 subscribed=true 且 subscription_status=blocked 时不跳转（Alert「该分身已被暂停」，2026-08-17 B9 修复）；Profile 显示登录用户信息（useAuth）+ 医师资格认证入口（→ CertUpload，副标题回显审核状态）+ 退出登录。
+结构：`src/navigation/AppNavigator.tsx`（linking 深链 + Stack：Login → MainTabs[MedicalQA/MyTwins/Profile] → TwinActivate/TwinChat/CertUpload → Inbox/CardDetail（2026-08-19 二期 G 学术卡片收件箱/详情反馈）→ Plaza/Preference/PatientEdu/Favorites（2026-08-20 二期 I 官方广场/偏好/患教/收藏历史）；未登录时深链落到 Login，未登录栈另有 Register——2026-09-14 部署挂账批医生自助注册）、`navigation/types.ts`（TwinActivate 参数 `{ token?: string }`——深链参数为 string）、`src/api/`（client.ts 自 mobile 原样拷贝，`medagent_token` 存储键一致；auth/doctor/medical/twin/inbox/doctorExp/favorites 七文件，契约以 api/*.ts 为唯一映射点；auth 含 register——2026-09-14）、`src/store/AuthContext.tsx`（useAuth：user/login/loginByPassword/register/logout）、`src/constants/theme.ts` + `src/components/Icon.tsx` 自 mobile 拷贝。新增依赖仅 react-native-document-picker（上传）。细节：MyTwins 屏蔽态置灰禁聊；TwinActivate 对 activate 返回 subscribed=true 且 subscription_status=blocked 时不跳转（Alert「该分身已被暂停」，2026-08-17 B9 修复）；Profile 显示登录用户信息（useAuth）+ 医师资格认证入口（→ CertUpload，副标题回显审核状态）+ 退出登录。
 
 ## Real-time ASR（实时转写）
 
@@ -524,7 +524,7 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
   - 简报通知渠道 = 站内信（二期 G 起 briefing_ready 落 notifications；**2026-09-03 rep 消费侧上线**——mobile 通知中心页 + Profile 红点 + 点开即读）；短信/离线推送仍未接
   - 定时生成非精确到点（lifespan 用 interval 24h 近似每日一跑，未接 cron 精确到固定时刻）
   - specialist 无 rep 归属列（「我的分身」口径 = 本人创建过分享链接的分身，非分身的创建者/负责人归属）
-  - 微信落地页/二维码未做（分享链接仅 medagent-doctor:// 深链，无微信 H5 落地页或二维码海报）
+  - ~~微信落地页未做（分享链接仅 medagent-doctor:// 深链）~~（2026-09-14 部署挂账批已交付：设 `SHARE_WEB_URL_BASE` 后 share_url 走 web 公开落地页 `/share/twin/:token`——激活码大字+复制+唤起 App+微信「⋯浏览器打开」提示，风格抄登录页；不设 env 保持深链兼容。二维码海报仍未做——挂账）
 - **合规培训考试子系统挂账（2026-08-19 二期 F 收尾，勿误以为已做）**：
   - 培训前置"先上线不强制"为设计决策（本计划只做状态展示/回写，不做考试/承诺书门禁拦截——未培训/未签署不影响账号使用）
   - AI 出题草稿不落库（`/ai-generate` 仅返回草稿供管理端预览，人工确认后走正常入库 + 人工审核；AI 内容仅辅助）
@@ -747,6 +747,15 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - 测试基线（2026-09-11 实测）：specialist 387（+2 判别：bailian client_info 分流 / 降级 prompt 禁名）；测试桩 6 处补 user_id kwarg（chat/chat_stream 假签名单参化）；mobile jest 117 + tsc 0 / mobile-doctor jest 43（+3 favorites 契约）+ tsc 0
 - 实机复验（demo_doctor 经网关）：你好/正经学术问题均正常回答、语义层放行、无张浩然
 
+**部署挂账清偿批（2026-09-14，施工单 5 项全交付；前置提交 5f38954 = 09-11 批）**：
+- **§1 release 明文**：两工程新增 `android/app/src/release/AndroidManifest.xml`（usesCleartextTraffic=true，演示期局域网 HTTP；上线 TLS 后换 networkSecurityConfig 白名单）；`mobile*/src/config.ts` DEV_HOST 改 `__DEV__` 三元——dev=10.0.2.2（模拟器）、release=192.168.1.229（真机，IP 变了要改这两处再打包）。双 assembleRelease 产出验证（merged manifest 确认合入）；**注意 dev_up --check 的 DEV_HOST 解析读不了三元表达式，报 `DEV_HOST=?` 属体检脚本局限非配置错误**
+- **§2 web build+nginx**：`deploy/nginx/medagent-web.conf`（SPA try_files 回退——BrowserRouter 深链依赖；/api/ 反代 8000 + WS 升级头透传；client_max_body_size 20m；gzip；/health 同步代理）+ `deploy/README.md` 部署总手册（.env 生产值/compose 起后端/nginx 起 web/APK/账号入口/转正式清单）+ `deploy/env.production.example`。web build 过（37s）
+- **§3 AUTH_DEV_MODE 生产守卫**：auth config 加 `DEPLOY_ENV`（默认 dev）；main.py 启动守卫——`DEV_MODE=true 且 DEPLOY_ENV=production` → RuntimeError 拒绝启动，dev 环境维持警告。`.env.example` 补 DEPLOY_ENV/SHARE_WEB_URL_BASE 注释。测试 test_deploy_guard.py（子进程 import 断言三条，B5 库密码守卫用非默认密码 DATABASE_URL 绕开聚焦被测守卫）
+- **§4 分享落地页**：specialist `twin_subscriptions.py` 的 share_url 前缀改 `_share_url(token)` 每请求读 env——设 `SHARE_WEB_URL_BASE` → `{base}/share/twin/{token}`，不设 → 深链 `medagent-doctor://twin/{token}` 兼容（SHARE_URL_PREFIX 常量删，全仓无外部引用）；specialist conftest autouse 清该键防根 .env 演示值污染断言。web 新增公开路由 `/share/twin/:token`（`web/src/pages/ShareTwin/`，token 32hex 校验、激活码大字+复制（clipboard+execCommand 兜底）+唤起 App+微信提示，深链拼装抽 `deepLink.ts` 纯函数供 vitest）；根 .env 加 `SHARE_WEB_URL_BASE=http://192.168.1.229:3000`（演示态；上 nginx 改 80）。医生端 App 无需改（token 兼容手输）
+- **§5 医生自助注册**：auth `POST /api/v1/auth/register`（公开；phone `^1[3-9]\d{9}$` + full_name 2-30 + 密码≥8 含字母数字；重复 4001「该手机号已注册」；建 User{username=phone, role=doctor, active, bcrypt}；hospital/department/title 选填落 **hcps 表**（医生档案归宿；doctor_profiles 是偏好画像无这些列——**未新增迁移，下一编号仍 030**）；审计 auth_register；响应 {token,user} 注册即登录）。网关 PUBLIC_PATHS += `/api/v1/auth/register`。mobile-doctor：authAPI.register + AuthContext.register + RegisterScreen（仿 LoginScreen 卡片范式，7 字段+协议勾选+两次密码确认）+ LoginScreen「立即注册」入口 + 未登录栈 Register 路由 + auth-contract.test.ts 5 用例
+- 基线：specialist 389 / gateway 90 / auth 179+7skip / mobile 117 / mobile-doctor 48 / web vitest 26 / web build PASS / 双 assembleRelease PASS；8 服务 dev_up 重启 + 接口冒烟全过（注册→注册 token 取 profile→密码登录→重复 422/4001→弱密码 400→share_url 落地页形态；冒烟医生行按三期 L 注销语义软删——users 被 audit_logs FK 挡物理删除属 002 设计）；web dev :3000 已起（落地页 curl 200）
+- 新 env 键：`DEPLOY_ENV`（dev/production，auth 生产守卫）、`SHARE_WEB_URL_BASE`（分享落地页前缀；specialist 每请求读，重启生效）
+
 ## Backup & Restore（2026-08-12 新增）
 
 - **每日自动备份**：`scripts/backup_db.py` —— pg_dump -Fc 全量 → pg_restore --list 校验 → OSS 上传（ACL 私有）→ 本地 7 天 / OSS 30 天过期清理。ECS crontab：
@@ -765,7 +774,7 @@ cd mobile-doctor/android && ./gradlew assembleDebug  # BUILD SUCCESSFUL（JDK 17
 - **容器内不能用 localhost**：`.env` 里的 `DATABASE_URL`/`REDIS_URL`/`GATEWAY_URL` 是给宿主机直跑 uvicorn 用的。docker-compose 用 `environment` 覆盖成 compose 服务名（`postgres`/`redis`/`gateway`）。
 - **`JWT_SECRET` 必须配**：auth-service 检测到未配置或仍是默认值会拒绝启动（否则会签出可伪造的 token）。生成：`openssl rand -hex 32`。
 - **`INTERNAL_API_KEY` 必须配**：`shared/common/internal_auth.py` 检测到未配置或默认值会抛 RuntimeError —— 网关/所有服务都依赖它做内部接口鉴权。生成：`openssl rand -hex 32`，网关与所有服务必须一致（`env_file: .env` 天然保证）。
-- **`AUTH_DEV_MODE=true` 只能本地用**：打开后 `send-code` 会在响应体里回传验证码。
+- **`AUTH_DEV_MODE=true` 只能本地用**：打开后 `send-code` 会在响应体里回传验证码。**2026-09-14 生产守卫**：`DEPLOY_ENV=production` 时该值为 true 会让 auth-service 启动即 RuntimeError 拒绝启动（auth config.py `DEPLOY_ENV` + main.py 守卫，测试 test_deploy_guard.py）。
 - **验证码存 Redis，不 fail-open**：Redis 挂了 `send-code`/`login` 直接返回 5004，不放行。
 - **Windows GBK 控制台**：不能输出 ✓ / ✔ / emoji，否则 `UnicodeEncodeError`。用中文标记代替（如"达标"）。
 - **测试从服务目录跑**：`sys.path` 依赖 `os.path.join(__file__, "..", "..", "..")` 找到 shared，从项目根目录执行会 `ModuleNotFoundError: No module named 'app'`。

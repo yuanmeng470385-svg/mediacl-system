@@ -9,7 +9,8 @@ import { Platform } from 'react-native';
 // 模拟器：Android 用 10.0.2.2（宿主机回环），iOS 用 localhost
 // const DEV_HOST = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
 // 真机联调（2026-08-27 代表端）：电脑局域网 IP（后端 --host 0.0.0.0）
-const DEV_HOST = '10.0.2.2'; // 演示预演：模拟器宿主回环（模拟器 slirp 丢默认路由时 192.168.1.229 不通；真机用 192.168.1.229）
+// dev=模拟器宿主回环（模拟器 slirp 丢默认路由时 192.168.1.229 不通）；release=真机走宿主机局域网 IP
+const DEV_HOST = __DEV__ ? '10.0.2.2' : '192.168.1.229';
 
 export const API_HOST = DEV_HOST;
 export const ASR_HOST = DEV_HOST;
