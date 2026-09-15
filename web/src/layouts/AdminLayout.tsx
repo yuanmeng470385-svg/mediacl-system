@@ -46,7 +46,11 @@ export default function AdminLayout() {
       menuItemRender={(item) => (
         <a onClick={() => item.path && navigate(item.path)}>
           {item.path === '/todos' ? (
-            <Badge count={todoTotal} overflowCount={99} offset={[10, 0]} size="small">
+            // Badge 根元素自带亮色主题文字色（rgba(0,0,0,.88) 黑），会盖掉深色菜单的白字。
+            // 注意 antd Badge 的 style prop 只作用于红色数字角标（scrollNumber），
+            // 覆盖根元素文字色必须用 styles.root（语义化 DOM API），随菜单项配色
+            // （未选 0.65 白 / 选中纯白，与「数字专员」等分组标题同款）
+            <Badge count={todoTotal} overflowCount={99} offset={[10, 0]} size="small" styles={{ root: { color: 'inherit' } }}>
               {item.name}
             </Badge>
           ) : (

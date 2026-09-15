@@ -39,8 +39,8 @@ class Settings:
     AUDIT_SERVICE_URL = os.getenv("AUDIT_SERVICE_URL", "http://localhost:8005")
     HCP_SERVICE_URL = os.getenv("HCP_SERVICE_URL", "http://localhost:8006")
 
-    # 限流配置
-    RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+    # 限流配置（2026-09-15 应管理员端反馈 60→600：常驻轮询+页面高频刷新下 429 频发）
+    RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "600"))
 
 
 settings = Settings()
