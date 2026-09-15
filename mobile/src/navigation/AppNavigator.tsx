@@ -50,6 +50,7 @@ import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import TwinManageScreen from '../screens/Twin/TwinManageScreen';
 import MyTwinsScreen from '../screens/Twin/MyTwinsScreen';
 import CreateTwinWizardScreen from '../screens/Twin/CreateTwinWizardScreen';
+import AssistantScreen from '../screens/Assistant/AssistantScreen';
 import SkillReleaseScreen from '../screens/Skill/SkillReleaseScreen';
 import MySkillListScreen from '../screens/Skill/MySkillListScreen';
 import SkillExtractScreen from '../screens/Skill/SkillExtractScreen';
@@ -240,6 +241,8 @@ export default function AppNavigator() {
             {/* 分身管理双入口（2026-09-15 重构）：我的分身列表 + 三步创建向导 */}
             <Stack.Screen name="MyTwins" component={MyTwinsScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="CreateTwin" component={CreateTwinWizardScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 产品使用 AI 助手（2026-09-15 三端） */}
+            <Stack.Screen name="Assistant" component={AssistantScreen} options={{ animation: 'slide_from_right' }} />
             {/* Skill 生态（三期 J） */}
             <Stack.Screen name="SkillRelease" component={SkillReleaseScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="MySkillList" component={MySkillListScreen} options={{ animation: 'slide_from_right' }} />

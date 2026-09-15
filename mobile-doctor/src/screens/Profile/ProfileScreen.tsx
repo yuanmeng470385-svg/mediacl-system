@@ -121,6 +121,22 @@ export default function ProfileScreen() {
           ))}
         </View>
 
+        {/* AI 助手入口（2026-09-15 三端：功能不熟/找不到入口时直接问） */}
+        <TouchableOpacity
+          style={[styles.card, Shadow.card, styles.entryRow]}
+          onPress={() => navigation.navigate('Assistant')}
+          activeOpacity={0.7}
+        >
+          <View style={styles.iconBox}>
+            <Icon name="robot-excited-outline" size={20} color={Colors.primary} />
+          </View>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>AI 助手</Text>
+            <Text style={styles.desc}>功能不知道在哪、怎么用，直接问</Text>
+          </View>
+          <Icon name="chevron-right" size={20} color={Colors.textHint} />
+        </TouchableOpacity>
+
         {/* 站内通知入口（未读红点：新卡片提醒点开即读） */}
         <TouchableOpacity
           style={[styles.card, Shadow.card, styles.entryRow]}

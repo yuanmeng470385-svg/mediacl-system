@@ -115,6 +115,7 @@ ROUTE_MAP = {
     "/api/v1/skill-packages": settings.SPECIALIST_SERVICE_URL,  # Skill 模版与广场（二期 H）
     "/api/v1/practices": settings.SPECIALIST_SERVICE_URL,  # AI 陪练（二期 H）
     "/api/v1/doctor-profiles": settings.SPECIALIST_SERVICE_URL,  # 医生偏好引擎（二期 I）
+    "/api/v1/assistant": settings.SPECIALIST_SERVICE_URL,  # 产品使用 AI 助手（三端，2026-09-15）
     "/api/v1/patient-edu": settings.SPECIALIST_SERVICE_URL,  # 患教工具（二期 I）
     "/api/v1/doctor-plaza": settings.SPECIALIST_SERVICE_URL,  # 医生侧广场（二期 I）
     "/api/v1/doctor-stats": settings.SPECIALIST_SERVICE_URL,  # 运营统计（二期 I）

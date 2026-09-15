@@ -24,6 +24,7 @@ import type { RootStackParamList } from '../../navigation/types';
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 const menuItems = [
+  { icon: 'robot-excited-outline', label: 'AI 助手', route: 'Assistant' as const },
   { icon: 'account-outline', label: '个人资料', route: 'Settings' as const },
   { icon: 'clipboard-check-outline', label: '我的任务', route: 'TaskList' as const },
   { icon: 'star-outline', label: '我的收藏', route: 'Favorites' as const },

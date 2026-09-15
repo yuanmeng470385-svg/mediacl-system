@@ -61,6 +61,8 @@ export type RootStackParamList = {
   // 分身管理双入口（2026-09-15 重构）：列表 + 三步创建向导
   MyTwins: undefined;
   CreateTwin: undefined;
+  // 产品使用 AI 助手（2026-09-15 三端）
+  Assistant: undefined;
   // Skill 生态（三期 J）
   SkillRelease: { draft?: SkillDraft } | undefined;
   MySkillList: undefined;

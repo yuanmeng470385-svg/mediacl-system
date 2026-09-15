@@ -24,6 +24,7 @@ import CertUploadScreen from '../screens/CertUpload/CertUploadScreen';
 import InboxScreen from '../screens/Inbox/InboxScreen';
 import CardDetailScreen from '../screens/Inbox/CardDetailScreen';
 import NotificationsScreen from '../screens/Notifications/NotificationsScreen';
+import AssistantScreen from '../screens/Assistant/AssistantScreen';
 import PreferenceScreen from '../screens/Preferences/PreferenceScreen';
 import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import PatientEduScreen from '../screens/PatientEdu/PatientEduScreen';
@@ -205,6 +206,12 @@ export default function AppNavigator() {
             <Stack.Screen
               name="Notifications"
               component={NotificationsScreen}
+              options={{ animation: 'slide_from_right' }}
+            />
+            {/* 产品使用 AI 助手（2026-09-15 三端） */}
+            <Stack.Screen
+              name="Assistant"
+              component={AssistantScreen}
               options={{ animation: 'slide_from_right' }}
             />
             <Stack.Screen

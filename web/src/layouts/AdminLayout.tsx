@@ -7,6 +7,7 @@ import { menuConfig } from '../constants/menu';
 import { canAccess, filterMenu, isKnownRoute } from '../constants/routeAccess';
 import Forbidden from '../components/Forbidden';
 import GuideTour from '../components/onboarding/GuideTour';
+import AssistantChat from '../components/Assistant/AssistantChat';
 import { useAuth } from '../hooks/useAuth';
 
 export default function AdminLayout() {
@@ -61,6 +62,8 @@ export default function AdminLayout() {
       )}
       {/* 陪玩式新人引导（v2）：Modal + 右下角"?"悬浮球（体验态挂「继续」召回角标），跨路由存活 */}
       <GuideTour role={user?.role} />
+      {/* 产品使用 AI 助手（2026-09-15 三端）：悬浮球 + Drawer 聊天，跨路由存活 */}
+      <AssistantChat />
     </ProLayout>
   );
 }
