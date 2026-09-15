@@ -903,7 +903,8 @@ _TWIN_STYLE_PROMPT = (
     "（与数字专员问答 / 拜访医生实录 / AI 陪练，按块分组，块内均为代表原话）。"
     "基于这些真实发言提炼该代表的说话风格，用于生成其数字分身。"
     "只依据代表发言分析，不得虚构素材。只输出 JSON，格式："
-    '{"name":"分身名称","style":{"formal_level":"标准学术","reply_length":"标准","opening_mode":"直切主题"},"style_profile":"风格画像"}\n'
+    '{"name":"沉稳学术型","style":{"formal_level":"标准学术","reply_length":"标准","opening_mode":"直切主题"},"style_profile":"风格画像"}\n'
+    'name 是为该代表分身起的简短有辨识度的名字（如「沉稳学术型」「亲和科普型」），不得照抄示例名。\n'
     'style 内枚举：formal_level 仅可取 "非常严谨/标准学术/略带亲和力"；'
     'reply_length 仅可取 "简洁/标准/详尽"；opening_mode 仅可取 "直切主题/先寒暄再进入"。\n'
     "style_profile 为 200 字内的语言风格画像：开场习惯、句式长短、语气亲和度、"
