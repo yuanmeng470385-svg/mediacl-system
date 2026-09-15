@@ -869,36 +869,22 @@ async def resume_twin(
     return success(spec.to_dict())
 
 
-@router.post("/style-test")
-async def style_test_generate(
-    payload: dict,
-    current_user: dict = Depends(require_roles("rep")),
-    db: Session = Depends(get_db),
-):
-    """分身生成（4.3(1)）：风格测试 5 题 → 生成 persona 风格画像 → 建分身（prompt/检索级个性化，非微调）"""
-    if not isinstance(payload, dict):
-        raise ParamError("请求体必须是 JSON 对象")
+def _validate_quiz_answers(payload: dict):
+    """5 题问卷答案校验（原 style-test 入参，2026-09-15 向导合并收编到 style-from-records）：
+    None = 未答（合法，走纯素材路径）；否则必须 5 个 int。返回均值映射出的风格三枚举。"""
     answers = payload.get("answers")
-    if not isinstance(answers, list) or len(answers) != 5 or not all(isinstance(a, int) for a in answers):
+    if answers is None:
+        return None
+    if not isinstance(answers, list) or len(answers) != 5 or not all(
+        isinstance(a, int) and not isinstance(a, bool) for a in answers
+    ):
         raise ParamError("answers 必须是 5 个 0-2 的选项索引数组")
     # 简化映射：均值 → 正式度/长度/开场白（prompt/检索级个性化口径）
     avg = sum(max(0, min(2, a)) for a in answers) / 5
     formal = "非常严谨" if avg < 0.67 else "标准学术" if avg < 1.34 else "略带亲和力"
     length = "简洁" if avg < 0.67 else "标准" if avg < 1.34 else "详尽"
     opening = "直切主题" if avg < 1.0 else "先寒暄再进入"
-    persona = {"style": {"formal_level": formal, "reply_length": length, "opening_mode": opening}}
-    from app.config import settings as app_settings
-    twin = Specialist(
-        name=f"{current_user.get('username')}的分身", product_id=None,
-        persona=persona, status="active", representative_id=current_user["id"],
-        # 演示安全批（2026-09-03）：挂共享官方百炼 App，建完即可对话；
-        # 未配置 DEFAULT_TWIN_BAILIAN_APP_ID 时为 None（旧行为，chat 报未配置）
-        bailian_app_id=app_settings.DEFAULT_TWIN_BAILIAN_APP_ID or None,
-    )
-    db.add(twin)
-    db.commit()
-    db.refresh(twin)
-    return success(twin.to_dict())
+    return {"formal_level": formal, "reply_length": length, "opening_mode": opening}
 
 
 # ==================== 从历史记录生成分身（2026-09-10） ====================
@@ -1038,10 +1024,14 @@ async def style_from_records(
     current_user: dict = Depends(require_roles("rep")),
     db: Session = Depends(get_db),
 ):
-    """从历史记录生成分身（2026-09-10）：选本人三类对话记录 → qwen 提取真实
-    说话风格 → 直接建分身（与 5 题问卷双入口并存）。
+    """创建分身统一入口（2026-09-15 向导合并，原 style-test 端点收编删除）：
+    三步向导「5 题问卷 → 选真实记录 → 起名」一次成型。
 
-    persona = {style 三枚举, style_profile 画像, sources 溯源, generated_from}；
+    - answers + sources：向导全量——LLM 从记录提取 style_profile 画像，
+      style 三枚举取问卷映射（用户显式作答优先于 LLM 推断），generated_from=wizard
+    - 仅 sources（2026-09-10 原行为）：LLM 提取三枚举 + 画像，generated_from=records
+    - 仅 answers（原 style-test 语义）：不调 LLM、不限额、无画像，generated_from=quiz
+
     门槛对齐 skill extract-draft：素材 ≥10 条、合并截 6000 字；限额 3 次/天
     （audit 计数，成功后落审计，LLM 失败不耗额度）；LLM 失败返回 4003 可重试。
     style_profile 由 _inject_persona_style 注入对话 prompt，让画像真正生效。"""
@@ -1053,10 +1043,34 @@ async def style_from_records(
 
     if not isinstance(payload, dict):
         raise ParamError("请求体必须是 JSON 对象")
-    sources = _validate_style_sources(payload)
+    quiz_style = _validate_quiz_answers(payload)
+    raw_sources = payload.get("sources")
+    if raw_sources is not None and not isinstance(raw_sources, list):
+        raise ParamError("sources 必须是记录数组")
+    has_sources = bool(raw_sources)
+    if not has_sources and quiz_style is None:
+        raise ParamError("请先完成风格问卷，或选择对话记录作为素材")
+    sources = _validate_style_sources(payload) if has_sources else []
     name_hint = (payload.get("name") or "").strip()
     if len(name_hint) > 100:
         raise ParamError("name 不能超过 100 字符")
+
+    # 纯问卷路径：零素材直接建分身（与原 style-test 语义一致，不走 LLM/限额）
+    if not has_sources:
+        from app.config import settings as app_settings
+        persona = {"style": quiz_style, "generated_from": "quiz"}
+        twin = Specialist(
+            name=name_hint or f"{current_user.get('username')}的分身",
+            product_id=None, persona=persona, status="active",
+            representative_id=current_user["id"],
+            # 与素材路径同口径：挂共享官方百炼 App，建完即可对话；
+            # 未配置 DEFAULT_TWIN_BAILIAN_APP_ID 时为 None（旧行为，chat 报未配置）
+            bailian_app_id=app_settings.DEFAULT_TWIN_BAILIAN_APP_ID or None,
+        )
+        db.add(twin)
+        db.commit()
+        db.refresh(twin)
+        return success(twin.to_dict(), "分身已生成")
 
     groups = _load_style_material(db, current_user["id"], sources)
     total = sum(len(lines) for _, lines in groups)
@@ -1102,11 +1116,12 @@ async def style_from_records(
 
     from app.config import settings as app_settings
     persona = {
-        "style": draft["style"],
+        # 向导合并：问卷作答存在时三枚举取问卷映射（用户显式意图 > LLM 推断）
+        "style": quiz_style or draft["style"],
         "style_profile": draft.get("style_profile") or "",
         # 溯源留档（对齐 skill source_session_ids）：本人生成时选用的记录清单
         "sources": [{"type": src["type"], "id": src["id"]} for src in sources],
-        "generated_from": "records",
+        "generated_from": "wizard" if quiz_style is not None else "records",
     }
     twin = Specialist(
         name=name_hint or draft.get("name") or f"{current_user.get('username')}的分身",
@@ -1210,18 +1225,30 @@ async def update_specialist(
 @router.delete("/{specialist_id}")
 async def disable_specialist(
     specialist_id: int,
-    current_user: dict = Depends(require_roles("admin")),
+    current_user: dict = Depends(require_roles("admin", "rep")),
     db: Session = Depends(get_db),
 ):
-    """停用专员（软删，status=disabled）"""
+    """删除/停用专员（软删，status=disabled）。
+
+    2026-09-15 扩归属分支：rep 可删本人分身（代表端「我的分身-删除」入口）——
+    官方/他人分身被 _assert_twin_owner 拦下（3000）。软删口径：对话/审计等历史
+    全部留存（合规留存要求，物理删会撞 conversations/subscriptions 等 8 张子表 FK），
+    rep 端列表过滤 disabled 即"消失"；医生侧订阅分身 chat 已被「仅 active 可对话」拦截。
+    admin 行为不变。"""
     specialist = db.query(Specialist).filter(Specialist.id == specialist_id).first()
     if not specialist:
         raise HTTPException(status_code=404, detail="专员不存在")
+    is_rep = current_user["role"] == "rep"
+    if is_rep:
+        _assert_twin_owner(specialist, current_user)
     if specialist.status != "disabled":
         specialist.status = "disabled"
         db.commit()
     await write_audit_log(
-        user_id=current_user["id"], action="specialist_disable",
+        user_id=current_user["id"],
+        # rep 删本人分身与 admin 停用专员分账审计，便于区分代表侧操作
+        action="twin_delete" if is_rep else "specialist_disable",
         resource_type="digital_specialist", resource_id=str(specialist_id),
+        after_value={"name": specialist.name, "status": specialist.status} if is_rep else None,
     )
     return success(None, "专员已停用")

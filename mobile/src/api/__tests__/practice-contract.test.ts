@@ -66,11 +66,11 @@ describe('practice/plaza/twin API', () => {
     expect(init.method).toBe('PUT');
   });
 
-  it('styleTest 发 POST /api/v1/specialists/style-test', async () => {
-    await twinAPI.styleTest([1, 2, 0, 1, 2]);
+  it('twinAPI.delete 发 DELETE /api/v1/specialists/1（删除本人分身，软删）', async () => {
+    await twinAPI.delete(1);
     const { url, init } = lastCall();
-    expect(url).toContain('/api/v1/specialists/style-test');
-    expect(JSON.parse(init.body)).toEqual({ answers: [1, 2, 0, 1, 2] });
+    expect(url).toContain('/api/v1/specialists/1');
+    expect(init.method).toBe('DELETE');
   });
 
   it('styleSources 发 GET /api/v1/specialists/style-sources', async () => {
@@ -97,6 +97,15 @@ describe('practice/plaza/twin API', () => {
     expect(url).toContain('/api/v1/specialists/style-from-records');
     expect(JSON.parse(init.body)).toEqual({
       sources: [{ type: 'practice', id: 3 }], name: '我的专属分身',
+    });
+  });
+
+  it('styleFromRecords 带 answers 时一并进 body（2026-09-15 三步向导合并）', async () => {
+    await twinAPI.styleFromRecords([], undefined, [1, 2, 0, 1, 2]);
+    const { url, init } = lastCall();
+    expect(url).toContain('/api/v1/specialists/style-from-records');
+    expect(JSON.parse(init.body)).toEqual({
+      sources: [], answers: [1, 2, 0, 1, 2],
     });
   });
 

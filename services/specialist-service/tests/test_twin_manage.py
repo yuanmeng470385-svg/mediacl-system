@@ -133,32 +133,70 @@ def test_pause_only_own_twin():
     assert resp.status_code == 403
 
 
-def test_style_test_creates_twin(fresh_state):
-    resp = client.post("/api/v1/specialists/style-test", json={
+def test_quiz_only_creates_twin(fresh_state):
+    # 2026-09-15 向导合并：原 style-test 端点收编，纯问卷路径走 style-from-records
+    resp = client.post("/api/v1/specialists/style-from-records", json={
         "answers": [1, 2, 0, 1, 2],
     }, headers=_token(1, "rep"))
     body = resp.json()
     assert body["code"] == 0
     assert body["data"]["representative_id"] == 1
     assert body["data"]["status"] == "active"
-    assert "style" in (body["data"]["persona"] or {})
+    persona = body["data"]["persona"]
+    assert "style" in persona
+    assert persona["generated_from"] == "quiz"
+    # 默认名 = 用户名的分身；问卷路径也吃 name 自定义
+    assert body["data"]["name"] == "rep01的分身"
 
 
-def test_style_test_attaches_default_bailian_app(fresh_state, monkeypatch):
-    # 演示安全批：配置了 DEFAULT_TWIN_BAILIAN_APP_ID 时风格测试分身建完即可对话
+def test_quiz_only_attaches_default_bailian_app(fresh_state, monkeypatch):
+    # 演示安全批：配置了 DEFAULT_TWIN_BAILIAN_APP_ID 时分身建完即可对话
     #（挂共享官方 App 知识库），未配置时保持 None（旧行为）
     from app.config import settings as app_settings
     monkeypatch.setattr(app_settings, "DEFAULT_TWIN_BAILIAN_APP_ID", "app-default-shared")
-    resp = client.post("/api/v1/specialists/style-test", json={
+    resp = client.post("/api/v1/specialists/style-from-records", json={
         "answers": [0, 1, 2, 1, 0],
     }, headers=_token(1, "rep"))
     assert resp.json()["data"]["bailian_app_id"] == "app-default-shared"
 
     monkeypatch.setattr(app_settings, "DEFAULT_TWIN_BAILIAN_APP_ID", "")
-    resp = client.post("/api/v1/specialists/style-test", json={
+    resp = client.post("/api/v1/specialists/style-from-records", json={
         "answers": [1, 1, 1, 1, 1],
     }, headers=_token(1, "rep"))
     assert resp.json()["data"]["bailian_app_id"] is None
+
+
+def test_wizard_answers_override_llm_style(fresh_state, monkeypatch):
+    # 向导全量：answers + sources 同时给 → 三枚举取问卷映射（用户显式作答 > LLM 推断）
+    import app.services.qwen_client as qc
+    monkeypatch.setattr(qc.QwenClient, "chat", lambda self, *a, **k: {
+        "content": '{"name":"LLM起的名","style":{"formal_level":"非常严谨",'
+                   '"reply_length":"简洁","opening_mode":"先寒暄再进入"},'
+                   '"style_profile":"短句为主"}',
+        "usage": {},
+    })
+    monkeypatch.setattr("app.services.audit_client.count_audit_logs", AsyncMock(return_value=None))
+    _seed_style_material(1)
+    # 全 0 → avg=0 → 非常严谨/简洁/直切主题；LLM 的 opening 是先寒暄，问卷应赢
+    resp = client.post("/api/v1/specialists/style-from-records", json={
+        "sources": _ALL_SOURCES, "answers": [0, 0, 0, 0, 0], "name": "我的专属",
+    }, headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    persona = body["data"]["persona"]
+    assert persona["generated_from"] == "wizard"
+    assert persona["style"]["opening_mode"] == "直切主题"
+    assert persona["style"]["formal_level"] == "非常严谨"
+    # 画像仍来自 LLM 提取
+    assert persona["style_profile"] == "短句为主"
+
+
+def test_style_from_records_requires_answers_or_sources(fresh_state):
+    # 两者皆无 → 参数错（原 style-from-records 的 sources 必填在此口径下放宽为二选一）
+    resp = client.post("/api/v1/specialists/style-from-records", json={},
+                       headers=_token(1, "rep"))
+    assert resp.json()["code"] == 1000
+    assert "问卷" in resp.json()["message"]
 
 
 # ==================== 从历史记录生成分身（2026-09-10） ====================
@@ -307,3 +345,43 @@ def test_style_from_records_llm_failure_no_twin(fresh_state, monkeypatch):
     db = TestSession()
     assert db.query(Specialist).count() == 0
     db.close()
+
+
+# ==================== 删除分身（2026-09-15 代表端归属分支） ====================
+
+def test_rep_deletes_own_twin(fresh_state):
+    _add_twin(id=1, representative_id=1, status="active")
+    resp = client.delete("/api/v1/specialists/1", headers=_token(1, "rep"))
+    body = resp.json()
+    assert body["code"] == 0
+    # 软删：行还在，status=disabled，对话/审计历史留存
+    db = TestSession()
+    row = db.query(Specialist).filter(Specialist.id == 1).first()
+    db.close()
+    assert row is not None and row.status == "disabled"
+    # rep 路径分账审计 twin_delete（区别于 admin 的 specialist_disable）
+    calls = [c.kwargs["action"] for c in fresh_state.await_args_list]
+    assert "twin_delete" in calls
+
+
+def test_rep_cannot_delete_foreign_twin(fresh_state):
+    _add_twin(id=1, representative_id=99)
+    resp = client.delete("/api/v1/specialists/1", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+    assert resp.json()["code"] == 3000
+
+
+def test_rep_cannot_delete_official_twin(fresh_state):
+    # 官方分身无归属（representative_id=None）→ _assert_twin_owner 拦下
+    _add_twin(id=1, representative_id=None, is_official=True)
+    resp = client.delete("/api/v1/specialists/1", headers=_token(1, "rep"))
+    assert resp.status_code == 403
+
+
+def test_admin_disable_audit_unchanged(fresh_state):
+    _add_twin(id=1, representative_id=1)
+    resp = client.delete("/api/v1/specialists/1", headers=_token(2, "admin"))
+    assert resp.json()["code"] == 0
+    calls = [c.kwargs["action"] for c in fresh_state.await_args_list]
+    assert "specialist_disable" in calls
+    assert "twin_delete" not in calls

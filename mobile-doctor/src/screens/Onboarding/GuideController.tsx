@@ -140,23 +140,23 @@ export default function GuideController({
               <>
                 <Text style={styles.title}>在「{step?.tryName ?? '目标页'}」逛得如何？</Text>
                 <Text style={styles.hint}>{step?.tryHint}</Text>
+                {/* 2026-09-15 越界修复：3 按钮一行在 360px 屏超卡内可用宽（≈280px），
+                    改两行——ghost 按钮等分一行，主按钮整行（不依赖 flexWrap 兜底） */}
                 <View style={styles.btnRow}>
                   <TouchableOpacity
-                    style={[styles.btnGhost, current === 0 && styles.btnDisabled]}
+                    style={[styles.btnGhost, styles.btnHalf, current === 0 && styles.btnDisabled]}
                     disabled={current === 0}
                     onPress={back}
                   >
                     <Text style={styles.btnGhostText}>上一个</Text>
                   </TouchableOpacity>
-                  <View style={styles.btnGroup}>
-                    <TouchableOpacity style={styles.btnGhost} onPress={() => setCardVisible(false)}>
-                      <Text style={styles.btnGhostText}>先收起，继续逛</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.btnPrimary} onPress={advance}>
-                      <Text style={styles.btnPrimaryText}>下一个</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <TouchableOpacity style={[styles.btnGhost, styles.btnHalf]} onPress={() => setCardVisible(false)}>
+                    <Text style={styles.btnGhostText}>先收起，继续逛</Text>
+                  </TouchableOpacity>
                 </View>
+                <TouchableOpacity style={[styles.btnPrimary, styles.btnFull]} onPress={advance}>
+                  <Text style={styles.btnPrimaryText}>下一个</Text>
+                </TouchableOpacity>
               </>
             ) : (
               <>
@@ -229,19 +229,22 @@ const styles = StyleSheet.create({
   dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginVertical: Spacing.lg },
   pageDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D1D5DB' },
   pageDotActive: { width: 20, backgroundColor: Colors.primary },
-  btnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  btnGroup: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+  // 2026-09-15 越界修复：wrap 兜底 + 按钮可收缩；召回卡另用 btnHalf/btnFull 两行布局
+  btnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: Spacing.sm },
+  btnGroup: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, flexWrap: 'wrap', flexShrink: 1 },
   btnDisabled: { opacity: 0.4 },
   skip: { fontSize: FontSize.md, color: Colors.textHint },
   btnPrimary: {
     backgroundColor: Colors.primary, borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.xl, paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
     marginLeft: 'auto',
   },
   btnPrimaryText: { color: '#fff', fontSize: FontSize.md, fontWeight: '600' },
   btnGhost: {
     borderWidth: 1, borderColor: Colors.border, borderRadius: BorderRadius.lg,
-    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, flexShrink: 1,
   },
+  btnHalf: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  btnFull: { marginTop: Spacing.md, alignSelf: 'stretch', alignItems: 'center' },
   btnGhostText: { color: Colors.primary, fontSize: FontSize.md, fontWeight: '600' },
 });

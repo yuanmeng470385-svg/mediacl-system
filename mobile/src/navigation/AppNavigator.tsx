@@ -48,7 +48,8 @@ import PracticeListScreen from '../screens/Practice/PracticeListScreen';
 import PracticeChatScreen from '../screens/Practice/PracticeChatScreen';
 import PlazaScreen from '../screens/Plaza/PlazaScreen';
 import TwinManageScreen from '../screens/Twin/TwinManageScreen';
-import StyleSourceScreen from '../screens/Twin/StyleSourceScreen';
+import MyTwinsScreen from '../screens/Twin/MyTwinsScreen';
+import CreateTwinWizardScreen from '../screens/Twin/CreateTwinWizardScreen';
 import SkillReleaseScreen from '../screens/Skill/SkillReleaseScreen';
 import MySkillListScreen from '../screens/Skill/MySkillListScreen';
 import SkillExtractScreen from '../screens/Skill/SkillExtractScreen';
@@ -236,8 +237,9 @@ export default function AppNavigator() {
             <Stack.Screen name="PracticeChat" component={PracticeChatScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="Plaza" component={PlazaScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="TwinManage" component={TwinManageScreen} options={{ animation: 'slide_from_right' }} />
-            {/* 从历史记录生成分身（2026-09-10） */}
-            <Stack.Screen name="StyleSource" component={StyleSourceScreen} options={{ animation: 'slide_from_right' }} />
+            {/* 分身管理双入口（2026-09-15 重构）：我的分身列表 + 三步创建向导 */}
+            <Stack.Screen name="MyTwins" component={MyTwinsScreen} options={{ animation: 'slide_from_right' }} />
+            <Stack.Screen name="CreateTwin" component={CreateTwinWizardScreen} options={{ animation: 'slide_from_right' }} />
             {/* Skill 生态（三期 J） */}
             <Stack.Screen name="SkillRelease" component={SkillReleaseScreen} options={{ animation: 'slide_from_right' }} />
             <Stack.Screen name="MySkillList" component={MySkillListScreen} options={{ animation: 'slide_from_right' }} />

@@ -4,13 +4,13 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
 import Icon from '../../components/Icon';
-import { practiceAPI } from '../../api/practice';
+import { practiceAPI, plazaAPI } from '../../api/practice';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
 
@@ -37,17 +37,55 @@ interface HistoryItem {
   scores?: { overall?: number } | null;
 }
 
+/** 广场公开 Skill（GET /skill-packages/public 项） */
+interface SkillItem {
+  id: number;
+  name?: string;
+  description?: string | null;
+  heat?: number;
+}
+
 export default function PracticeListScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  // 从广场加载后跳转带入的 Skill id（创建会话时写入 skill_id，让 AI 医生按模版风格陪练）；
-  // 直接读 route.params 保证 react-navigation 复用已有实例时参数刷新仍生效
-  const skillId = route.params?.skillId;
+  // Skill 模版（2026-09-15 屏内直选）：初始值来自广场「加载」带参跳转（route.params
+  // 保证 react-navigation 复用已有实例时参数刷新仍生效），屏内可再改/移除
+  const [skillId, setSkillId] = useState<number | undefined>(route.params?.skillId);
+  const [skills, setSkills] = useState<SkillItem[]>([]);
+  const [skillModalOpen, setSkillModalOpen] = useState(false);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [pickedInModal, setPickedInModal] = useState<number | undefined>(undefined);
   const [scenario, setScenario] = useState(SCENARIOS[0]);
   const [persona, setPersona] = useState(PERSONAS[0]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [starting, setStarting] = useState(false);
+
+  const selectedSkill = skills.find((s) => s.id === skillId);
+
+  const loadSkills = useCallback(async () => {
+    setSkillsLoading(true);
+    try {
+      const res = await plazaAPI.list({ page: 1, page_size: 50 });
+      setSkills(Array.isArray(res?.items) ? res.items : []);
+    } catch {
+      // 广场拉取失败不阻塞裸场景陪练，弹窗内提示重试
+      setSkills([]);
+    } finally {
+      setSkillsLoading(false);
+    }
+  }, []);
+
+  const openSkillModal = () => {
+    setPickedInModal(skillId);
+    setSkillModalOpen(true);
+    if (skills.length === 0) loadSkills();
+  };
+
+  const confirmSkill = () => {
+    setSkillId(pickedInModal);
+    setSkillModalOpen(false);
+  };
 
   const loadHistory = useCallback(async () => {
     setLoaded(false);
@@ -89,6 +127,39 @@ export default function PracticeListScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* Skill 模版选择（2026-09-15 屏内直选；与广场「加载」带参跳转同一 skill_id 契约） */}
+        <View style={[styles.card, Shadow.card]}>
+          <Text style={styles.cardTitle}>Skill 模版（可选）</Text>
+          {skillId != null && selectedSkill ? (
+            <View style={styles.skillPicked}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.skillName} numberOfLines={1}>{selectedSkill.name || `Skill #${selectedSkill.id}`}</Text>
+                {selectedSkill.description ? (
+                  <Text style={styles.skillDesc} numberOfLines={2}>{selectedSkill.description}</Text>
+                ) : null}
+              </View>
+              <TouchableOpacity
+                style={styles.skillRemove}
+                onPress={() => setSkillId(undefined)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Icon name="close" size={16} color={Colors.danger} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity style={styles.skillPickBtn} onPress={openSkillModal} activeOpacity={0.7}>
+              <Icon name="view-grid-outline" size={16} color={Colors.primary} />
+              <Text style={styles.skillPickText}>
+                {skillId != null ? `使用 Skill 模版 #${skillId}` : '选择 Skill 模版'}
+              </Text>
+              <Icon name="chevron-right" size={16} color={Colors.border} />
+            </TouchableOpacity>
+          )}
+          <Text style={styles.skillHint}>
+            加载后 AI 医生按模版风格陪练，评分对照模版风格参数；不选则自由陪练
+          </Text>
+        </View>
+
         {/* 场景选择 */}
         <View style={[styles.card, Shadow.card]}>
           <Text style={styles.cardTitle}>选择场景（科室）</Text>
@@ -126,7 +197,7 @@ export default function PracticeListScreen() {
           </View>
 
           {skillId != null && (
-            <Text style={styles.loadedHint}>已加载 Skill 模版 #{skillId}：评分时会对照该模版的风格参数（正式程度/回复长度/开场白）给出风格匹配分；上方「医生性格」是你的对手配置，两者互不影响</Text>
+            <Text style={styles.loadedHint}>已加载 Skill 模版：评分时会对照该模版的风格参数（正式程度/回复长度/开场白）给出风格匹配分；「医生性格」是你的对手配置，两者互不影响</Text>
           )}
 
           <TouchableOpacity
@@ -170,7 +241,77 @@ export default function PracticeListScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Skill 选择弹窗：广场 approved+公开模版单选（不调 /load，创建会话带 skill_id 即可） */}
+      <Modal visible={skillModalOpen} transparent animationType="fade" onRequestClose={() => setSkillModalOpen(false)}>
+        <TouchableOpacity style={styles.modalMask} activeOpacity={1} onPress={() => setSkillModalOpen(false)}>
+          <PressableCard>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>选择 Skill 模版</Text>
+              <TouchableOpacity onPress={() => setSkillModalOpen(false)} hitSlop={{ top: 8, bottom: 8 }}>
+                <Icon name="close" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {skillsLoading ? (
+              <Text style={styles.modalEmpty}>加载中…</Text>
+            ) : skills.length === 0 ? (
+              <View style={styles.modalEmptyWrap}>
+                <Text style={styles.modalEmpty}>广场暂无可用 Skill 模版</Text>
+                <TouchableOpacity style={styles.modalRetry} onPress={loadSkills} activeOpacity={0.7}>
+                  <Text style={styles.modalRetryText}>重新加载</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <ScrollView style={styles.skillScroll} nestedScrollEnabled>
+                <TouchableOpacity
+                  style={[styles.skillRow, pickedInModal == null && styles.skillRowActive]}
+                  onPress={() => setPickedInModal(undefined)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.skillName}>不使用模版（自由陪练）</Text>
+                  </View>
+                  {pickedInModal == null && <Icon name="check-circle" size={20} color={Colors.primary} />}
+                </TouchableOpacity>
+                {skills.map((s) => {
+                  const active = pickedInModal === s.id;
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[styles.skillRow, active && styles.skillRowActive]}
+                      onPress={() => setPickedInModal(s.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.skillName} numberOfLines={1}>{s.name || `Skill #${s.id}`}</Text>
+                        {s.description ? (
+                          <Text style={styles.skillDesc} numberOfLines={2}>{s.description}</Text>
+                        ) : (
+                          <Text style={styles.skillMeta}>热度 {s.heat ?? 0}</Text>
+                        )}
+                      </View>
+                      {active && <Icon name="check-circle" size={20} color={Colors.primary} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+            <TouchableOpacity style={styles.modalConfirm} onPress={confirmSkill} activeOpacity={0.7}>
+              <Text style={styles.modalConfirmText}>确定</Text>
+            </TouchableOpacity>
+          </PressableCard>
+        </TouchableOpacity>
+      </Modal>
     </View>
+  );
+}
+
+/** 阻止点击卡片内容误关弹窗（Modal 内层容器：空 onPress 拦截穿透） */
+function PressableCard({ children }: { children: React.ReactNode }) {
+  return (
+    <Pressable style={styles.modalCard} onPress={() => {}}>
+      {children}
+    </Pressable>
   );
 }
 
@@ -204,6 +345,57 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs, color: Colors.info, marginTop: Spacing.sm,
     backgroundColor: Colors.primarySurface, padding: Spacing.sm, borderRadius: BorderRadius.sm,
   },
+  skillPicked: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.primary, borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.primarySurface, padding: Spacing.md,
+  },
+  skillName: { fontSize: FontSize.md, color: Colors.textPrimary, fontWeight: '600' },
+  skillDesc: { fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2, lineHeight: 17 },
+  skillMeta: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: 2 },
+  skillRemove: {
+    width: 28, height: 28, borderRadius: BorderRadius.full,
+    borderWidth: 1, borderColor: Colors.danger, alignItems: 'center', justifyContent: 'center',
+  },
+  skillPickBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.sm,
+    borderWidth: 1, borderColor: Colors.border, borderRadius: BorderRadius.sm,
+    backgroundColor: Colors.white, padding: Spacing.md,
+  },
+  skillPickText: { flex: 1, fontSize: FontSize.sm, color: Colors.textPrimary },
+  skillHint: { fontSize: FontSize.xs, color: Colors.textHint, marginTop: Spacing.sm },
+  modalMask: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center',
+    justifyContent: 'center', padding: Spacing.lg,
+  },
+  modalCard: {
+    backgroundColor: Colors.card, borderRadius: BorderRadius.lg, padding: Spacing.lg,
+    width: '100%', maxHeight: '80%',
+  },
+  modalHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: Spacing.sm,
+  },
+  modalTitle: { fontSize: FontSize.md, fontWeight: '700', color: Colors.textPrimary },
+  modalEmpty: { fontSize: FontSize.sm, color: Colors.textHint, textAlign: 'center', paddingVertical: Spacing.lg },
+  modalEmptyWrap: { alignItems: 'center' },
+  modalRetry: {
+    borderWidth: 1, borderColor: Colors.primary, borderRadius: BorderRadius.sm,
+    paddingHorizontal: Spacing.lg, paddingVertical: Spacing.xs, marginBottom: Spacing.sm,
+  },
+  modalRetryText: { color: Colors.primary, fontSize: FontSize.sm, fontWeight: '600' },
+  skillScroll: { maxHeight: 360 },
+  skillRow: {
+    flexDirection: 'row', alignItems: 'center', gap: Spacing.md,
+    paddingVertical: Spacing.md, paddingHorizontal: Spacing.sm,
+    borderRadius: BorderRadius.sm, marginBottom: Spacing.xs,
+  },
+  skillRowActive: { backgroundColor: Colors.primarySurface },
+  modalConfirm: {
+    marginTop: Spacing.sm, backgroundColor: Colors.primary, borderRadius: BorderRadius.sm,
+    padding: Spacing.md, alignItems: 'center',
+  },
+  modalConfirmText: { color: Colors.textWhite, fontSize: FontSize.md, fontWeight: '600' },
   emptyText: { fontSize: FontSize.sm, color: Colors.textHint, textAlign: 'center', paddingVertical: Spacing.lg },
   historyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.md, gap: Spacing.md },
   rowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Colors.divider },

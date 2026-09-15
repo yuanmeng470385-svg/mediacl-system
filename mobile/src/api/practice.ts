@@ -85,8 +85,12 @@ export const twinAPI = {
     apiClient.request<any>('PUT', `/api/v1/specialists/${twinId}/style`, style),
   pause: (twinId: number) => apiClient.request<any>('POST', `/api/v1/specialists/${twinId}/pause`, {}),
   resume: (twinId: number) => apiClient.request<any>('POST', `/api/v1/specialists/${twinId}/resume`, {}),
-  styleTest: (answers: number[]) =>
-    apiClient.request<any>('POST', '/api/v1/specialists/style-test', { answers }),
+  /**
+   * 删除本人分身（2026-09-15）：后端软删 status=disabled，对话/审计历史留存（合规口径），
+   * rep 列表过滤 disabled 即"消失"；官方/他人分身 403。
+   */
+  delete: (twinId: number) =>
+    apiClient.request<any>('DELETE', `/api/v1/specialists/${twinId}`),
   /**
    * 2026-09-10 从历史记录生成分身：可选素材列表（本人三类对话记录，各最近 20 条）。
    * chats 项 id 为 session_id 字符串；visits 项 visit_id / practices 项 session_id 为整数。
@@ -94,18 +98,25 @@ export const twinAPI = {
   styleSources: () =>
     apiClient.request<any>('GET', '/api/v1/specialists/style-sources'),
   /**
-   * 从历史记录生成分身（同步 LLM，120s 超时）。sources: 1~10 条 {type, id}，
-   * 素材合计 ≥10 条代表发言（门槛在后端校验）；name 可选自定义分身名。
-   * 失败语义：4002 = 今日 3 次限额已满 / 4003 = LLM 生成失败可重试。
+   * 创建分身统一入口（2026-09-15 向导合并，原 styleTest 收编）：
+   * answers = 5 题问卷（0-2 索引，映射风格三枚举）；sources = 1~10 条 {type, id}
+   * （素材合计 ≥10 条代表发言，门槛在后端校验，同步 LLM 120s 超时）；name 可选。
+   * 三者组合：answers+sources=向导全量 / 仅 sources=记录提取 / 仅 answers=纯问卷（不调 LLM）。
+   * 失败语义：4002 = 今日 3 次限额已满（仅素材路径）/ 4003 = LLM 生成失败可重试。
    */
   styleFromRecords: (
     sources: Array<{ type: 'chat' | 'visit' | 'practice'; id: string | number }>,
     name?: string,
-  ) =>
-    apiClient.request<any>(
+    answers?: number[],
+  ) => {
+    const payload: Record<string, unknown> = { sources };
+    if (name) payload.name = name;
+    if (answers) payload.answers = answers;
+    return apiClient.request<any>(
       'POST',
       '/api/v1/specialists/style-from-records',
-      name ? { sources, name } : { sources },
+      payload,
       AI_SYNC_TIMEOUT_MS,
-    ),
+    );
+  },
 };
