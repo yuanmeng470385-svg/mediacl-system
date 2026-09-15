@@ -112,7 +112,7 @@ token 即激活码，医生端 TwinActivate 页支持手输。
       `AUTH_DEV_MODE=true` → 服务器 `DEPLOY_ENV` 必须保持 `dev`（生产守卫会拒启）。
       办好后改：`AUTH_SMS_PROVIDER=aliyun` + `AUTH_SMS_SIGN_NAME`/`AUTH_SMS_TEMPLATE_CODE`
       + `AUTH_DEV_MODE=false` + `DEPLOY_ENV=production`
-- [ ] **安全组 8080/8000/8002 待用户在阿里云控制台开放**（首次部署后公网才可达）
+- [x] ~~安全组 8080/8000/8002 待用户在阿里云控制台开放~~（2026-09-15 已开放，公网冒烟 11/11 全绿）
 - [ ] 服务器 DB/Redis 密码沿用开发值（仅监听 127.0.0.1）——转正式前换强随机
 - [ ] 服务器代码为 git archive 快照（非 git 检出）——更新需重新打包上传，或改 git clone
 - [ ] 服务器未配备份 cron（`scripts/backup_db.py`，前置 007 序列授权）
