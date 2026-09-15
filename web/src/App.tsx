@@ -8,6 +8,7 @@ import RequireAuth from './components/RequireAuth';
 import { AuthProvider } from './context/AuthContext';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
+const TodoCenter = lazy(() => import('./pages/Todo/TodoCenter'));
 // 部署挂账 §4：数字分身分享落地页（公开，无需登录；微信内深链会被吞，落地页展示激活码+引导唤起 App）
 const ShareTwinPage = lazy(() => import('./pages/ShareTwin'));
 const SpecialistList = lazy(() => import('./pages/Specialist/SpecialistList'));
@@ -69,6 +70,7 @@ export default function App() {
                   }
                 >
                   <Route index element={<Navigate to="/dashboard" replace />} />
+                  <Route path="todos" element={<TodoCenter />} />
                   <Route path="dashboard" element={<Dashboard />} />
                   <Route path="specialist/list" element={<SpecialistList />} />
                   <Route path="specialist/monitor" element={<SpecialistMonitorList />} />

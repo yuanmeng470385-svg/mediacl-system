@@ -29,6 +29,11 @@ export interface GuideStep {
 
 /** 每页讲解卡文案库：path → { 这是什么/有什么用, 到页体验提示 tryHint } */
 const PAGE_GUIDES: Record<string, { description: string; tryHint?: string }> = {
+  '/todos': {
+    description:
+      '你的待办收件箱：资质/医生认证/Skill/患教/异议话术/数据导出/隐私请求/考题——八类待审事务集中计数，菜单上的红色数字就是未处理总量，点「去处理」直达对应审核页。',
+    tryHint: '看看现在有几条待办。逛完回来，点右下角"?"悬浮球继续引导。',
+  },
   '/dashboard': {
     description:
       '登录后的落地总览页：今日对话量、最新拜访动态、合规拦截热力与网关健康一屏打尽——每天开工先看这一页。',
@@ -196,7 +201,8 @@ function menuLeaves(role: string): { path: string; name: string }[] {
 /** 由菜单自动派生该角色步骤：开场 → 每页一步（v4 起都带「去试试」）→ 收尾 */
 function buildSteps(role: string): GuideStep[] {
   const leaves = menuLeaves(role);
-  const first = leaves[0] ?? { path: '/dashboard', name: '仪表盘' };
+  // 开场叙事优先落仪表盘（全局总览）；待办中心等置顶菜单项不抢开场位
+  const first = leaves.find((l) => l.path === '/dashboard') ?? leaves[0] ?? { path: '/dashboard', name: '仪表盘' };
   const steps: GuideStep[] = [
     {
       title: {

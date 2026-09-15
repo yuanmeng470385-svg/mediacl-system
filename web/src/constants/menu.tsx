@@ -8,6 +8,7 @@ import {
   CalendarOutlined,
   FileProtectOutlined,
   SettingOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
 import type { MenuDataItem } from '@ant-design/pro-components';
 
@@ -17,6 +18,8 @@ import type { MenuDataItem } from '@ant-design/pro-components';
  * 新增页面时：App.tsx 路由、routeAccess.ts 角色表、routeAccess.test.ts 数量断言三处同步。
  */
 export const menuConfig: MenuDataItem[] = [
+  // 待办中心（2026-09-15）：菜单项红色徽标在 AdminLayout menuItemRender 注入
+  { path: '/todos', name: '待办中心', icon: <BellOutlined /> },
   { path: '/dashboard', name: '仪表盘', icon: <DashboardOutlined /> },
   {
     key: 'g-specialist',

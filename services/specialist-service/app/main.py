@@ -99,6 +99,11 @@ register_exception_handlers(app)
 from app.api.mah_overview import router as mah_overview_router
 app.include_router(mah_overview_router)
 
+# 待办计数（2026-09-15）：必须注册在 specialists_router 之前（/todo-summary
+# 一段式静态路径会被 /{specialist_id} 动态段吞掉），同 mah-overview
+from app.api.todo import router as todo_router
+app.include_router(todo_router)
+
 from app.api.specialists import router as specialists_router
 from app.api import conversations
 app.include_router(specialists_router)

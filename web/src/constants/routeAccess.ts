@@ -18,6 +18,8 @@ export const ROUTE_ACCESS: Record<string, readonly string[]> = {
   // 任意登录角色：登录落地页 / 拜访列表（后端 get_current_user，不限角色）
   '/dashboard': FOUR,
   '/visit/list': FOUR,
+  // 待办中心（2026-09-15）：auth + specialist 两端 todo-summary 均四管理角色
+  '/todos': FOUR,
   // 专员列表（specialists.py require_roles 四角色）/ 分身监控 MONITOR_ADMIN_ROLES
   '/specialist/list': FOUR,
   '/specialist/monitor': THREE,

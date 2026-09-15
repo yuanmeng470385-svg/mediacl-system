@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
-import { Button, Dropdown, Avatar, theme } from 'antd';
+import { Badge, Button, Dropdown, Avatar, theme } from 'antd';
 import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { menuConfig } from '../constants/menu';
 import { canAccess, filterMenu, isKnownRoute } from '../constants/routeAccess';
 import Forbidden from '../components/Forbidden';
 import GuideTour from '../components/onboarding/GuideTour';
 import AssistantChat from '../components/Assistant/AssistantChat';
+import { fetchTodoCounts, sumTodoCounts } from '../services/todo';
 import { useAuth } from '../hooks/useAuth';
 
 export default function AdminLayout() {
@@ -15,6 +16,23 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  // 待办徽标（2026-09-15）：60s 轮询两端 todo-summary 合计；菜单项红色数字（微信样式）
+  const [todoTotal, setTodoTotal] = useState(0);
+
+  const refreshTodo = useCallback(async () => {
+    try {
+      setTodoTotal(sumTodoCounts(await fetchTodoCounts()));
+    } catch {
+      // 轮询失败保持旧值，不打扰用户（TodoCenter 页内有手动刷新兜底）
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshTodo();
+    const timer = setInterval(refreshTodo, 60_000);
+    return () => clearInterval(timer);
+    // 路由切换也刷新：审核完回到菜单，红色数字立即归零（count 查询很轻）
+  }, [refreshTodo, location.pathname]);
 
   return (
     <ProLayout
@@ -26,7 +44,15 @@ export default function AdminLayout() {
       collapsed={collapsed}
       onCollapse={setCollapsed}
       menuItemRender={(item) => (
-        <a onClick={() => item.path && navigate(item.path)}>{item.name}</a>
+        <a onClick={() => item.path && navigate(item.path)}>
+          {item.path === '/todos' ? (
+            <Badge count={todoTotal} overflowCount={99} offset={[10, 0]} size="small">
+              {item.name}
+            </Badge>
+          ) : (
+            item.name
+          )}
+        </a>
       )}
       siderWidth={220}
       headerContentRender={() => (

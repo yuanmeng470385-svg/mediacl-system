@@ -104,6 +104,10 @@ app.include_router(commitment_router)
 from app.api.privacy import router as privacy_router
 app.include_router(privacy_router)
 
+# 管理端待办计数（2026-09-15 C 批）：四类待审/待办 count
+from app.api.todo import router as todo_router
+app.include_router(todo_router)
+
 
 @app.get("/health")
 async def health():
