@@ -694,3 +694,16 @@ CREATE TABLE IF NOT EXISTS privacy_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_pr_doctor ON privacy_requests(doctor_id);
 CREATE INDEX IF NOT EXISTS idx_pr_status ON privacy_requests(status);
+
+-- App 版本检查+更新提示（030，2026-09-15 挂账落地；旧库须执行 030）
+-- App 启动/回前台查 GET /api/v1/app/version?platform=rep|doctor；管理端在
+-- web「系统配置 → App 版本与更新」改（PUT /api/v1/app/config/{platform}，admin）
+CREATE TABLE IF NOT EXISTS app_versions (
+    platform VARCHAR(20) PRIMARY KEY CHECK (platform IN ('rep', 'doctor')),
+    latest_version VARCHAR(20) NOT NULL,          -- 高于本机即提示更新
+    min_version VARCHAR(20) NOT NULL,             -- 本机低于它强制更新
+    download_url TEXT NOT NULL,                   -- 绝对地址或 /apk/xxx.apk 相对路径
+    release_notes TEXT,                           -- 更新说明（多行）
+    updated_by BIGINT,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

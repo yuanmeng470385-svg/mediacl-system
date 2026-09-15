@@ -108,6 +108,11 @@ app.include_router(privacy_router)
 from app.api.todo import router as todo_router
 app.include_router(todo_router)
 
+# App 版本检查+更新提示（2026-09-15 挂账落地）：/version 公开（App 冷启动可能未登录），
+# /config 管理端可改（admin）—— web「系统配置 → App 版本与更新」
+from app.api.app_version import router as app_version_router
+app.include_router(app_version_router)
+
 
 @app.get("/health")
 async def health():

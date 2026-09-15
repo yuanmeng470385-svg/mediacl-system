@@ -34,6 +34,10 @@ PUBLIC_PATHS = [
     "/api/v1/auth/send-code",
     # 部署挂账 §5：医生自助注册（register 无子路径，前缀匹配无副作用）
     "/api/v1/auth/register",
+    # App 版本检查（2026-09-15 挂账落地）：冷启动第一屏是登录页，还没 token 就得能查版本。
+    # 管理端配置走 /api/v1/app/config —— 故意不叫 /versions：那是本前缀的子路径，
+    # 会被这条一起放开（前缀匹配的经典坑，见文件头注释）。
+    "/api/v1/app/version",
     "/docs",
     "/openapi.json",
     "/redoc",

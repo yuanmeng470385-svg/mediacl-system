@@ -7,6 +7,7 @@
     /api/v1/compliance/*   → compliance-service (8004)
     /api/v1/audit/*        → audit-service (8005)
     /api/v1/hcps/*         → hcp-service (8006)
+    /api/v1/app/*          → auth-service (8007)（App 版本检查/更新提示；/version 公开）
     /api/v1/system/config  → 网关自身（系统配置只读，admin）
     /health                → 健康检查聚合（并发探测各上游）
 """
@@ -118,6 +119,7 @@ ROUTE_MAP = {
     "/api/v1/assistant": settings.SPECIALIST_SERVICE_URL,  # 产品使用 AI 助手（三端，2026-09-15）
     "/api/v1/patient-edu": settings.SPECIALIST_SERVICE_URL,  # 患教工具（二期 I）
     "/api/v1/doctor-plaza": settings.SPECIALIST_SERVICE_URL,  # 医生侧广场（二期 I）
+    "/api/v1/app": settings.AUTH_SERVICE_URL,  # App 版本检查/更新提示（两端；2026-09-15）
     "/api/v1/doctor-stats": settings.SPECIALIST_SERVICE_URL,  # 运营统计（二期 I）
     "/api/v1/data-exports": settings.SPECIALIST_SERVICE_URL,  # 数据导出审批（三期 K）
     "/api/v1/privacy-requests": settings.AUTH_SERVICE_URL,  # 隐私请求（三期 L）

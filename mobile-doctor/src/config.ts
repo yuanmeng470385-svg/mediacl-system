@@ -16,6 +16,12 @@ export const API_HOST = DEV_HOST;
 export const ASR_HOST = DEV_HOST;
 export const GATEWAY_HOST = DEV_HOST;
 
+/** web 端（管理后台 + 静态资源）所在主机与端口：APK 下载地址 /apk/xxx.apk 挂在这里，
+ *  不在网关 8000 上。部署机为 8080（80 被占用）；开发机 vite 只有 3000 且不提供 /apk/，
+ *  故本地开发时下载链接打不开属正常，真机/发布版正常。 */
+export const WEB_HOST = DEV_HOST;
+export const WEB_PORT = 8080;
+
 /** 传输协议：生产走 TLS 时改 'https'/'wss'（需网关/反代配证书）；
  *  本地/内网联调保持 'http'/'ws'。API_HOST 等只配地址，协议单独配。 */
 export const API_SCHEME: 'http' | 'https' = 'http';

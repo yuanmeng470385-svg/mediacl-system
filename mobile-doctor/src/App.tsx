@@ -9,6 +9,7 @@ import { StatusBar, View } from 'react-native';
 import { AuthProvider } from './store/AuthContext';
 import AppNavigator from './navigation/AppNavigator';
 import GuideBar from './components/GuideBar';
+import UpdateGate from './components/UpdateGate';
 import { Colors } from './constants/theme';
 
 export default function App() {
@@ -19,6 +20,8 @@ export default function App() {
       <View style={{ flex: 1 }}>
         <AppNavigator />
         <GuideBar />
+        {/* 版本更新门：启动/回前台静默查版本，有新版本才弹（强制更新时盖住整个 App） */}
+        <UpdateGate />
       </View>
     </AuthProvider>
   );
