@@ -240,6 +240,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg, paddingVertical: Spacing.sm, flexShrink: 1,
   },
   btnHalf: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  btnFull: { marginTop: Spacing.md, alignSelf: 'stretch', alignItems: 'center' },
+  btnFull: { marginTop: Spacing.md, alignSelf: 'stretch', alignItems: 'center', marginLeft: 0 },
   btnGhostText: { color: Colors.primary, fontSize: FontSize.md, fontWeight: '600' },
 });
