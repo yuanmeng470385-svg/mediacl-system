@@ -1,4 +1,5 @@
 import { getBrand } from '../brand';
+import BrandLogo from '../components/BrandLogo';
 import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
@@ -37,8 +38,8 @@ export default function AdminLayout() {
 
   return (
     <ProLayout
+      logo={<BrandLogo size={28} />}
       title={getBrand().short || getBrand().name}
-      logo={null}
       // M17：菜单按角色过滤（角色表单一事实源见 constants/routeAccess.ts）
       route={{ children: filterMenu(menuConfig, user?.role) }}
       location={{ pathname: location.pathname }}

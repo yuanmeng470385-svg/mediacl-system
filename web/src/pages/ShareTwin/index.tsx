@@ -1,4 +1,5 @@
 import { getBrand } from '../../brand';
+import BrandLogo from '../../components/BrandLogo';
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Card, Typography, Button, Alert, App } from 'antd';
@@ -55,6 +56,9 @@ export default function ShareTwinPage() {
   return (
     <PageShell>
       <div style={{ textAlign: 'center', marginBottom: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+          <BrandLogo size={56} />
+        </div>
         <Title level={3} style={{ marginBottom: 4 }}>{getBrand().short || getBrand().name}</Title>
         <Text type="secondary">医生数字分身分享</Text>
       </div>

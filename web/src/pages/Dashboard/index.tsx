@@ -11,6 +11,7 @@ import { userAPI } from '../../services/user';
 import type { AuditLog } from '../../types';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
+import { getBrand } from '../../brand';
 
 dayjs.extend(utc);
 
@@ -223,7 +224,7 @@ export default function Dashboard() {
   );
 
   return (
-    <PageContainer header={{ title: '仪表盘', subTitle: '业务总览与系统监控' }}>
+    <PageContainer header={{ title: '仪表盘', subTitle: `${getBrand().name} · 业务总览与系统监控` }}>
       <LiveStatusStrip />
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={6}>

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { getBrand } from './brand';
 import AdminLayout from './layouts/AdminLayout';
 import LoginPage from './pages/Login';
 import RequireAuth from './components/RequireAuth';
@@ -45,12 +46,13 @@ const Loading = () => (
 );
 
 export default function App() {
+  const brandPrimary = getBrand().primary; // 多租户品牌主色（loadBrand 先于渲染，见 main.tsx）
   return (
     <ConfigProvider
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: '#1677ff',
+          colorPrimary: brandPrimary || '#1677ff',
           colorBgLayout: '#f0f2f5',
         },
       }}
