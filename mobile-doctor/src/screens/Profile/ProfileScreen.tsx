@@ -23,6 +23,7 @@ import { doctorAPI } from '../../api/doctor';
 import { inboxAPI } from '../../api/inbox';
 import type { RootStackParamList } from '../../navigation/types';
 import { BorderRadius, Colors, FontSize, Shadow, Spacing } from '../../constants/theme';
+import { BRAND } from '../../brandConfig';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -303,6 +304,15 @@ export default function ProfileScreen() {
         >
           <Text style={styles.logoutText}>退出登录</Text>
         </TouchableOpacity>
+        {BRAND && (
+          <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 8 }}>
+            <View style={{ width: 40, height: 40, borderRadius: 11, backgroundColor: BRAND.primary, alignItems: 'center', justifyContent: 'center' }}>
+              <Text style={{ color: '#FFFFFF', fontSize: 22, fontWeight: '700' }}>{BRAND.char}</Text>
+            </View>
+            <Text style={{ marginTop: 8, fontSize: 12, color: Colors.textHint }}>{BRAND.name}</Text>
+            <Text style={{ marginTop: 2, fontSize: 11, color: Colors.textHint }}>© {new Date().getFullYear()} · {BRAND.tagline}</Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );

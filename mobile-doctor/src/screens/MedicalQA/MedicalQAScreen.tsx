@@ -20,6 +20,7 @@ import Icon, { ActionIcons } from '../../components/Icon';
 import { medicalAPI } from '../../api/medical';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ChatViolation } from '../../types';
+import { BRAND } from '../../brandConfig';
 
 interface Message {
   id: string;
@@ -148,6 +149,15 @@ export default function MedicalQAScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      {BRAND && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, backgroundColor: BRAND.primary }}>
+          <View style={{ width: 18, height: 18, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{BRAND.char}</Text>
+          </View>
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>{BRAND.name}</Text>
+          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginLeft: 10, flexShrink: 1 }}>{BRAND.tagline}</Text>
+        </View>
+      )}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>医学问答</Text>
         <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>

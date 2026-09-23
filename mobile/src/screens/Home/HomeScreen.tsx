@@ -25,6 +25,7 @@ import { formatLocalDate } from '../../utils/date';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { VisitRecord } from '../../types';
 import type { RootStackParamList } from '../../navigation/types';
+import { BRAND } from '../../brandConfig';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -88,6 +89,15 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
+      {BRAND && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, backgroundColor: BRAND.primary }}>
+          <View style={{ width: 18, height: 18, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{BRAND.char}</Text>
+          </View>
+          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>{BRAND.name}</Text>
+          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginLeft: 10, flexShrink: 1 }}>{BRAND.tagline}</Text>
+        </View>
+      )}
       {/* 头部 */}
       <View style={styles.header}>
         <View style={styles.headerContent}>

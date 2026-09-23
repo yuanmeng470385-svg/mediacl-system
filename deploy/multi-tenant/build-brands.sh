@@ -38,6 +38,26 @@ export const BRAND = {{
   apiPort: {port},
 }} as const;
 ''')
+# Splash：品牌色打底 + 居中字标图标（mipmap 已是该品牌字标）；styles.xml 挂 windowBackground
+N = chr(10)
+res = f'{app}/android/app/src/main/res'
+open(f'{res}/values/colors.xml', 'w', encoding='utf-8', newline='').write(
+    '<resources>' + N + '    <color name="brand_splash">' + color + '</color>' + N + '</resources>' + N)
+open(f'{res}/drawable/brand_splash.xml', 'w', encoding='utf-8', newline='').write(
+    '<?xml version="1.0" encoding="utf-8"?>' + N
+    + '<layer-list xmlns:android="http://schemas.android.com/apk/res/android">' + N
+    + '    <item android:drawable="@color/brand_splash" />' + N
+    + '    <item>' + N
+    + '        <bitmap android:src="@mipmap/ic_launcher" android:gravity="center" />' + N
+    + '    </item>' + N
+    + '</layer-list>' + N)
+stp = f'{res}/values/styles.xml'
+st = open(stp, encoding='utf-8').read()
+marker = '<item name="android:editTextBackground">@drawable/rn_edit_text_material</item>'
+assert marker in st
+st = st.replace(marker, marker + N + '        <item name="android:windowBackground">@drawable/brand_splash</item>', 1)
+open(stp, 'w', encoding='utf-8', newline='').write(st)
+
 sp = f'{app}/android/app/src/main/res/values/strings.xml'
 s = open(sp, encoding='utf-8').read()
 s = re.sub(r'(<string name="app_name">).*?(</string>)', lambda m: m.group(1) + app_name + m.group(2), s)
@@ -56,6 +76,7 @@ for row in "${BRANDS[@]}"; do
     cp "$app/android/app/build/outputs/apk/release/app-release.apk" "$OUT/$apkname-$slug.apk"
     # 还原：res/strings 走 git checkout；brandConfig.ts 用独立脚本写回母版默认值
     git checkout -- "$app/android/app/src/main/res"
+    rm -f "$app/android/app/src/main/res/values/colors.xml" "$app/android/app/src/main/res/drawable/brand_splash.xml"
     python deploy/multi-tenant/restore_brand_defaults.py "$app"
     echo "built $OUT/$apkname-$slug.apk"
   done

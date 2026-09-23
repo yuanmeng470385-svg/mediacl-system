@@ -8,12 +8,27 @@
 // ==============================
 // 主色调
 // ==============================
+import { BRAND } from '../brandConfig';
+
+// 品牌包：整套品牌色由公司主色推导；母版/开发 BRAND=null 保持「临床精准风」原值不变
+function hexMix(hex: string, target: string, t: number): string {
+  const a = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const b = [1, 3, 5].map((i) => parseInt(target.slice(i, i + 2), 16));
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return '#' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+const BP = BRAND ? BRAND.primary : '#0D3B66';
+const BRAND_PRIMARY = BP;
+const BRAND_PRIMARY_LIGHT = BRAND ? hexMix(BP, '#FFFFFF', 0.2) : '#1565C0';
+const BRAND_PRIMARY_DARK = BRAND ? hexMix(BP, '#000000', 0.3) : '#072540';
+const BRAND_PRIMARY_SURFACE = BRAND ? hexMix(BP, '#FFFFFF', 0.92) : '#E8F0F8';
+
 export const Colors = {
-  // 品牌色——深海军蓝
-  primary: '#0D3B66',
-  primaryLight: '#1565C0',
-  primaryDark: '#072540',
-  primarySurface: '#E8F0F8',
+  // 品牌色——母版深海军蓝；品牌包时为各公司主色推导
+  primary: BRAND_PRIMARY,
+  primaryLight: BRAND_PRIMARY_LIGHT,
+  primaryDark: BRAND_PRIMARY_DARK,
+  primarySurface: BRAND_PRIMARY_SURFACE,
 
   // 数据高亮——青蓝
   accent: '#00ACC1',
