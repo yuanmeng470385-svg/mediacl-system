@@ -47,11 +47,11 @@ export const twinAPI = {
       { status }
     ),
 
-  /** 分身对话（医生端无 WS 流式，直接走 REST） */
-  chat: (twinId: number, question: string) =>
+  /** 分身对话（REST 兜底；v1.1 支持 session_id 续会话——WS 路径同款语义） */
+  chat: (twinId: number, question: string, sessionId?: string) =>
     apiClient.request<ChatResponse>(
       'POST',
       `/api/v1/specialists/${twinId}/chat`,
-      { question }
+      sessionId ? { question, session_id: sessionId } : { question }
     ),
 };

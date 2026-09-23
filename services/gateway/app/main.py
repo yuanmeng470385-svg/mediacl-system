@@ -465,8 +465,11 @@ async def _upstream_recv(upstream):
     return data.decode("utf-8") if isinstance(data, bytes) else data
 
 
-@app.websocket("/api/v1/specialists/{specialist_id}/chat/ws")
-async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
+async def _bridge_ws(websocket: WebSocket, upstream_path: str):
+    """通用 WS 桥：首帧 auth 鉴权 → 专线连上游路径，双向透传（关闭码原样回传）。
+
+    2026-09-23 v1.1 抽出：specialists chat 与 medical qa 两个入口共用。
+    """
     # B5 修复（2026-08-12）：WS 升级请求不经过 AuthMiddleware（BaseHTTPMiddleware 只
     # 拦 HTTP）→ 此前网关对 WS 零鉴权，token 仅透传上游。先 accept 再验（accept 前
     # close 的 4401 到不了客户端），无效 token 关 4401 与上游语义一致。
@@ -503,10 +506,7 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
     # （query 兜底，token_from_query=True）才在 URL 附带 query token —— 新协议
     # token 走首帧 auth 帧，不再拼进上游 URL（JWT 不进 specialist uvicorn 访问日志）。
     ws_scheme = "wss" if settings.SPECIALIST_SERVICE_URL.startswith("https") else "ws"
-    upstream_url = (
-        f"{ws_scheme}://{settings.SPECIALIST_SERVICE_URL.split('://')[1]}"
-        f"/ws/specialists/{specialist_id}/chat"
-    )
+    upstream_url = f"{ws_scheme}://{settings.SPECIALIST_SERVICE_URL.split('://')[1]}{upstream_path}"
     if token_from_query:
         upstream_url += f"?token={token}"
     factory = _upstream_factory or _default_upstream
@@ -576,6 +576,18 @@ async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
             await upstream.close()
         except Exception:
             pass
+
+
+@app.websocket("/api/v1/specialists/{specialist_id}/chat/ws")
+async def proxy_chat_ws(websocket: WebSocket, specialist_id: int):
+    """分身对话流式（上游 specialist-service /ws/specialists/{id}/chat）"""
+    await _bridge_ws(websocket, f"/ws/specialists/{specialist_id}/chat")
+
+
+@app.websocket("/api/v1/medical/qa/ws")
+async def proxy_medical_qa_ws(websocket: WebSocket):
+    """医生端医学问答流式（2026-09-23 v1.1：上游 specialist-service /ws/medical/qa）"""
+    await _bridge_ws(websocket, "/ws/medical/qa")
 
 
 if __name__ == "__main__":

@@ -67,5 +67,35 @@ class QwenClient:
         except Exception as e:
             logger.error(f"通义千问调用失败: {e}")
             raise
-    # D1（2026-08-13）：chat_stream 死代码删除 —— 全仓 grep 无任何调用方
+    def chat_stream(
+        self,
+        messages: List[Dict[str, str]],
+        model: str = None,
+        temperature: float = 0.1,
+        max_tokens: int = 2000,
+    ):
+        """同步流式生成器：逐块 yield 增量文本。
+
+        D1 当年删掉的 chat_stream 复活（2026-09-23）：多租户部署后线上分身大多
+        bailian_app_id 为空，qwen 降级从"兜底"变成主路径——同步整段返回导致
+        WS 只能发一个 delta，App 端流式名存实亡。调用方需放 worker 线程跑
+        （answer_generator._astream_fallback）。
+        """
+        model = model or os.getenv("QWEN_MAX_MODEL", "qwen-max")
+        response = self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            timeout=httpx.Timeout(60.0, connect=10.0),
+        )
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            text = getattr(chunk.choices[0].delta, "content", None)
+            if text:
+                yield text
+
+    # D1（2026-08-13）：chat_stream 曾按死代码删除 —— 2026-09-23 随流式降级复活（见上）
     # （流式走百炼 bailian_client.chat_stream；本客户端只服务降级同步路径）。

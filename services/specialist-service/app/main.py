@@ -116,8 +116,9 @@ app.include_router(metrics_api.router)
 from app.api.chat_ws import router as chat_ws_router
 app.include_router(chat_ws_router)
 
-from app.api.medical import router as medical_router
+from app.api.medical import router as medical_router, ws_router as medical_ws_router
 app.include_router(medical_router)
+app.include_router(medical_ws_router)  # v1.1：医学问答流式 WS（无前缀，网关专线转 /ws/medical/qa）
 
 from app.api.twin_subscriptions import router as twin_subscriptions_router
 app.include_router(twin_subscriptions_router)

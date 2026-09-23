@@ -89,10 +89,15 @@ def test_compliance_blocks_incremented_on_stream_gate_block(monkeypatch):
     assert after == before + 1
 
 
-def test_qwen_client_chat_stream_removed():
-    """D1：qwen_client.chat_stream 死代码已删（全仓无调用方，流式走百炼）"""
+def test_qwen_client_chat_stream_exists():
+    """2026-09-23 v1.1：chat_stream 复活（降级流式主路径，answer_generator 调用）。
+
+    D1 时代它确是死代码（流式走百炼）；多租户部署后线上分身大多 bailian_app_id
+    为空，qwen 降级成主路径——同步整段返回让 WS 只发一个 delta，App 打字机
+    名存实亡，故随 v1.1 复活（原断言反转）。
+    """
     from app.services.qwen_client import QwenClient
-    assert not hasattr(QwenClient, "chat_stream")
+    assert hasattr(QwenClient, "chat_stream")
 
 
 # ==================== D2：specialists CRUD 校验 ====================

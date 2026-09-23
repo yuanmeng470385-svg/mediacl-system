@@ -164,7 +164,8 @@ async def get_hcp_profile(
         lambda: generator.generate(db, hcp, user_id=None if view_all else current_user["id"])
     )
     result["hcp"] = hcp.to_dict()
-    hcp_cache.set(cache_key, result)
+    # 画像键 24h TTL（写路径 PUT/tags/profile-update 即时失效，TTL 只是兜底）
+    hcp_cache.set(cache_key, result, ttl=24 * 3600)
 
     # AI 行为留痕（仅实际使用了 AI 时）
     if not result.get("degraded"):

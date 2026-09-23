@@ -3,6 +3,7 @@
 未配置 DASHSCOPE_API_KEY 或 LLM 调用失败时降级为基础数据聚合，不阻塞业务。
 """
 import json
+import os
 import logging
 from typing import Dict, List, Optional
 
@@ -59,6 +60,9 @@ class ProfileGenerator:
             )
             resp = self.qwen.chat(
                 messages=[{"role": "user", "content": prompt}],
+                # 2026-09-23 v1.1：画像摘要不需要 qwen-max——max 未命中时 ~8s 拖死
+                # 医生详情页，plus 同质量摘要 2~3s；要回 max 用 QWEN_PROFILE_MODEL 覆盖
+                model=os.getenv("QWEN_PROFILE_MODEL", "qwen-plus"),
                 temperature=0.2,
                 max_tokens=800,
             )

@@ -1,10 +1,11 @@
 /**
  * 医学问答 Tab（照 mobile ChatScreen 气泡+加载态范式）：
- *   - REST 发问走 medicalAPI.qa；无流式
+ *   - v1.1（2026-09-23）：WS 流式优先（openMedicalQaWs 打字机），REST 兜底；
+ *     对话记录常驻 AsyncStorage（重进恢复），「新建对话」按钮另起窗口（豆包式）
  *   - 每条 AI 回答强制渲染 disclaimer 与"AI 生成"标识
  *   - blocked 态：渲染后端安全话术 + 违规提示明细
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -16,8 +17,11 @@ import {
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon, { ActionIcons } from '../../components/Icon';
 import { medicalAPI } from '../../api/medical';
+import { apiClient } from '../../api/client';
+import { openMedicalQaWs, type MedicalQaWsSession } from '../../services/medicalQaWs';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ChatViolation } from '../../types';
 import { BRAND } from '../../brandConfig';
@@ -53,9 +57,131 @@ export default function MedicalQAScreen() {
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
+  // ---- v1.1：流式态 + 对话记录常驻（AsyncStorage）+ 新建对话 ----
+  const [streaming, setStreaming] = useState(false);
+  const [streamText, setStreamText] = useState('');
+  const wsRef = useRef<MedicalQaWsSession | null>(null);
+  const loadedRef = useRef(false);
+  const HIST_KEY = 'medical_qa_history';
+
+  const persist = (list: Message[]) => {
+    AsyncStorage.setItem(HIST_KEY, JSON.stringify(list)).catch(() => {});
+  };
+
+  // 重进/重启恢复历史；损坏或为空 → 保持欢迎语（读取完成前不回写，防欢迎语覆盖历史）
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(HIST_KEY);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list) && list.length) setMessages(list);
+        }
+      } catch { /* 损坏忽略 */ }
+      loadedRef.current = true;
+    })();
+    return () => { wsRef.current?.close(); wsRef.current = null; };
+  }, []);
+
+  useEffect(() => {
+    if (loadedRef.current) persist(messages);
+  }, [messages]);
+
+  /** 新建对话：清空记录另起窗口（生成中禁用，防半截状态） */
+  const handleNewChat = () => {
+    if (loading || streaming) return;
+    setMessages([
+      { id: 'welcome', role: 'assistant', content: '你好！我是医学信息助手，请描述你的医学问题。' },
+    ]);
+  };
+
+  /** AI 消息统一组装（WS done 与 REST 共用；blocked 拼违规明细，口径同旧版） */
+  const pushAi = (d: {
+    answer: string;
+    citations?: Message['citations'];
+    disclaimer?: string;
+    blocked?: boolean;
+    violations?: ChatViolation[];
+  }) => {
+    const violationText = violationTextOf(d.violations);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `a_${Date.now()}`,
+        role: 'assistant',
+        content: d.blocked
+          ? [d.answer, violationText && `（${violationText}）`].filter(Boolean).join('')
+          : d.answer,
+        citations: d.citations ?? [],
+        disclaimer: d.disclaimer,
+        blocked: d.blocked,
+        violations: d.violations,
+      },
+    ]);
+  };
+
+  /**
+   * WS 流式优先：8s 未收到 start 帧降级 REST（与 TwinChat/rep Chat 同款兜底节奏）。
+   * onDelta 收到的是累积全文（与分身对话同口径），直接整段覆盖流式气泡。
+   */
+  const tryStream = (text: string, token: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      let settled = false;
+      let started = false;
+      const timer = setTimeout(() => {
+        if (!started) { cleanup(); resolve(false); }
+      }, 8000);
+      const cleanup = () => {
+        settled = true;
+        clearTimeout(timer);
+        wsRef.current?.close();
+        wsRef.current = null;
+      };
+      const ws = openMedicalQaWs(token, {
+        onStart: () => {
+          if (settled) return;
+          started = true;
+          clearTimeout(timer);
+          setStreaming(true);
+          setStreamText('');
+        },
+        onDelta: (t) => { if (!settled) setStreamText(t); },
+        onDone: (d) => {
+          if (settled) return;
+          settled = true;
+          started = true;
+          clearTimeout(timer);
+          setStreaming(false);
+          setStreamText('');
+          pushAi({
+            answer: d.answer ?? '',
+            citations: d.citations,
+            disclaimer: d.disclaimer,
+            blocked: d.blocked,
+            violations: (d.violations ?? []) as ChatViolation[],
+          });
+          wsRef.current = null;
+          resolve(true);
+        },
+        onError: () => {
+          if (settled) return;
+          settled = true;
+          started = true;
+          clearTimeout(timer);
+          setStreaming(false);
+          setStreamText('');
+          wsRef.current = null;
+          resolve(false);
+        },
+      });
+      wsRef.current = ws;
+      ws.sendQuestion(text);
+    });
+  };
+
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || streaming) return;
 
     const userMsg: Message = { id: `u_${Date.now()}`, role: 'user', content: text };
     setMessages((prev) => [...prev, userMsg]);
@@ -63,30 +189,19 @@ export default function MedicalQAScreen() {
     setLoading(true);
 
     try {
-      const response = await medicalAPI.qa(text);
-      const violationText = violationTextOf(response.violations);
-      const aiMsg: Message = {
-        id: `a_${Date.now()}`,
-        role: 'assistant',
-        content: response.blocked
-          ? [response.answer, violationText && `（${violationText}）`]
-              .filter(Boolean)
-              .join('')
-          : response.answer,
-        citations: response.citations ?? [],
-        disclaimer: response.disclaimer,
-        blocked: response.blocked,
-        violations: response.violations,
-      };
-      setMessages((prev) => [...prev, aiMsg]);
+      // v1.1：WS 流式优先；未 start/断开/异常 → REST 兜底（medicalAPI.qa）
+      const token = (await apiClient.getToken()) || '';
+      const ok = await tryStream(text, token);
+      if (!ok) {
+        const response = await medicalAPI.qa(text);
+        pushAi(response);
+      }
     } catch (e: any) {
+      // catch 闭包内先取字符串（Hermes 坑防御，同 TwinChat）
+      const errMsg = `抱歉，出错了：${e?.message || '请稍后重试'}`;
       setMessages((prev) => [
         ...prev,
-        {
-          id: `err_${Date.now()}`,
-          role: 'assistant',
-          content: `抱歉，出错了：${e.message || '请稍后重试'}`,
-        },
+        { id: `err_${Date.now()}`, role: 'assistant', content: errMsg },
       ]);
     } finally {
       setLoading(false);
@@ -149,7 +264,15 @@ export default function MedicalQAScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {BRAND && (
+      
+      <FlatList
+        ref={flatListRef}
+        data={streaming || streamText
+          ? [...messages, { id: 'streaming', role: 'assistant' as const, content: streamText || '正在思考...' }]
+          : messages}
+        ListHeaderComponent={
+          <>
+            {BRAND && (
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, backgroundColor: BRAND.primary }}>
           <View style={{ width: 18, height: 18, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
             <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{BRAND.char}</Text>
@@ -158,14 +281,26 @@ export default function MedicalQAScreen() {
           <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginLeft: 10, flexShrink: 1 }}>{BRAND.tagline}</Text>
         </View>
       )}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>医学问答</Text>
-        <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>
-      </View>
-
-      <FlatList
-        ref={flatListRef}
-        data={messages}
+            <View style={styles.header}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.headerTitle}>医学问答</Text>
+                <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>
+              </View>
+              <TouchableOpacity
+                onPress={handleNewChat}
+                disabled={loading || streaming}
+                activeOpacity={0.7}
+                style={{
+                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
+                  backgroundColor: 'rgba(255,255,255,0.18)',
+                  opacity: loading || streaming ? 0.5 : 1,
+                }}
+              >
+                <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        }
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
@@ -187,12 +322,12 @@ export default function MedicalQAScreen() {
           blurOnSubmit={false}
         />
         <TouchableOpacity
-          style={[styles.sendBtn, (!input.trim() || loading) && styles.sendBtnDisabled]}
+          style={[styles.sendBtn, (!input.trim() || loading || streaming) && styles.sendBtnDisabled]}
           onPress={handleSend}
-          disabled={!input.trim() || loading}
+          disabled={!input.trim() || loading || streaming}
           activeOpacity={0.7}
         >
-          {loading ? (
+          {loading || streaming ? (
             <ActivityIndicator color={Colors.textWhite} size="small" />
           ) : (
             <Icon name={ActionIcons.send} size={18} color={Colors.textWhite} />
@@ -210,6 +345,8 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     paddingBottom: Spacing.lg,
     paddingHorizontal: Spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
   },
   headerTitle: { color: Colors.textWhite, fontSize: FontSize.xl, fontWeight: '700' },
   headerSubtitle: {

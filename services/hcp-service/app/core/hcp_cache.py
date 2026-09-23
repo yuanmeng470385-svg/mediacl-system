@@ -53,10 +53,13 @@ class HcpCache:
             self._unavailable(exc)
             return None
 
-    def set(self, key: str, value: dict) -> None:
+    def set(self, key: str, value: dict, ttl: Optional[int] = None) -> None:
+        """ttl=None 用默认（300s）；画像键传 24h——新鲜度靠写路径即时失效，
+        TTL 只作兜底（2026-09-23 v1.1：5 分钟 TTL 让演示反复吃 8s 冷启动）。"""
         try:
             self._client().set(
-                f"hcpcache:{key}", json.dumps(value, ensure_ascii=False), ex=self.ttl,
+                f"hcpcache:{key}", json.dumps(value, ensure_ascii=False),
+                ex=ttl if ttl is not None else self.ttl,
             )
         except Exception as exc:
             self._unavailable(exc)

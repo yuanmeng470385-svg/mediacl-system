@@ -261,6 +261,16 @@ export default function ChatScreen() {
     }
   }, [input, loading, specialistId, sessionId, tryStream]);
 
+  /** 新建对话（v1.1 豆包式）：清 session 另起窗口，下一条消息后端开新 session */
+  const handleNewChat = () => {
+    if (loading || streaming) return;
+    AsyncStorage.removeItem(SESSION_KEY(specialistId)).catch(() => {});
+    setSessionId(null);
+    setMessages([
+      { id: 'welcome', role: 'assistant', content: `你好！我是${specialistName}。有什么可以帮助你的？` },
+    ]);
+  };
+
   const handleFeedback = (msg: Message, rating: 1 | -1) => {
     if (!msg.conversationId) return;
     specialistAPI.sendFeedback(msg.conversationId, rating)
@@ -354,7 +364,18 @@ export default function ChatScreen() {
           <Text style={styles.headerTitle}>{specialistName}</Text>
           <Text style={styles.headerSub}>数字学术专员 · 在线</Text>
         </View>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity
+          onPress={handleNewChat}
+          disabled={loading || streaming}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 13,
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            opacity: loading || streaming ? 0.5 : 1,
+          }}
+        >
+          <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
+        </TouchableOpacity>
       </View>
 
       <FlatList

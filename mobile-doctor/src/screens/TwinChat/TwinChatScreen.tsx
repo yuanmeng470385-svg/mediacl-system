@@ -25,6 +25,7 @@ import Icon, { ActionIcons } from '../../components/Icon';
 import { twinAPI } from '../../api/twin';
 import { favoritesAPI } from '../../api/favorites';
 import { apiClient } from '../../api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { openChatWs } from '../../services/wsChat';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { RootStackParamList } from '../../navigation/types';
@@ -72,12 +73,60 @@ export default function TwinChatScreen() {
   const wsRef = useRef<ReturnType<typeof openChatWs> | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
+  // ---- v1.1（2026-09-23）：会话常驻（豆包式）——重进恢复历史，继续同一 session；
+  // 「新建对话」清 session 另起窗口。照 rep ChatScreen 的 SESSION_KEY 范式。
+  const SESSION_KEY = `twin_chat_session_${twinId}`;
+  const [sessionId, setSessionId] = useState<string | null>(null);
+
+  const persistSession = (sid: string) => {
+    setSessionId(sid);
+    AsyncStorage.setItem(SESSION_KEY, sid).catch(() => {});
+  };
+
+  // 重进恢复：上次 session 的消息（归属不过/失效 → 静默全新会话）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem(SESSION_KEY);
+        if (!saved || cancelled) return;
+        const history = await apiClient.request<any[]>(
+          'GET', `/api/v1/specialists/conversations/${saved}`
+        );
+        if (!cancelled && Array.isArray(history) && history.length) {
+          setSessionId(saved);
+          setMessages((prev) => [
+            ...prev,
+            ...history.map((h) => ({
+              id: String(h.id),
+              role: h.role === 'user' ? ('user' as const) : ('assistant' as const),
+              content: String(h.content ?? ''),
+              citations: h.citations,
+              conversationId: null, // 历史行无会话内主键 → 收藏星标不显示（rep 端同口径）
+            })),
+          ]);
+        }
+      } catch { /* 失效/网络失败 → 全新会话 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [twinId]);
+
+  /** 新建对话：清 session（下一条消息后端会开新 session）+ 清消息 */
+  const handleNewChat = () => {
+    if (loading || streaming) return;
+    AsyncStorage.removeItem(SESSION_KEY).catch(() => {});
+    setSessionId(null);
+    setMessages([
+      { id: 'welcome', role: 'assistant', content: `你好！我是${twinName}。有什么可以帮助你的？` },
+    ]);
+  };
+
   /**
    * WS 流式优先：8s 内未收到 start 帧即清理并返回 false → handleSend 降级 REST。
    * onDone 时把最终答案以普通 assistant 消息入列（带 citations/violations/blocked）。
    * 结果已定（done/error/8s 超时）后迟到的帧一律忽略，防止降级 REST 后重复入列。
    */
-  const tryStream = async (text: string, token: string): Promise<boolean> => {
+  const tryStream = async (text: string, sid: string | null, token: string): Promise<boolean> => {
     return new Promise((resolve) => {
       let started = false;
       let settled = false;
@@ -107,6 +156,7 @@ export default function TwinChatScreen() {
             clearTimeout(timer);
             setStreamText('');
             setStreaming(false);
+            if (d.sessionId) persistSession(d.sessionId); // v1.1：会话常驻，下次进来续聊
             // 与 REST 路径一致的 blocked 拼装：正文 +（违规明细）
             const violationText = violationTextOf(d.violations);
             const content = d.blocked
@@ -147,7 +197,7 @@ export default function TwinChatScreen() {
           },
         });
         wsRef.current = ws;
-        ws.sendQuestion(text);
+        ws.sendQuestion(text, sid ?? undefined);
       };
       open();
     });
@@ -171,11 +221,12 @@ export default function TwinChatScreen() {
 
     try {
       const token = (await apiClient.getToken()) || '';
-      const ok = await tryStream(text, token);
+      const ok = await tryStream(text, sessionId, token);
       if (ok) return;                                  // WS 完成（含 done），不走 REST
 
       // ---- REST 降级（WS 8s 超时/断开/服务端异常）----
-      const response = await twinAPI.chat(twinId, text);
+      const response = await twinAPI.chat(twinId, text, sessionId ?? undefined);
+      if (response.session_id) persistSession(response.session_id); // v1.1：REST 路径同样续会话
       const violationText = violationTextOf(response.violations);
       const aiMsg: Message = {
         id: response.request_id || `a_${Date.now()}`,
@@ -293,7 +344,18 @@ export default function TwinChatScreen() {
           <Text style={styles.headerTitle}>{twinName}</Text>
           <Text style={styles.headerSub}>数字员工 · 在线</Text>
         </View>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity
+          onPress={handleNewChat}
+          disabled={loading || streaming}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 13,
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            opacity: loading || streaming ? 0.5 : 1,
+          }}
+        >
+          <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
+        </TouchableOpacity>
       </View>
 
       {/* 常驻 AI 生成标识条（合规要求，不可关闭） */}

@@ -377,32 +377,57 @@ class AnswerGenerator:
                     raise BailianException("百炼返回空答案（App 未发布或无检索结果）")
             except BailianException as e:
                 logger.warning(f"[{request_id}] 百炼调用失败，降级到通义千问: {e}")
-                # G3（2026-08-13）：qwen 是同步 SDK 调用，放入 worker 线程，
-                # 避免阻塞事件循环（与 REST generate 同一口径）
                 # D5（2026-08-13）：降级带多轮上下文（与 REST generate 同口径）
                 history = self._load_fallback_history(db, session_id, user_id)
-                answer = await asyncio.to_thread(
-                    self._fallback_generate, question, specialist, history,
-                )
                 citations = []
-                ai_response = answer
+                ai_response = None
                 ai_model = "qwen-max"
-                # 降级是整段一次性输出，同样先过门禁（否则 Step 3 事后检查前
-                # 客户端已看到全文，与旧实现同样的合规旁路）
-                frame_check = await check_compliance(
-                    content=answer,
-                    context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
-                    fast=True,
-                )
-                if frame_check.get("blocked"):
-                    logger.info(f"[{request_id}] 降级输出命中合规门禁，阻断输出")
-                    async for blocked in self._blocked_frames(
-                        answer, user_id, specialist, session_id,
-                        request_id, start_time, ai_model, ai_prompt, citations,
-                    ):
-                        yield blocked
-                    return
-                yield {"type": "delta", "text": answer}
+                # 流式降级（2026-09-23）：qwen stream=True 逐块转发 + 逐块 fast 门禁
+                # （与百炼路径同款）。多租户线上分身大多无 bailian_app_id，降级即主路径，
+                # 整段一次性输出会让 App 打字机名存实亡。流式失败（一块未出）回老单段路径。
+                answer = ""
+                try:
+                    async for piece in self._astream_fallback(question, specialist, history):
+                        answer += piece
+                        frame_check = await check_compliance(
+                            content=answer,
+                            context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
+                            fast=True,
+                        )
+                        if frame_check.get("blocked"):
+                            ai_response = answer
+                            logger.info(f"[{request_id}] 降级流式命中合规门禁，阻断输出")
+                            async for blocked in self._blocked_frames(
+                                answer, user_id, specialist, session_id,
+                                request_id, start_time, ai_model, ai_prompt, citations,
+                            ):
+                                yield blocked
+                            return
+                        # delta 与百炼路径同口径：发累积全文（App 客户端 onDelta 直接整段覆盖）
+                        yield {"type": "delta", "text": answer}
+                except Exception as stream_err:
+                    logger.warning(f"[{request_id}] 降级流式异常: {stream_err}，回退单段生成")
+                if not answer:
+                    # G3：qwen 是同步 SDK 调用，放入 worker 线程（与 REST generate 同口径）；
+                    # _fallback_generate 自带失败话术兜底
+                    answer = await asyncio.to_thread(
+                        self._fallback_generate, question, specialist, history,
+                    )
+                    frame_check = await check_compliance(
+                        content=answer,
+                        context={"user_id": user_id, "type": "ai_output", "specialist_id": specialist.id},
+                        fast=True,
+                    )
+                    if frame_check.get("blocked"):
+                        ai_response = answer
+                        async for blocked in self._blocked_frames(
+                            answer, user_id, specialist, session_id,
+                            request_id, start_time, ai_model, ai_prompt, citations,
+                        ):
+                            yield blocked
+                        return
+                    yield {"type": "delta", "text": answer}
+                ai_response = ai_response or answer
 
             # ---- Step 3: 合规审核 AI 答案 ----
             logger.info(f"[{request_id}] 合规审核答案")
@@ -537,26 +562,9 @@ class AnswerGenerator:
         - 输出硬性 300 字符截断（提示词"不超过 300 字"对模型只是软约束），
           max_tokens 同步收紧（中文约 1-2 token/字，600 封顶防超长后再截）。
         """
-        prompt = f"""你是{specialist.name}，医药产品 AI 学术专员。
-
-用户问题：{question}
-
-要求：
-1. 简洁回答，不超过 300 字
-2. 不确定时建议咨询医学顾问
-3. 严禁承诺疗效、提及回扣、讨论医生处方量
-4. 不得称呼用户姓名，不得虚构用户身份（医生与代表均可能提问，
-   身份不明时直接回答问题本身，不要猜测对方是谁）
-
-回答："""
-
-        messages = []
-        for m in (history or []):
-            role = m.get("role") if isinstance(m, dict) else None
-            content = m.get("content") if isinstance(m, dict) else None
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": prompt})
+        messages = self._fallback_messages(
+            history, self._fallback_prompt(question, specialist)
+        )
 
         try:
             result = self.qwen.chat(
@@ -575,6 +583,69 @@ class AnswerGenerator:
         except Exception as e:
             logger.error(f"降级生成也失败: {e}")
             return "抱歉，服务暂时不可用，请稍后重试或直接咨询医学顾问。"
+
+    @staticmethod
+    def _fallback_prompt(question: str, specialist: Specialist) -> str:
+        """降级 prompt（单段/流式两路径共用，内容与 2026-08 版完全一致）"""
+        return f"""你是{specialist.name}，医药产品 AI 学术专员。
+
+用户问题：{question}
+
+要求：
+1. 简洁回答，不超过 300 字
+2. 不确定时建议咨询医学顾问
+3. 严禁承诺疗效、提及回扣、讨论医生处方量
+4. 不得称呼用户姓名，不得虚构用户身份（医生与代表均可能提问，
+   身份不明时直接回答问题本身，不要猜测对方是谁）
+
+回答："""
+
+    @staticmethod
+    def _fallback_messages(history: Optional[list], prompt: str) -> list:
+        """历史多轮上下文（限 user/assistant 文本）+ 当前 prompt（单段/流式共用）"""
+        messages = []
+        for m in (history or []):
+            role = m.get("role") if isinstance(m, dict) else None
+            content = m.get("content") if isinstance(m, dict) else None
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    async def _astream_fallback(self, question: str, specialist: Specialist, history: Optional[list]):
+        """降级流式：同步 SDK 流式生成器放 worker 线程，增量经队列回传事件循环。
+
+        生成中途异常：把已产出部分交完后正常结束（调用方按"是否一块未出"决定
+        是否回退单段路径）；队列 get 同样走线程池，事件循环不被 q.get 阻塞。
+        """
+        import queue as _queue
+        q: _queue.Queue = _queue.Queue()
+        _DONE = object()
+
+        def worker():
+            try:
+                for piece in self.qwen.chat_stream(
+                    messages=self._fallback_messages(
+                        history, self._fallback_prompt(question, specialist)
+                    ),
+                    model="qwen-max",
+                    temperature=0.1,
+                    max_tokens=600,
+                ):
+                    q.put(piece)
+            except Exception as e:
+                logger.error(f"降级流式生成异常: {e}")
+            finally:
+                q.put(_DONE)
+
+        loop = asyncio.get_running_loop()
+        task = loop.run_in_executor(None, worker)
+        while True:
+            item = await loop.run_in_executor(None, q.get)
+            if item is _DONE:
+                break
+            yield item
+        await task
 
     def _load_fallback_history(self, db, session_id: Optional[str], user_id: int) -> list:
         """降级多轮上下文：取同 session 最近几轮问答（最多 3 轮 / 6 行）。
