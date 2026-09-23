@@ -4,6 +4,8 @@
 //   API_TARGET  网关地址（默认 http://127.0.0.1:8000）
 //   BRAND_NAME  /brand.json 返回的公司全称（不设回退 MedAgent，与本地开发一致）
 //   BRAND_SHORT 公司简称（可选；web 前端标签页/侧栏/登录卡优先用它）
+//   BRAND_PRIMARY/BRAND_LOGO_CHAR/BRAND_TAGLINE 品牌主色(#RRGGBB)/字标首字/标语（可选）
+//   APK_DIR     APK 目录（租户各一份 /var/www/medagent/apk-<slug>；默认共用母版目录）
 // 其余行为同原版：/api/* 反代（含 WS 升级、120s 长路由对齐）、/apk/* 下载、SPA 回退 index.html
 const http = require('http');
 const fs = require('fs');
@@ -14,9 +16,13 @@ const DIST = process.env.DIST_DIR || '/var/www/medagent/dist';
 const APK = process.env.APK_DIR || '/var/www/medagent/apk';
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const API_TARGET = process.env.API_TARGET || 'http://127.0.0.1:8000';
+const ASR_TARGET = process.env.ASR_TARGET || ''; // 租户 ASR WS：/ws/visits/... 路径分流到 visit-service
 const BRAND = {
   name: process.env.BRAND_NAME || 'MedAgent',
   ...(process.env.BRAND_SHORT ? { short: process.env.BRAND_SHORT } : {}),
+  ...(process.env.BRAND_PRIMARY ? { primary: process.env.BRAND_PRIMARY } : {}),
+  ...(process.env.BRAND_LOGO_CHAR ? { logoChar: process.env.BRAND_LOGO_CHAR } : {}),
+  ...(process.env.BRAND_TAGLINE ? { tagline: process.env.BRAND_TAGLINE } : {}),
 };
 
 const proxy = httpProxy.createProxyServer({
@@ -25,6 +31,9 @@ const proxy = httpProxy.createProxyServer({
   proxyTimeout: 120000, // 与网关 carve-out 对齐（LLM 长路由 120s）
   timeout: 130000,
 });
+
+// ASR 长录音连接单独代理（录音中时长远超 120s，不给它设超时）
+const asrProxy = ASR_TARGET ? httpProxy.createProxyServer({ target: ASR_TARGET, ws: true }) : null;
 
 proxy.on('error', (err, req, res) => {
   if (res && res.writeHead && !res.headersSent) {
@@ -82,6 +91,7 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify(BRAND));
   }
   if (url.startsWith('/api/')) return proxy.web(req, res);
+  if (asrProxy && url.startsWith('/ws/')) return asrProxy.web(req, res); // ASR（代表端 visit-service）
   if (url.startsWith('/apk/')) {
     const f = safeJoin(APK, url.slice(5));
     if (!f) { res.writeHead(400); return res.end('Bad Request'); }
@@ -95,6 +105,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.on('upgrade', (req, socket, head) => proxy.ws(req, socket, head));
+server.on('upgrade', (req, socket, head) => {
+  // WS 按路径分流：/ws/visits/... 走 visit-service（ASR），其余（聊天）走网关
+  if (asrProxy && req.url && req.url.startsWith('/ws/')) return asrProxy.ws(req, socket, head);
+  proxy.ws(req, socket, head);
+});
 
 server.listen(PORT, '0.0.0.0', () => console.log(`medagent web proxy on :${PORT} -> ${API_TARGET} [${BRAND.name}]`));

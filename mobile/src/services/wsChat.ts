@@ -3,6 +3,7 @@
  * 协议见 specs 3.1/3.3：发 question 帧，收 start/delta/done/error 帧
  */
 import { GATEWAY_HOST, WS_SCHEME } from '../config';
+import { API_PORT } from '../config';
 
 export interface ChatWsDone {
   text: string;
@@ -35,7 +36,7 @@ export function openChatWs(
   // B5 修复（2026-08-12）：token 不再放 query string（会进网关/反代访问日志）——
   // 连接建立后首帧发 {"type":"auth","token"}；网关/服务端对旧客户端保留 query 兜底
   const ws = new WebSocket(
-    `${WS_SCHEME}://${GATEWAY_HOST}:8000/api/v1/specialists/${specialistId}/chat/ws`
+    `${WS_SCHEME}://${GATEWAY_HOST}:${API_PORT}/api/v1/specialists/${specialistId}/chat/ws`
   );
 
   // open 前 sendQuestion 缓冲的 question 帧（真实 RN WebSocket 构造后先 CONNECTING）

@@ -8,13 +8,13 @@ set -euo pipefail
 PUB_IP=39.96.52.114
 MASTER_ENV=/opt/medagent/.env
 TENANT_DIR=/opt/medagent/tenants
-# slug|公司全称|简称
+# slug|公司全称|简称|主色|字标（App 端 build-brands.sh 用同一张表，改这里要同步）
 TENANTS=(
-  "zunpin|北京尊品科技有限公司|尊品科技"
-  "xiluoli|北京希洛利科技有限公司|希洛利科技"
-  "chenglin|郑州成琳网络科技有限公司|成琳网络"
-  "qiyijia|北京琪宜嘉科技有限公司|琪宜嘉科技"
-  "jidian|集典（北京）信息科技有限公司|集典信息"
+  "zunpin|北京尊品科技有限公司|尊品科技|#2F54EB|尊"
+  "xiluoli|北京希洛利科技有限公司|希洛利科技|#0E9488|希"
+  "chenglin|郑州成琳网络科技有限公司|成琳网络|#D97706|成"
+  "qiyijia|北京琪宜嘉科技有限公司|琪宜嘉科技|#7C3AED|琪"
+  "jidian|集典（北京）信息科技有限公司|集典信息|#BE123C|典"
 )
 # 单元名|代码目录|端口偏移（相对块首，同母版 8000-8007 的分配）
 SVCS=(
@@ -32,7 +32,7 @@ mkdir -p "$TENANT_DIR" /var/log/medagent
 
 i=0
 for row in "${TENANTS[@]}"; do
-  IFS='|' read -r slug full short <<<"$row"
+  IFS='|' read -r slug full short color char <<<"$row"
   base=$((8100 + i*10))
   webport=$((8801 + i))
   redisi=$((i+1))
@@ -66,6 +66,7 @@ for row in "${TENANTS[@]}"; do
     }
   ' "$MASTER_ENV" > "$envf"
   chmod 600 "$envf"
+  mkdir -p "/var/www/medagent/apk-$slug"   # 各租户专属 APK 目录（web 入口 /apk/ 指向这里）
 
   # 2) 租户库：母版 dump 一次逐租户恢复（角色是集群级已存在，ACL 随 dump 带过）
   if ! runuser -u postgres -- psql -lqt | cut -d'|' -f1 | grep -qw "medagent_$slug"; then
@@ -104,8 +105,13 @@ After=network.target
 WorkingDirectory=/opt/medagent-web
 Environment=PORT=$webport
 Environment=API_TARGET=http://127.0.0.1:$base
+Environment=ASR_TARGET=http://127.0.0.1:$((base+2))
 Environment="BRAND_NAME=$full"
 Environment="BRAND_SHORT=$short"
+Environment="BRAND_PRIMARY=$color"
+Environment="BRAND_LOGO_CHAR=$char"
+Environment="BRAND_TAGLINE=药企 AI 数字员工系统"
+Environment=APK_DIR=/var/www/medagent/apk-$slug
 ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=3
@@ -121,8 +127,10 @@ for row in "${TENANTS[@]}"; do
   IFS='|' read -r slug _ <<<"$row"
   for spec in "${SVCS[@]}"; do
     IFS='|' read -r unit _ <<<"$spec"
-    systemctl enable --now "medagent-$slug-$unit.service" >/dev/null 2>&1
+    systemctl enable "medagent-$slug-$unit.service" >/dev/null 2>&1
+    systemctl restart "medagent-$slug-$unit.service" 2>/dev/null || true
   done
-  systemctl enable --now "medagent-web-$slug.service" >/dev/null 2>&1
+  systemctl enable "medagent-web-$slug.service" >/dev/null 2>&1
+  systemctl restart "medagent-web-$slug.service"   # 重跑必须 restart，否则旧进程带旧 env 继续跑
 done
 echo "OK: 5 tenants enabled (web 8801-8805)"

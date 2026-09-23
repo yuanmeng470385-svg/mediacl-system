@@ -20,6 +20,7 @@ import { useAuth } from '../../store/AuthContext';
 import { authAPI } from '../../api/auth';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { RootStackParamList } from '../../navigation/types';
+import { BRAND } from '../../brandConfig';
 
 export default function LoginScreen() {
   const { login, loginByPassword } = useAuth();
@@ -129,11 +130,11 @@ export default function LoginScreen() {
 
       <View style={styles.content}>
         <View style={styles.logoArea}>
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoIcon}>MD</Text>
+          <View style={[styles.logoCircle, BRAND && { backgroundColor: BRAND.primary }]}>
+            <Text style={[styles.logoIcon, BRAND && { color: '#fff' }]}>{BRAND ? BRAND.char : 'MD'}</Text>
           </View>
-          <Text style={styles.appName}>MedAgent·医生端</Text>
-          <Text style={styles.subtitle}>医药数字员工 · 医生工作台</Text>
+          <Text style={styles.appName}>{BRAND ? BRAND.appName : 'MedAgent·医生端'}</Text>
+          <Text style={styles.subtitle}>{BRAND ? BRAND.name : '医药数字员工 · 医生工作台'}</Text>
         </View>
 
         <View style={[styles.card, Shadow.card]}>

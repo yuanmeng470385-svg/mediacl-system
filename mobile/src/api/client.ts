@@ -5,9 +5,10 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_HOST, API_SCHEME } from '../config';
+import { API_PORT } from '../config';
 
 // 开发环境用本地网关，生产环境用正式地址；host 集中定义在 src/config.ts（真机联调改一处）
-const API_BASE_URL = `${API_SCHEME}://${API_HOST}:8000`;
+const API_BASE_URL = `${API_SCHEME}://${API_HOST}:${API_PORT}`;
 
 class APIClient {
   private baseURL: string;

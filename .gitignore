@@ -74,3 +74,6 @@ t8-screenshots/
 t9-blueprint-screenshots/
 t10-office3d/
 t11-office3d/
+
+# 品牌包构建产物（build-brands.sh 输出）
+deploy/multi-tenant/out/

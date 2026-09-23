@@ -12,6 +12,7 @@
  * onclose 不再上报故障。
  */
 import { GATEWAY_HOST, WS_SCHEME } from '../config';
+import { API_PORT } from '../config';
 import type { ChatViolation } from '../types';
 
 export interface ChatWsDone {
@@ -42,7 +43,7 @@ export function openChatWs(
   cbs: ChatWsCallbacks
 ): ChatWsSession {
   const ws = new WebSocket(
-    `${WS_SCHEME}://${GATEWAY_HOST}:8000/api/v1/specialists/${specialistId}/chat/ws`
+    `${WS_SCHEME}://${GATEWAY_HOST}:${API_PORT}/api/v1/specialists/${specialistId}/chat/ws`
   );
 
   // open 前 sendQuestion 缓冲的 question 帧

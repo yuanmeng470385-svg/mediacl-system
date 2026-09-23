@@ -86,7 +86,20 @@ APK 下载：`http://39.96.52.114:8080/apk/medagent-rep.apk`、`/apk/medagent-do
   由 systemd 注入；母版 8080 不设 env 行为与旧版一致；服务器旧版备份 server.js.bak-multitenant）。
 - 隔离已验证：A 租户 token 在 B 租户 401（JWT_SECRET 每租户随机）；各租户 demo_rep 可登录。
 - **安全组需放行 8801-8805**（阿里云控制台，人工操作；服务端口块不出公网）。
-- App（APK）仍指向母版配置，按公司出包属后续（config.ts release 指向各 880x + applicationId 后缀）。
+- App 品牌包见下方「App 端品牌包」。
+
+### App 端品牌包（10 个 APK）
+
+- 一键构建：`deploy/multi-tenant/build-brands.sh`（5 品牌 × 代表/医生两端）。每品牌注入四件套后
+  assembleRelease，构建完 `git checkout` 还原源文件，母版/开发行为不变：
+  1. `<app>/src/brandConfig.ts` → 登录页品牌块（主色字标 + `<简称>数字员工/医生` + 公司全称）
+     + 全流量走该租户 web 入口 880x（REST/聊天 WS 走 `/api/`，ASR 走 `/ws/` 由代理分流）；
+  2. `strings.xml` app_name → `尊品数字员工`/`尊品医生`（桌面名）；
+  3. 桌面图标 PIL 重生成（主色字标，`gen_brand_icon.py`）；
+  4. `-PBRAND_SUFFIX=.<slug>` 包名后缀 → **5 家 App 可同机共存**。
+- 上传映射：`out/medagent-rep-<slug>.apk → /var/www/medagent/apk-<slug>/medagent-rep.apk`（医生端同理），
+  即各租户 `http://<ip>:880x/apk/medagent-rep.apk` 下载的是自家包；App 内更新检查也按此自洽。
+- 端口接线：`src/config.ts` 新增 `API_PORT/ASR_PORT`（BRAND 为 null 时保持 8000/8002 直连，单测口径不变）。
 
 ## 3. web 管理后台（nginx）
 

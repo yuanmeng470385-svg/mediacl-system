@@ -80,6 +80,8 @@ android {
     namespace "com.medagent.mobile"
     defaultConfig {
         applicationId "com.medagent.mobile"
+        // 品牌包后缀（build-brands.sh -PBRAND_SUFFIX 注入）：5 家 App 可同机共存；母版为空串行为不变
+        applicationIdSuffix project.findProperty('BRAND_SUFFIX') ?: ''
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 2
