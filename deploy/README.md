@@ -64,6 +64,30 @@ APK 下载：`http://39.96.52.114:8080/apk/medagent-rep.apk`、`/apk/medagent-do
 清理需 `AUDIT_CLEANUP_DATABASE_URL`（medagent_audit_cleanup 专用账号，见 005），未配置时
 与本地开发机行为一致，可忽略；要消除则按 005 配该 env。
 
+## 2c. 多租户白标（2026-09-23：5 家公司独立后端）
+
+5 家演示公司各有一套"自己的系统"：**一套代码 + 5 套运行时**（独立 PG 库 / Redis db /
+端口块 / JWT 密钥 / web 入口，互不可见）；品牌标签走 `/brand.json`——web 代理按实例返回
+公司名，前端启动时换标签页标题/登录卡/侧栏/版权行（母版与本地开发无 brand.json 时回退 MedAgent）。
+
+| 租户 slug | 公司 | web 入口（公网） | 服务端口块 | PG 库 | Redis |
+|---|---|---|---|---|---|
+| zunpin | 北京尊品科技有限公司 | :8801 | 8100-8107 | medagent_zunpin | db1 |
+| xiluoli | 北京希洛利科技有限公司 | :8802 | 8110-8117 | medagent_xiluoli | db2 |
+| chenglin | 郑州成琳网络科技有限公司 | :8803 | 8120-8127 | medagent_chenglin | db3 |
+| qiyijia | 北京琪宜嘉科技有限公司 | :8804 | 8130-8137 | medagent_qiyijia | db4 |
+| jidian | 集典（北京）信息科技有限公司 | :8805 | 8140-8147 | medagent_jidian | db5 |
+
+- 开通/重建：`deploy/multi-tenant/setup-tenants.sh`（服务器 root 运行，幂等）。租户 env 在
+  `/opt/medagent/tenants/<slug>.env`（覆盖库/Redis/端口/JWT/SHARE_WEB_URL_BASE，并显式写全
+  8 个 `*_SERVICE_URL` 指向本块）；unit 命名 `medagent-<slug>-<svc>` ×8 + `medagent-web-<slug>`，
+  服务只绑 127.0.0.1，公网统一走各自 web 入口。qwen/百炼/OSS 等凭证母版共享（一本账）。
+- web 代理多实例化：`deploy/web-proxy/server.js`（`PORT`/`API_TARGET`/`BRAND_NAME`/`BRAND_SHORT`
+  由 systemd 注入；母版 8080 不设 env 行为与旧版一致；服务器旧版备份 server.js.bak-multitenant）。
+- 隔离已验证：A 租户 token 在 B 租户 401（JWT_SECRET 每租户随机）；各租户 demo_rep 可登录。
+- **安全组需放行 8801-8805**（阿里云控制台，人工操作；服务端口块不出公网）。
+- App（APK）仍指向母版配置，按公司出包属后续（config.ts release 指向各 880x + applicationId 后缀）。
+
 ## 3. web 管理后台（nginx）
 
 > 注：首次部署实际用的是 §2b 的 node 代理（等效功能）；本节 nginx 路线留给

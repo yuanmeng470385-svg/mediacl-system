@@ -1,3 +1,4 @@
+import { getBrand } from '../brand';
 import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
@@ -36,7 +37,7 @@ export default function AdminLayout() {
 
   return (
     <ProLayout
-      title="MedAgent"
+      title={getBrand().short || getBrand().name}
       logo={null}
       // M17：菜单按角色过滤（角色表单一事实源见 constants/routeAccess.ts）
       route={{ children: filterMenu(menuConfig, user?.role) }}
@@ -72,6 +73,11 @@ export default function AdminLayout() {
               {user?.name || '管理员'}
             </Button>
           </Dropdown>
+        </div>
+      )}
+      footerRender={() => (
+        <div style={{ textAlign: 'center', padding: '12px 0', color: 'rgba(0,0,0,0.45)', fontSize: 12 }}>
+          © {new Date().getFullYear()} {getBrand().name}
         </div>
       )}
       token={{

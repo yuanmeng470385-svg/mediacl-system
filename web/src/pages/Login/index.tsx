@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { Card, Form, Input, Button, Typography, Alert } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useAuth } from '../../hooks/useAuth';
+import { getBrand } from '../../brand';
 
 const { Title, Text } = Typography;
 
@@ -10,6 +11,7 @@ export default function LoginPage() {
   const { login, isLoggedIn, loading } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const brand = getBrand();
   // 等启动 me() 完成，避免误重定向；已登录直接回 /dashboard
   if (loading) return null;
   if (isLoggedIn) return <Navigate to="/dashboard" replace />;
@@ -31,7 +33,7 @@ export default function LoginPage() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f2f5' }}>
       <Card style={{ width: 380, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={3} style={{ marginBottom: 4 }}>MedAgent</Title>
+          <Title level={3} style={{ marginBottom: 4 }}>{brand.short || brand.name}</Title>
           <Text type="secondary">药企 AI 数字员工系统 · 管理后台</Text>
         </div>
         {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
@@ -50,6 +52,9 @@ export default function LoginPage() {
         </Form>
         <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginTop: 16, fontSize: 12 }}>
           管理员账号需先执行 scripts/seed_admin.py 设置密码
+        </Text>
+        <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginTop: 8, fontSize: 12 }}>
+          © {new Date().getFullYear()} {brand.name}
         </Text>
       </Card>
     </div>
