@@ -3,7 +3,7 @@ import BrandLogo from '../components/BrandLogo';
 import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
-import { Badge, Button, Dropdown, Avatar, theme } from 'antd';
+import { Badge, Button, Dropdown, Avatar, Watermark, theme } from 'antd';
 import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import { menuConfig } from '../constants/menu';
 import { canAccess, filterMenu, isKnownRoute } from '../constants/routeAccess';
@@ -91,11 +91,50 @@ export default function AdminLayout() {
         },
       }}
     >
-      {/* M17：已知路由越权访问 → 403 落地页（后端 403 兜底仍在前，此处先挡请求） */}
-      {isKnownRoute(location.pathname) && !canAccess(location.pathname, user?.role) ? (
-        <Forbidden />
+      {/* v1.1.3：侧栏收起时的右上角品牌胶囊（fixed 悬浮，不占布局；展开时让位侧栏字标） */}
+      {collapsed && getBrand().primary && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 12,
+            right: 20,
+            zIndex: 120,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: getBrand().primary,
+            borderRadius: 999,
+            padding: '4px 14px 4px 5px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+          }}
+        >
+          <BrandLogo size={18} />
+          <span style={{ color: '#fff', fontSize: 12, fontWeight: 600 }}>
+            {getBrand().short || getBrand().name}
+          </span>
+        </div>
+      )}
+      {/* v1.1.3：全屏品牌水印——公司全称+标语以主色 5% 斜纹平铺内容区，
+          任何页面任何滚动位置都在（截图/投屏自带标识）；MedAgent 回退态不显示 */}
+      {getBrand().primary ? (
+        <Watermark
+          content={[getBrand().name, getBrand().tagline || '药企 AI 数字员工系统']}
+          font={{ color: getBrand().primary + '0D', fontSize: 15 }}
+          gap={[90, 90]}
+        >
+          {/* M17：已知路由越权访问 → 403 落地页（后端 403 兜底仍在前，此处先挡请求） */}
+          {isKnownRoute(location.pathname) && !canAccess(location.pathname, user?.role) ? (
+            <Forbidden />
+          ) : (
+            <Outlet />
+          )}
+        </Watermark>
       ) : (
-        <Outlet />
+        isKnownRoute(location.pathname) && !canAccess(location.pathname, user?.role) ? (
+          <Forbidden />
+        ) : (
+          <Outlet />
+        )
       )}
       {/* 新人引导（v5）：常驻浮层 + 右下角"?"悬浮球，跨路由存活 */}
       <GuideTour role={user?.role} />
