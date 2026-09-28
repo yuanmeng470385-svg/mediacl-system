@@ -12,6 +12,7 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
+  Modal,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
@@ -24,7 +25,6 @@ import { apiClient } from '../../api/client';
 import { openMedicalQaWs, type MedicalQaWsSession } from '../../services/medicalQaWs';
 import { Colors, FontSize, Spacing, BorderRadius, Shadow } from '../../constants/theme';
 import type { ChatViolation } from '../../types';
-import { BRAND } from '../../brandConfig';
 
 interface Message {
   id: string;
@@ -57,25 +57,52 @@ export default function MedicalQAScreen() {
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
-  // ---- v1.1：流式态 + 对话记录常驻（AsyncStorage）+ 新建对话 ----
+  // ---- v1.1.2：流式态 + 多会话本地存档（每窗口一条，可翻回继续聊）+ 新建/历史 ----
   const [streaming, setStreaming] = useState(false);
   const [streamText, setStreamText] = useState('');
   const wsRef = useRef<MedicalQaWsSession | null>(null);
   const loadedRef = useRef(false);
-  const HIST_KEY = 'medical_qa_history';
+  const SESSIONS_KEY = 'medical_qa_sessions_v2'; // [{id, updatedAt, messages}]
+  const LEGACY_KEY = 'medical_qa_history';       // v1.1.1 单会话消息数组 → 迁移
+  const [sessions, setSessions] = useState<Array<{ id: string; updatedAt: number; messages: Message[] }>>([]);
+  const [currentSid, setCurrentSid] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
-  const persist = (list: Message[]) => {
-    AsyncStorage.setItem(HIST_KEY, JSON.stringify(list)).catch(() => {});
+  const persistSessions = (list: Array<{ id: string; updatedAt: number; messages: Message[] }>) => {
+    setSessions(list);
+    AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(list)).catch(() => {});
   };
 
-  // 重进/重启恢复历史；损坏或为空 → 保持欢迎语（读取完成前不回写，防欢迎语覆盖历史）
+  /** 会话里有过真实提问才算有内容（纯欢迎语 = 空会话，不入档） */
+  const hasUserTurn = (list: Message[]) => list.some((m) => m.role === 'user');
+
+  // 启动恢复：v2 会话列表；旧单会话 key 自动迁移为一条会话。读取完成前不回写
   useEffect(() => {
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(HIST_KEY);
+        let list: Array<{ id: string; updatedAt: number; messages: Message[] }> = [];
+        const raw = await AsyncStorage.getItem(SESSIONS_KEY);
         if (raw) {
-          const list = JSON.parse(raw);
-          if (Array.isArray(list) && list.length) setMessages(list);
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) list = parsed;
+        } else {
+          // v1.1.1 单会话消息数组 → 迁移为一条会话
+          const legacy = await AsyncStorage.getItem(LEGACY_KEY);
+          if (legacy) {
+            const parsed = JSON.parse(legacy);
+            if (Array.isArray(parsed) && hasUserTurn(parsed)) {
+              list = [{ id: `s_${Date.now()}`, updatedAt: Date.now(), messages: parsed }];
+              AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(list)).catch(() => {});
+            }
+          }
+        }
+        if (list.length) {
+          // 最近会话排前 + 恢复为当前对话（豆包式：重进即续聊）
+          list.sort((a, b) => b.updatedAt - a.updatedAt);
+          setSessions(list);
+          setCurrentSid(list[0].id);
+          setMessages(list[0].messages);
         }
       } catch { /* 损坏忽略 */ }
       loadedRef.current = true;
@@ -83,16 +110,46 @@ export default function MedicalQAScreen() {
     return () => { wsRef.current?.close(); wsRef.current = null; };
   }, []);
 
+  // 消息变化 → 更新当前会话存档（空会话不留档）
   useEffect(() => {
-    if (loadedRef.current) persist(messages);
+    if (!loadedRef.current) return;
+    const idx = sessions.findIndex((x) => x.id === currentSid);
+    if (!hasUserTurn(messages)) {
+      if (idx >= 0) persistSessions(sessions.filter((_, i) => i !== idx));
+      return;
+    }
+    if (idx >= 0) {
+      const next = sessions.slice();
+      next[idx] = { ...next[idx], updatedAt: Date.now(), messages };
+      persistSessions(next);
+    } else {
+      persistSessions([{ id: currentSid, updatedAt: Date.now(), messages }, ...sessions]);
+    }
   }, [messages]);
 
-  /** 新建对话：清空记录另起窗口（生成中禁用，防半截状态） */
+  /** 新建对话：另起空窗口（旧窗口已在列表，可从「查看历史」翻回） */
   const handleNewChat = () => {
     if (loading || streaming) return;
+    setCurrentSid(`s_${Date.now()}`);
     setMessages([
       { id: 'welcome', role: 'assistant', content: '你好！我是医学信息助手，请描述你的医学问题。' },
     ]);
+  };
+
+  /** 查看历史 → 点选会话载入继续聊 */
+  const openHistory = () => {
+    if (loading || streaming) return;
+    setHistoryLoading(true);
+    setHistoryOpen(true);
+    setTimeout(() => setHistoryLoading(false), 200);
+  };
+
+  const selectSession = (sid: string) => {
+    setHistoryOpen(false);
+    const s = sessions.find((x) => x.id === sid);
+    if (!s) return;
+    setCurrentSid(sid);
+    setMessages(s.messages);
   };
 
   /** AI 消息统一组装（WS done 与 REST 共用；blocked 拼违规明细，口径同旧版） */
@@ -265,32 +322,38 @@ export default function MedicalQAScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       
-      {BRAND && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, backgroundColor: BRAND.primary }}>
-          <View style={{ width: 18, height: 18, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
-            <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{BRAND.char}</Text>
-          </View>
-          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>{BRAND.name}</Text>
-          <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginLeft: 10, flexShrink: 1 }}>{BRAND.tagline}</Text>
-        </View>
-      )}
+
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>医学问答</Text>
           <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>
         </View>
-        <TouchableOpacity
-          onPress={handleNewChat}
-          disabled={loading || streaming}
-          activeOpacity={0.7}
-          style={{
-            paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
-            backgroundColor: 'rgba(255,255,255,0.18)',
-            opacity: loading || streaming ? 0.5 : 1,
-          }}
-        >
-          <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
-        </TouchableOpacity>
+        <View style={{ alignItems: 'flex-end' }}>
+          <TouchableOpacity
+            onPress={handleNewChat}
+            disabled={loading || streaming}
+            activeOpacity={0.7}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 13,
+              backgroundColor: 'rgba(255,255,255,0.18)',
+              opacity: loading || streaming ? 0.5 : 1,
+            }}
+          >
+            <Text style={{ color: Colors.textWhite, fontSize: 11, fontWeight: '600' }}>＋ 新对话</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={openHistory}
+            disabled={loading || streaming}
+            activeOpacity={0.7}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 13,
+              backgroundColor: 'rgba(255,255,255,0.18)',
+              opacity: loading || streaming ? 0.5 : 1, marginTop: 4,
+            }}
+          >
+            <Text style={{ color: Colors.textWhite, fontSize: 11, fontWeight: '600' }}>查看历史</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
@@ -331,6 +394,57 @@ export default function MedicalQAScreen() {
           )}
         </TouchableOpacity>
       </View>
+      {/* 历史对话抽屉（v1.1.2）：点选后载入该会话继续聊 */}
+      <Modal visible={historyOpen} transparent animationType="slide" onRequestClose={() => setHistoryOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+          <View
+            style={{
+              backgroundColor: Colors.background,
+              borderTopLeftRadius: 16, borderTopRightRadius: 16,
+              maxHeight: '75%', paddingBottom: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 }}>
+              <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.textPrimary }}>历史对话</Text>
+              <TouchableOpacity onPress={() => setHistoryOpen(false)} activeOpacity={0.7}>
+                <Text style={{ color: Colors.primary, fontSize: 14, fontWeight: '600' }}>关闭</Text>
+              </TouchableOpacity>
+            </View>
+            {historyLoading ? (
+              <View style={{ padding: 36, alignItems: 'center' }}>
+                <ActivityIndicator color={Colors.primary} />
+              </View>
+            ) : sessions.length === 0 ? (
+              <View style={{ padding: 36, alignItems: 'center' }}>
+                <Text style={{ color: Colors.textHint, fontSize: 14 }}>还没有历史对话</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={sessions}
+                keyExtractor={(x) => x.id}
+                renderItem={({ item }) => {
+                  const firstQ = (item.messages.find((m) => m.role === 'user')?.content || '（无文字消息）');
+                  const turns = item.messages.filter((m) => m.role === 'user').length;
+                  const d = new Date(item.updatedAt);
+                  const timeStr = `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+                  return (
+                    <TouchableOpacity
+                      onPress={() => selectSession(item.id)}
+                      activeOpacity={0.7}
+                      style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.divider }}
+                    >
+                      <Text numberOfLines={1} style={{ fontSize: 14, color: Colors.textPrimary }}>{firstQ}</Text>
+                      <Text style={{ fontSize: 12, color: Colors.textHint, marginTop: 4 }}>
+                        {timeStr} · {turns} 轮{item.id === currentSid ? ' · 当前会话' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }

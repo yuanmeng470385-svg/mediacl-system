@@ -10,6 +10,7 @@ import { AuthProvider } from './store/AuthContext';
 import AppNavigator from './navigation/AppNavigator';
 import GuideBar from './components/GuideBar';
 import UpdateGate from './components/UpdateGate';
+import BrandBar from './components/BrandBar';
 
 export default function App() {
   return (
@@ -17,6 +18,8 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor="#3b82f6" />
       {/* GuideBar 挂导航器外：体验态召回条要覆盖一切屏（含 Stack push 后 MainTabs 被 detach） */}
       <View style={{ flex: 1 }}>
+        {/* v1.1.2：全局品牌条——所有页面顶部常驻（母版 BRAND=null 不渲染） */}
+        <BrandBar />
         <AppNavigator />
         <GuideBar />
         {/* 版本更新门：启动/回前台静默查版本，有新版本才弹（强制更新时盖住整个 App） */}
