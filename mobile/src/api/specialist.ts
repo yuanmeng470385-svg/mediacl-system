@@ -61,6 +61,17 @@ export const specialistAPI = {
     );
   },
 
+  /** 历史对话会话列表（v1.1.1：按 session 聚合，最近活跃在前） */
+  async listChatSessions(specialistId: number): Promise<
+    Array<{ session_id: string; specialist_id: number; last_at: string | null; user_turns: number; preview: string }>
+  > {
+    const res = await apiClient.request<{
+      items: Array<{ session_id: string; specialist_id: number; last_at: string | null; user_turns: number; preview: string }>;
+      total: number;
+    }>('GET', `/api/v1/specialists/conversations/sessions?specialist_id=${specialistId}`);
+    return res?.items ?? [];
+  },
+
   /** 获取会话历史（后端挂在 specialists 路由下） */
   async getConversationHistory(
     sessionId: string

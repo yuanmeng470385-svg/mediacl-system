@@ -279,7 +279,14 @@ class AnswerGenerator:
         流式合规门禁：Step 2 每帧对累积文本做关键词/正则快速检查（fast），
         命中 reject 立即阻断 —— 不再等流结束才事后检查（旧实现违规文本已逐帧
         发给客户端）。阻断时产出 compliance 帧（客户端可据此提示）+ 掩码 done。
+
+        session_id（2026-09-23 v1.1.1）：客户端未带且百炼不可用（降级路径）时，
+        此前恒为 None —— WS done 帧无会话号、App 端"会话常驻"名存实亡。入口处
+        无则先生成一个（uuid4.hex）；百炼路径返回 dialog_id 时仍按原语义覆盖。
         """
+        import uuid as _uuid
+        if not session_id:
+            session_id = _uuid.uuid4().hex
         request_id = str(uuid.uuid4())
 
         # 学术偏好接入（2026-08-27 spec）：偏好作为 prompt 上下文注入（带事实约束）。

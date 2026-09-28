@@ -47,6 +47,13 @@ export const twinAPI = {
       { status }
     ),
 
+  /** 历史对话会话列表（v1.1.1：按 session 聚合，最近活跃在前） */
+  listChatSessions: (twinId: number) =>
+    apiClient.request<{
+      items: Array<{ session_id: string; specialist_id: number; last_at: string | null; user_turns: number; preview: string }>;
+      total: number;
+    }>('GET', `/api/v1/specialists/conversations/sessions?specialist_id=${twinId}`),
+
   /** 分身对话（REST 兜底；v1.1 支持 session_id 续会话——WS 路径同款语义） */
   chat: (twinId: number, question: string, sessionId?: string) =>
     apiClient.request<ChatResponse>(

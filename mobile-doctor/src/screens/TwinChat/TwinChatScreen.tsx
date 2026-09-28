@@ -8,6 +8,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Modal,
   View,
   Text,
   TextInput,
@@ -110,6 +111,52 @@ export default function TwinChatScreen() {
     })();
     return () => { cancelled = true; };
   }, [twinId]);
+
+  // ---- v1.1.1：历史对话（查看往期会话 → 点选继续该会话） ----
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [sessions, setSessions] = useState<
+    Array<{ session_id: string; specialist_id: number; last_at: string | null; user_turns: number; preview: string }>
+  >([]);
+
+  const openHistory = async () => {
+    if (loading || streaming) return;
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    try {
+      const res = await twinAPI.listChatSessions(twinId);
+      setSessions(res?.items ?? []);
+    } catch {
+      setSessions([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  /** 点选历史会话：拉取消息、切 session（下一句即续聊该会话） */
+  const selectSession = async (sid: string) => {
+    setHistoryOpen(false);
+    if (sid === sessionId) return;
+    try {
+      const history = await apiClient.request<any[]>(
+        'GET', `/api/v1/specialists/conversations/${sid}`
+      );
+      if (Array.isArray(history) && history.length) {
+        persistSession(sid);
+        setMessages(
+          history.map((h) => ({
+            id: String(h.id),
+            role: h.role === 'user' ? ('user' as const) : ('assistant' as const),
+            content: String(h.content ?? ''),
+            citations: h.citations,
+            conversationId: null,
+          })),
+        );
+      }
+    } catch {
+      // 拉取失败保持当前会话不动
+    }
+  };
 
   /** 新建对话：清 session（下一条消息后端会开新 session）+ 清消息 */
   const handleNewChat = () => {
@@ -344,18 +391,32 @@ export default function TwinChatScreen() {
           <Text style={styles.headerTitle}>{twinName}</Text>
           <Text style={styles.headerSub}>数字员工 · 在线</Text>
         </View>
-        <TouchableOpacity
-          onPress={handleNewChat}
-          disabled={loading || streaming}
-          activeOpacity={0.7}
-          style={{
-            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 13,
-            backgroundColor: 'rgba(255,255,255,0.18)',
-            opacity: loading || streaming ? 0.5 : 1,
-          }}
-        >
-          <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
-        </TouchableOpacity>
+        <View style={{ alignItems: 'flex-end' }}>
+          <TouchableOpacity
+            onPress={handleNewChat}
+            disabled={loading || streaming}
+            activeOpacity={0.7}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 13,
+              backgroundColor: 'rgba(255,255,255,0.18)',
+              opacity: loading || streaming ? 0.5 : 1,
+            }}
+          >
+            <Text style={{ color: Colors.textWhite, fontSize: 11, fontWeight: '600' }}>＋ 新对话</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={openHistory}
+            disabled={loading || streaming}
+            activeOpacity={0.7}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 4, borderRadius: 13,
+              backgroundColor: 'rgba(255,255,255,0.18)',
+              opacity: loading || streaming ? 0.5 : 1, marginTop: 4,
+            }}
+          >
+            <Text style={{ color: Colors.textWhite, fontSize: 11, fontWeight: '600' }}>查看历史</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* 常驻 AI 生成标识条（合规要求，不可关闭） */}
@@ -406,6 +467,54 @@ export default function TwinChatScreen() {
           )}
         </TouchableOpacity>
       </View>
+      {/* 历史对话抽屉（v1.1.1）：点选后载入该会话并继续聊天 */}
+      <Modal visible={historyOpen} transparent animationType="slide" onRequestClose={() => setHistoryOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+          <View
+            style={{
+              backgroundColor: Colors.background,
+              borderTopLeftRadius: 16, borderTopRightRadius: 16,
+              maxHeight: '75%', paddingBottom: 16,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 }}>
+              <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.textPrimary }}>历史对话</Text>
+              <TouchableOpacity onPress={() => setHistoryOpen(false)} activeOpacity={0.7}>
+                <Text style={{ color: Colors.primary, fontSize: 14, fontWeight: '600' }}>关闭</Text>
+              </TouchableOpacity>
+            </View>
+            {historyLoading ? (
+              <View style={{ padding: 36, alignItems: 'center' }}>
+                <ActivityIndicator color={Colors.primary} />
+              </View>
+            ) : sessions.length === 0 ? (
+              <View style={{ padding: 36, alignItems: 'center' }}>
+                <Text style={{ color: Colors.textHint, fontSize: 14 }}>还没有历史对话</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={sessions}
+                keyExtractor={(x) => x.session_id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    onPress={() => selectSession(item.session_id)}
+                    activeOpacity={0.7}
+                    style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.divider }}
+                  >
+                    <Text numberOfLines={1} style={{ fontSize: 14, color: Colors.textPrimary }}>
+                      {item.preview || '（无文字消息）'}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: Colors.textHint, marginTop: 4 }}>
+                      {(item.last_at || '').replace('T', ' ').slice(0, 16)} · {item.user_turns} 轮
+                      {item.session_id === sessionId ? ' · 当前会话' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }

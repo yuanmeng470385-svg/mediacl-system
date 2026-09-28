@@ -265,14 +265,7 @@ export default function MedicalQAScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       
-      <FlatList
-        ref={flatListRef}
-        data={streaming || streamText
-          ? [...messages, { id: 'streaming', role: 'assistant' as const, content: streamText || '正在思考...' }]
-          : messages}
-        ListHeaderComponent={
-          <>
-            {BRAND && (
+      {BRAND && (
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 7, backgroundColor: BRAND.primary }}>
           <View style={{ width: 18, height: 18, borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.25)', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
             <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '700' }}>{BRAND.char}</Text>
@@ -281,26 +274,30 @@ export default function MedicalQAScreen() {
           <Text numberOfLines={1} style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginLeft: 10, flexShrink: 1 }}>{BRAND.tagline}</Text>
         </View>
       )}
-            <View style={styles.header}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.headerTitle}>医学问答</Text>
-                <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>
-              </View>
-              <TouchableOpacity
-                onPress={handleNewChat}
-                disabled={loading || streaming}
-                activeOpacity={0.7}
-                style={{
-                  paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
-                  backgroundColor: 'rgba(255,255,255,0.18)',
-                  opacity: loading || streaming ? 0.5 : 1,
-                }}
-              >
-                <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        }
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>医学问答</Text>
+          <Text style={styles.headerSubtitle}>基于知识库的医学信息检索</Text>
+        </View>
+        <TouchableOpacity
+          onPress={handleNewChat}
+          disabled={loading || streaming}
+          activeOpacity={0.7}
+          style={{
+            paddingHorizontal: 12, paddingVertical: 6, borderRadius: 14,
+            backgroundColor: 'rgba(255,255,255,0.18)',
+            opacity: loading || streaming ? 0.5 : 1,
+          }}
+        >
+          <Text style={{ color: Colors.textWhite, fontSize: 12, fontWeight: '600' }}>＋ 新对话</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        ref={flatListRef}
+        data={streaming || streamText
+          ? [...messages, { id: 'streaming', role: 'assistant' as const, content: streamText || '正在思考...' }]
+          : messages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
@@ -345,8 +342,6 @@ const styles = StyleSheet.create({
     paddingTop: 52,
     paddingBottom: Spacing.lg,
     paddingHorizontal: Spacing.xl,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
   },
   headerTitle: { color: Colors.textWhite, fontSize: FontSize.xl, fontWeight: '700' },
   headerSubtitle: {

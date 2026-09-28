@@ -537,6 +537,51 @@ async def chat_with_specialist(
 
 # ==================== 会话历史 ====================
 
+@router.get("/conversations/sessions")
+async def list_chat_sessions(
+    specialist_id: int = None,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """历史对话会话列表（2026-09-23 v1.1.1）：当前用户与分身的会话按 session 聚合，
+    最近活跃在前；供 App「查看历史对话 → 点选继续该会话」。
+
+    注意：必须注册在 /conversations/{session_id} 之前（FastAPI 按注册序匹配，
+    否则 "sessions" 会被 {session_id} 吞掉）。排除 visit_prep_* 与医学问答
+    （medical_qa 的 specialist_id 为 NULL，一并由 isnot(None) 排除）。
+    """
+    from app.models.conversation import Conversation
+    limit = max(1, min(limit, 100))
+    q = db.query(Conversation).filter(
+        Conversation.user_id == current_user["id"],
+        Conversation.session_id.isnot(None),
+        Conversation.specialist_id.isnot(None),
+        not_prep_session(Conversation.session_id),
+    )
+    if specialist_id:
+        q = q.filter(Conversation.specialist_id == specialist_id)
+    # 倒序拉最近 2000 行（会话聚合够用），Python 侧聚合：desc 遍历时首见即最新时间，
+    # role=user 的 content 不断被更小 id 覆盖 → 最终留下该会话最早一条用户消息做预览
+    rows = q.order_by(Conversation.id.desc()).limit(2000).all()
+    sessions: dict = {}
+    for r in rows:
+        s = sessions.setdefault(r.session_id, {
+            "session_id": r.session_id,
+            "specialist_id": r.specialist_id,
+            "last_at": r.created_at,
+            "user_turns": 0,
+            "preview": "",
+        })
+        if r.role == "user":
+            s["user_turns"] += 1
+            s["preview"] = (r.content or "")[:40]
+    items = sorted(sessions.values(), key=lambda x: x["last_at"], reverse=True)[:limit]
+    for it in items:
+        it["last_at"] = it["last_at"].isoformat() if it["last_at"] else None
+    return success({"items": items, "total": len(sessions)})
+
+
 @router.get("/conversations/{session_id}")
 async def get_conversation_history(
     session_id: str,
