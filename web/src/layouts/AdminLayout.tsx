@@ -37,6 +37,10 @@ export default function AdminLayout() {
   }, [refreshTodo, location.pathname]);
 
   return (
+    <>
+      {/* 深色侧栏上的品牌名白字（ProLayout title 默认吃全局文字色，深底黑字不可见；
+          该版本 token 无 title 键，用作用域 CSS 覆盖——只影响 logo 区标题文字） */}
+      <style>{`.ant-pro-sider .ant-pro-sider-logo h1, .ant-pro-sider .ant-pro-sider-logo .ant-pro-sider-logo-title { color: #fff !important; }`}</style>
     <ProLayout
       logo={<BrandLogo size={28} />}
       title={getBrand().short || getBrand().name}
@@ -141,5 +145,6 @@ export default function AdminLayout() {
       {/* 产品使用 AI 助手（2026-09-15 三端）：悬浮球 + Drawer 聊天，跨路由存活 */}
       <AssistantChat />
     </ProLayout>
+    </>
   );
 }
