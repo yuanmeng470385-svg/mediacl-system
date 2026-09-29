@@ -95,7 +95,7 @@ export default function LoginScreen() {
           <View style={[styles.logoCircle, BRAND && { backgroundColor: BRAND.primary }]}>
             <Text style={[styles.logoIcon, BRAND && { color: '#fff' }]}>{BRAND ? BRAND.char : 'MA'}</Text>
           </View>
-          <Text style={styles.appName}>{BRAND ? BRAND.appName : 'MedAgent'}</Text>
+          <Text style={styles.appName}>{BRAND ? BRAND.appName : '医智代表'}</Text>
           <Text style={styles.subtitle}>{BRAND ? BRAND.name : '医药代表数字员工系统'}</Text>
         </View>
 

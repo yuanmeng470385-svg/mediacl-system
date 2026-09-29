@@ -1,10 +1,10 @@
 #!/bin/bash
 # 品牌包一键构建：5 品牌 x (代表端 + 医生端) = 10 个 APK
-# 做四件事（全部构建后 git checkout 还原，母版/开发行为不变）：
-#   1. 覆写 <app>/src/brandConfig.ts（登录页品牌块 + 端口全走该租户 880x）
-#   2. strings.xml app_name -> "<简称>数字员工"/"<简称>医生"
-#   3. PIL 重生成桌面图标（主色字标）
-#   4. gradle assembleRelease -PBRAND_SUFFIX=.<slug>（包名后缀，5 家可同机共存）
+# 2026-09-29 图标命名定稿（智联星芒）：桌面图标与 App 名全品牌统一为 医智代表/医智医生
+# （res 由 mobile/scripts/gen_icons.js 生成并入库，本脚本不再动），公司名只留登录页/关于页。
+# 做两件事（全部构建后 git checkout 还原，母版/开发行为不变）：
+#   1. 覆写 <app>/src/brandConfig.ts（登录页品牌块 + 端口全走该租户 880x；appName 字段为统一名）
+#   2. 注入品牌 splash（品牌色打底 + 居中统一图标）并 gradle assembleRelease -PBRAND_SUFFIX=.<slug>（包名后缀，5 家可同机共存）
 # 产物 out/medagent-{rep,doctor}-<slug>.apk；上传映射：apk-<slug>/medagent-{rep,doctor}.apk
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -22,9 +22,9 @@ mkdir -p "$OUT"
 
 inject_brand() { # $1=app $2=slug $3=全称 $4=简称 $5=主色 $6=字标 $7=端口
   python - "$1" "$2" "$3" "$4" "$5" "$6" "$7" <<'PY'
-import sys, re
+import sys
 app, slug, full, short, color, char, port = sys.argv[1:8]
-app_name = short[:2] + ('数字员工' if app == 'mobile' else '医生')  # 2 字品牌前缀，过长会被 launcher 截断
+app_name = '医智代表' if app == 'mobile' else '医智医生'  # 2026-09-29 定稿：App 名全品牌统一，公司名只留登录页/关于页
 open(f'{app}/src/brandConfig.ts', 'w', encoding='utf-8', newline='\n').write(
     f'''// 自动生成（deploy/multi-tenant/build-brands.sh），构建后由脚本还原；勿手改
 export const BRAND = {{
@@ -57,13 +57,7 @@ marker = '<item name="android:editTextBackground">@drawable/rn_edit_text_materia
 assert marker in st
 st = st.replace(marker, marker + N + '        <item name="android:windowBackground">@drawable/brand_splash</item>', 1)
 open(stp, 'w', encoding='utf-8', newline='').write(st)
-
-sp = f'{app}/android/app/src/main/res/values/strings.xml'
-s = open(sp, encoding='utf-8').read()
-s = re.sub(r'(<string name="app_name">).*?(</string>)', lambda m: m.group(1) + app_name + m.group(2), s)
-open(sp, 'w', encoding='utf-8', newline='\n').write(s)
 PY
-  python deploy/multi-tenant/gen_brand_icon.py "$5" "$6" "$1/android/app/src/main/res"
 }
 
 for row in "${BRANDS[@]}"; do
@@ -74,7 +68,7 @@ for row in "${BRANDS[@]}"; do
     (cd "$app/android" && ./gradlew.bat assembleRelease -PBRAND_SUFFIX=".$slug" -q)
     apkname=medagent-rep; [ "$app" = mobile-doctor ] && apkname=medagent-doctor
     cp "$app/android/app/build/outputs/apk/release/app-release.apk" "$OUT/$apkname-$slug.apk"
-    # 还原：res/strings 走 git checkout；brandConfig.ts 用独立脚本写回母版默认值
+    # 还原：res 走 git checkout；brandConfig.ts 用独立脚本写回母版默认值
     git checkout -- "$app/android/app/src/main/res"
     rm -f "$app/android/app/src/main/res/values/colors.xml" "$app/android/app/src/main/res/drawable/brand_splash.xml"
     python deploy/multi-tenant/restore_brand_defaults.py "$app"
