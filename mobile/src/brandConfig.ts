@@ -3,7 +3,7 @@ export const BRAND: {
   slug: string;
   name: string; // 公司全称（登录页品牌块 / 关于页）
   short: string; // 简称
-  appName: string; // App 显示名（尊品数字员工/尊品医生）：桌面名与登录页共用
+  appName: string; // App 显示名（2026-09-29 定稿统一：医智代表/医智医生，全品牌一致；Android 桌面名固定在 strings.xml）
   primary: string; // 品牌主色 #RRGGBB
   char: string; // 字标首字
   tagline: string; // 副标语
