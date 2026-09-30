@@ -75,7 +75,7 @@ APK 下载：`http://39.96.52.114:8080/apk/medagent-rep.apk`、`/apk/medagent-do
 | zunpin | 北京尊品科技有限公司 | :8801 | 8100-8107 | medagent_zunpin | db1 |
 | xiluoli | 北京希洛利科技有限公司 | :8802 | 8110-8117 | medagent_xiluoli | db2 |
 | chenglin | 郑州成琳网络科技有限公司 | :8803 | 8120-8127 | medagent_chenglin | db3 |
-| qiyijia | 北京琪宜嘉科技有限公司 | :8804 | 8130-8137 | medagent_qiyijia | db4 |
+| qiyijia | 北京琪艺嘉科技有限公司 | :8804 | 8130-8137 | medagent_qiyijia | db4 |
 | jidian | 集典（北京）信息科技有限公司 | :8805 | 8140-8147 | medagent_jidian | db5 |
 
 - 开通/重建：`deploy/multi-tenant/setup-tenants.sh`（服务器 root 运行，幂等）。租户 env 在

@@ -14,7 +14,7 @@ BRANDS=(
   "zunpin|北京尊品科技有限公司|尊品科技|#2F54EB|尊|8801"
   "xiluoli|北京希洛利科技有限公司|希洛利科技|#0E9488|希|8802"
   "chenglin|郑州成琳网络科技有限公司|成琳网络|#D97706|成|8803"
-  "qiyijia|北京琪宜嘉科技有限公司|琪宜嘉科技|#7C3AED|琪|8804"
+  "qiyijia|北京琪艺嘉科技有限公司|琪艺嘉科技|#7C3AED|琪|8804"
   "jidian|集典（北京）信息科技有限公司|集典信息|#BE123C|典|8805"
 )
 OUT=deploy/multi-tenant/out
@@ -63,6 +63,8 @@ PY
 
 for row in "${BRANDS[@]}"; do
   IFS='|' read -r slug full short color char port <<<"$row"
+  # BRAND_ONLY=<slug> 只出指定品牌（单租户改名/修复重出用，免跑全量 10 包）
+  [ -n "${BRAND_ONLY:-}" ] && [ "$slug" != "$BRAND_ONLY" ] && continue
   for app in mobile mobile-doctor; do
     echo "=== $app / $slug ($short) ==="
     inject_brand "$app" "$slug" "$full" "$short" "$color" "$char" "$port"
