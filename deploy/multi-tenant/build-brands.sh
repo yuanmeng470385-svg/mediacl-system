@@ -38,7 +38,8 @@ export const BRAND = {{
   apiPort: {port},
 }} as const;
 ''')
-# Splash：品牌色打底 + 居中字标图标（mipmap 已是该品牌字标）；styles.xml 挂 windowBackground
+# Splash：品牌色打底 + 居中统一图标——<bitmap> 必须引 @drawable/ic_launcher_legacy
+# （drawable-nodpi 成品 PNG；不能引 @mipmap/ic_launcher——API26+ 解析为 adaptive XML，<bitmap> 拒收启动即闪退）
 N = chr(10)
 res = f'{app}/android/app/src/main/res'
 open(f'{res}/values/colors.xml', 'w', encoding='utf-8', newline='').write(
@@ -48,7 +49,7 @@ open(f'{res}/drawable/brand_splash.xml', 'w', encoding='utf-8', newline='').writ
     + '<layer-list xmlns:android="http://schemas.android.com/apk/res/android">' + N
     + '    <item android:drawable="@color/brand_splash" />' + N
     + '    <item>' + N
-    + '        <bitmap android:src="@mipmap/ic_launcher" android:gravity="center" />' + N
+    + '        <bitmap android:src="@drawable/ic_launcher_legacy" android:gravity="center" />' + N
     + '    </item>' + N
     + '</layer-list>' + N)
 stp = f'{res}/values/styles.xml'

@@ -72,6 +72,11 @@ for (const [d, f] of DENS) {
 fs.mkdirSync(path.join(RES, 'mipmap-anydpi-v26'), { recursive: true });
 fs.writeFileSync(path.join(RES, 'mipmap-anydpi-v26', 'ic_launcher.xml'), ADAPTIVE);
 fs.writeFileSync(path.join(RES, 'mipmap-anydpi-v26', 'ic_launcher_round.xml'), ADAPTIVE);
+/* splash 专用成品位图：drawable-nodpi 不受 mipmap-anydpi-v26 遮蔽——
+ * brand_splash 的 <bitmap> 不能引用 adaptive XML（API26+ @mipmap/ic_launcher 解析为
+ * adaptive-icon 会抛 <bitmap> requires a valid 'src' 启动即闪退，2026-09-30 品牌包教训） */
+fs.mkdirSync(path.join(RES, 'drawable-nodpi'), { recursive: true });
+render(full(END), 192, path.join(RES, 'drawable-nodpi', 'ic_launcher_legacy.png'));
 fs.mkdirSync(path.join(RES, 'drawable'), { recursive: true });
 fs.writeFileSync(path.join(RES, 'drawable', 'ic_launcher_background.xml'),
 `<?xml version="1.0" encoding="utf-8"?>
